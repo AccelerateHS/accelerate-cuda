@@ -36,7 +36,7 @@ import Control.Concurrent.MVar
 import Control.Monad
 import Data.ByteString.Lazy.Char8                       ( ByteString )
 import Control.Monad.State.Strict                       ( StateT(..) )
-import System.Posix.Types                               ( ProcessID )
+import System.Process                                   ( ProcessHandle )
 import System.IO.Unsafe
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Data.HashTable.IO                      as Hash
@@ -64,7 +64,7 @@ type KernelKey   = ByteString
 data KernelEntry = KernelEntry
   {
     _kernelName   :: FilePath,
-    _kernelStatus :: Either ProcessID CUDA.Module
+    _kernelStatus :: Either ProcessHandle CUDA.Module
   }
 
 

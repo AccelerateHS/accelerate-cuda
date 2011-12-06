@@ -100,8 +100,8 @@ Library
                         language-c      >= 0.3,
                         mtl             >= 2.0,
                         pretty          >= 1.0,
-                        transformers    >= 0.2,
-                        unix            >= 2.4
+                        process         >= 1.1,
+                        transformers    >= 0.2
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
 
@@ -144,6 +144,7 @@ Library
 
   ghc-options:          -O2 -Wall -fwarn-tabs
                         -funbox-strict-fields
+                        -threaded
 
   if impl(ghc >= 7.0)
     ghc-options:        -fspec-constr-count=25

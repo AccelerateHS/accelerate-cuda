@@ -44,8 +44,7 @@ import System.FilePath
 import System.Directory
 import System.IO
 import System.Exit                                      (ExitCode(..))
-import System.Posix.Types                               (ProcessID)
-import System.Posix.Process
+import System.Process
 import Text.PrettyPrint
 import Foreign.Storable
 import qualified Data.HashTable.IO                      as Hash
@@ -447,21 +446,21 @@ compile table key acc fvar = do
   nvcc         <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
   (cufile,hdl) <- openOutputFile "dragon.cu"    -- rawr!
   flags        <- compileFlags cufile
-  pid          <- liftIO $ do
-    writeCode hdl (codeGenAcc acc fvar)                `finally`     hClose hdl
-    forkProcess $ executeFile nvcc False flags Nothing `onException` removeFile cufile
+  (_,_,_,pid)  <- liftIO $ do
+    writeCode hdl (codeGenAcc acc fvar) `finally`     hClose hdl
+    createProcess (proc nvcc flags)     `onException` removeFile cufile
   --
   liftIO $ Hash.insert table key (KernelEntry cufile (Left pid))
 
 
 -- Wait for the compilation process to finish
 --
-waitFor :: ProcessID -> IO ()
+waitFor :: ProcessHandle -> IO ()
 waitFor pid = do
-  status <- getProcessStatus True True pid
+  status <- waitForProcess pid
   case status of
-    Just (Exited ExitSuccess) -> return ()
-    _                         -> error  $ "nvcc (" ++ show pid ++ ") terminated abnormally"
+    ExitSuccess   -> return ()
+    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
 
 
 -- Determine the appropriate command line flags to pass to the compiler process.
