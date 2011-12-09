@@ -49,6 +49,7 @@ import System.FilePath
 import System.IO
 import System.Process
 import Text.PrettyPrint
+import Data.ByteString.Internal                         ( w2c )
 import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as Hash
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -83,9 +84,7 @@ compileAfun1 _                =
 
 
 prepareAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-prepareAcc rootAcc = do
---  liftIO $ putStrLn "prepareAcc"
-  travA rootAcc
+prepareAcc rootAcc = travA rootAcc
   where
     -- Traverse an open array expression in depth-first order
     --
@@ -448,7 +447,7 @@ compile table acc fvar = do
   exists        <- isJust `fmap` liftIO (Hash.lookup table key)
   unless exists $ do
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
-    (file,hdl)  <- openOutputFile "dragon.cu"    -- rawr!
+    (file,hdl)  <- openOutputFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
     (_,_,_,pid) <- liftIO $ do
       L.hPut hdl code                 `finally`     hClose hdl
@@ -456,7 +455,7 @@ compile table acc fvar = do
     --
     liftIO $ Hash.insert table key (KernelEntry file (Left pid))
   --
-  trace (show code) $ return key
+  trace msg (return key)
   where
     cols        = 100
     done        = mempty
@@ -465,6 +464,8 @@ compile table acc fvar = do
                 . fullRender PageMode cols 1.5 put done
                 . pretty
                 $ codeGenAcc acc fvar
+
+    msg         = unlines [ show key, map w2c (L.unpack code) ]
 
     put (Chr c)  next = fromChar c   `mappend` next
     put (Str s)  next = fromString s `mappend` next

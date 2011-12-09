@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, GADTs #-}
+{-# LANGUAGE BangPatterns, CPP, GADTs #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -52,19 +52,19 @@ run a = unsafePerformIO $ async execute >>= wait
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
 
--- |Prepare and execute an embedded array program of one argument
---
--- TLM: ensure this can be partially applied, such that compilation only occurs
---      once. Structure so that we would have had type IO (a -> b) ?
+-- |Prepare and execute an embedded array program of one argument. This function
+-- can be used to improve performance in cases where the array program is
+-- constant between invocations.
 --
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 {-# NOINLINE run1 #-}
-run1 f a = unsafePerformIO $ wait =<< async . execute =<< evalCUDA (compileAfun1 acc)
+run1 f = \a -> unsafePerformIO $ async (execute a) >>= wait
   where
-    acc          = convertAccFun1 f
-    execute afun = evalCUDA (executeAfun1 afun a >>= collect)
-                   `catch`
-                   \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
+    acc       = convertAccFun1 f
+    !afun     = unsafePerformIO $ evalCUDA (compileAfun1 acc)
+    execute a = evalCUDA (executeAfun1 afun a >>= collect)
+                `catch`
+                \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
 
 -- |Stream a lazily read list of input arrays through the given program,
