@@ -34,7 +34,7 @@ import Data.Label
 import Data.Tuple
 import Control.Concurrent.MVar
 import Control.Monad
-import Data.ByteString.Lazy.Char8                       ( ByteString )
+import Data.ByteString                                  ( ByteString )
 import Control.Monad.State.Strict                       ( StateT(..) )
 import System.Process                                   ( ProcessHandle )
 import System.IO.Unsafe

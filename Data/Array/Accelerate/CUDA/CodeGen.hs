@@ -11,8 +11,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel,
-  codeGenAcc, codeGenFun, codeGenExp
+  CUTranslSkel, codeGenAcc
 
 ) where
 

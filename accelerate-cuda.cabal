@@ -90,8 +90,10 @@ Library
                         array           >= 0.3,
                         base            == 4.*,
                         binary          >= 0.5,
+                        blaze-builder   >= 0.3,
                         bytestring      >= 0.9,
                         cuda            >= 0.4.0.2,
+                        cryptohash      >= 0.7,
                         directory       >= 1.0,
                         fclabels        >= 1.0,
                         filepath        >= 1.0,
@@ -106,7 +108,6 @@ Library
   Exposed-modules:      Data.Array.Accelerate.CUDA
 
   Other-modules:        Data.Array.Accelerate.CUDA.Analysis.Device
-                        Data.Array.Accelerate.CUDA.Analysis.Hash
                         Data.Array.Accelerate.CUDA.Analysis.Launch
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim

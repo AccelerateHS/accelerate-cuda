@@ -26,31 +26,34 @@ import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Analysis.Hash
-
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 -- libraries
-import Prelude                                          hiding (exp, catch)
-import Control.Applicative                              hiding (Const)
-import Control.Monad.Trans
-import Control.Monad
-import Control.Exception
+import Prelude                                          hiding ( exp, catch )
+import Control.Applicative                              hiding ( Const )
+import Blaze.ByteString.Builder
+import Blaze.ByteString.Builder.Char8
 import Control.Concurrent.MVar
-import Data.Maybe
+import Control.Exception
+import Control.Monad
+import Control.Monad.Trans
+import Crypto.Hash.MD5                                  ( hashlazy )
 import Data.Label.PureM
+import Data.Maybe
+import Data.Monoid
+import Foreign.Storable
 import Language.C
-import System.FilePath
 import System.Directory
+import System.Exit                                      ( ExitCode(..) )
+import System.FilePath
 import System.IO
-import System.Exit                                      (ExitCode(..))
 import System.Process
 import Text.PrettyPrint
-import Foreign.Storable
+import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as Hash
 import qualified Foreign.CUDA.Driver                    as CUDA
 
-import Paths_accelerate_cuda                            (getDataDir)
+import Paths_accelerate_cuda                            ( getDataDir )
 
 
 -- |Initiate code generation, compilation, and data transfer for an array
@@ -81,6 +84,7 @@ compileAfun1 _                =
 
 prepareAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
 prepareAcc rootAcc = do
+--  liftIO $ putStrLn "prepareAcc"
   travA rootAcc
   where
     -- Traverse an open array expression in depth-first order
@@ -385,14 +389,12 @@ prepareAcc rootAcc = do
 -- TLM: should get name(s) from code generation
 --
 build :: String -> OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
-build name acc fvar =
-  let key = accToKey acc
-  in do
-    mvar   <- liftIO newEmptyMVar
-    table  <- gets kernelTable
-    cached <- isJust `fmap` liftIO (Hash.lookup table key)
-    unless cached $ compile table key acc fvar
-    return . (name,) . liftIO $ memo mvar (link table key)
+build name acc fvar = do
+  mvar   <- liftIO newEmptyMVar
+  table  <- gets kernelTable
+  key    <- compile table acc fvar
+  return . (name,) . liftIO $ memo mvar (link table key)
+
 
 -- A simple memoisation routine
 -- TLM: maybe we can be a bit clever than this...
@@ -441,16 +443,32 @@ link table key =
 
 -- Generate and compile code for a single open array expression
 --
-compile :: KernelTable -> KernelKey -> OpenAcc aenv a -> [AccBinding aenv] -> CIO ()
-compile table key acc fvar = do
-  nvcc         <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
-  (cufile,hdl) <- openOutputFile "dragon.cu"    -- rawr!
-  flags        <- compileFlags cufile
-  (_,_,_,pid)  <- liftIO $ do
-    writeCode hdl (codeGenAcc acc fvar) `finally`     hClose hdl
-    createProcess (proc nvcc flags)     `onException` removeFile cufile
+compile :: KernelTable -> OpenAcc aenv a -> [AccBinding aenv] -> CIO KernelKey
+compile table acc fvar = do
+  exists        <- isJust `fmap` liftIO (Hash.lookup table key)
+  unless exists $ do
+    nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
+    (file,hdl)  <- openOutputFile "dragon.cu"    -- rawr!
+    flags       <- compileFlags file
+    (_,_,_,pid) <- liftIO $ do
+      L.hPut hdl code                 `finally`     hClose hdl
+      createProcess (proc nvcc flags) `onException` removeFile file
+    --
+    liftIO $ Hash.insert table key (KernelEntry file (Left pid))
   --
-  liftIO $ Hash.insert table key (KernelEntry cufile (Left pid))
+  trace (show code) $ return key
+  where
+    cols        = 100
+    done        = mempty
+    key         = hashlazy code
+    code        = toLazyByteString
+                . fullRender PageMode cols 1.5 put done
+                . pretty
+                $ codeGenAcc acc fvar
+
+    put (Chr c)  next = fromChar c   `mappend` next
+    put (Str s)  next = fromString s `mappend` next
+    put (PStr s) next = fromString s `mappend` next
 
 
 -- Wait for the compilation process to finish
@@ -499,38 +517,10 @@ openOutputFile template = liftIO $ do
   openTempFile dir template
 
 
--- Pretty printing
--- ---------------
-
--- Write the generated code to file
---
-writeCode :: Handle -> CUTranslSkel -> IO ()
-writeCode hdl skel =
-  let code = pretty skel
-  in  trace (show code) $ printDoc PageMode hdl code
-
-
--- stolen from $fptools/ghc/compiler/utils/Pretty.lhs
---
--- This code has a BSD-style license
---
-printDoc :: Mode -> Handle -> Doc -> IO ()
-printDoc m hdl doc = do
-  fullRender m cols 1.5 put done doc
-  hFlush hdl
-  where
-    put (Chr c)  next = hPutChar hdl c >> next
-    put (Str s)  next = hPutStr  hdl s >> next
-    put (PStr s) next = hPutStr  hdl s >> next
-
-    done = hPutChar hdl '\n'
-    cols = 100
-
-
 -- Debug
 -- -----
 
 {-# INLINE trace #-}
-trace :: String -> IO a -> IO a
+trace :: MonadIO m => String -> m a -> m a
 trace msg next = D.debug D.dump_cuda msg >> next
 
