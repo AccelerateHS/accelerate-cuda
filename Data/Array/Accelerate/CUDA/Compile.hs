@@ -446,6 +446,7 @@ compile :: KernelTable -> OpenAcc aenv a -> [AccBinding aenv] -> CIO KernelKey
 compile table acc fvar = do
   exists        <- isJust `fmap` liftIO (Hash.lookup table key)
   unless exists $ do
+    debug       $  unlines [ show key, map w2c (L.unpack code) ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
     (file,hdl)  <- openOutputFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
@@ -455,7 +456,7 @@ compile table acc fvar = do
     --
     liftIO $ Hash.insert table key (KernelEntry file (Left pid))
   --
-  trace msg (return key)
+  return key
   where
     cols        = 100
     done        = mempty
@@ -464,8 +465,6 @@ compile table acc fvar = do
                 . fullRender LeftMode cols 1.5 put done
                 . pretty
                 $ codeGenAcc acc fvar
-
-    msg         = unlines [ show key, map w2c (L.unpack code) ]
 
     put (Chr c)  next = fromChar c   `mappend` next
     put (Str s)  next = fromString s `mappend` next
@@ -520,6 +519,10 @@ openOutputFile template = liftIO $ do
 
 -- Debug
 -- -----
+
+{-# INLINE debug #-}
+debug :: MonadIO m => String -> m ()
+debug msg = trace msg $ return ()
 
 {-# INLINE trace #-}
 trace :: MonadIO m => String -> m a -> m a
