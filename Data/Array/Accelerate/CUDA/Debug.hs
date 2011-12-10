@@ -15,7 +15,7 @@
 module Data.Array.Accelerate.CUDA.Debug (
 
   debug, when,
-  dump_cuda, dump_gc, dump_exec
+  dump_cuda, dump_gc, dump_exec, verbose
 
 ) where
 
@@ -33,10 +33,10 @@ import System.Console.GetOpt
 -- Internals
 
 data Flags = Flags
-  {
-    _dump_cuda  :: Bool,
-    _dump_gc    :: Bool,
-    _dump_exec  :: Bool
+  { _dump_cuda  :: Bool
+  , _dump_gc    :: Bool
+  , _dump_exec  :: Bool
+  , _verbose    :: Bool
   }
 
 $(mkLabels [''Flags])
@@ -46,12 +46,13 @@ flags =
   [ Option [] ["ddump-cuda"]    (NoArg (set dump_cuda True))    "print generated CUDA code"
   , Option [] ["ddump-gc"]      (NoArg (set dump_gc True))      "print device memory management trace"
   , Option [] ["ddump-exec"]    (NoArg (set dump_exec True))    "print kernel execution trace"
+  , Option [] ["dverbose"]      (NoArg (set verbose True))      "print additional information"
   ]
 
 initialise :: IO Flags
 initialise = parse `fmap` getArgs
   where
-    defaults      = Flags False False False
+    defaults      = Flags False False False False
     parse         = foldl parse1 defaults
     parse1 opts x = case filter (\(Option _ [f] _ _) -> x `isPrefixOf` ('-':f)) flags of
                       [Option _ _ (NoArg go) _] -> go opts

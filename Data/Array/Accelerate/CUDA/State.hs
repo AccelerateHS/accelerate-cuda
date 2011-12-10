@@ -26,10 +26,13 @@ module Data.Array.Accelerate.CUDA.State (
 ) where
 
 -- friends
+import Data.Array.Accelerate.CUDA.Debug                 ( debug, verbose )
 import Data.Array.Accelerate.CUDA.Array.Table
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
+import Numeric
+import Data.List
 import Data.Label
 import Data.Tuple
 import Control.Concurrent.MVar
@@ -38,6 +41,7 @@ import Data.ByteString                                  ( ByteString )
 import Control.Monad.State.Strict                       ( StateT(..) )
 import System.Process                                   ( ProcessHandle )
 import System.IO.Unsafe
+import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Data.HashTable.IO                      as Hash
 
@@ -106,11 +110,49 @@ evalCUDA acc = modifyMVar onta (liftM swap . runStateT acc)
 initialise :: IO CUDAState
 initialise = do
   CUDA.initialise []
-  (d,prp) <- selectBestDevice
-  ctx     <- CUDA.create d [CUDA.SchedAuto]
-  knl     <- Hash.new
-  mem     <- new
+  (dev,prp)     <- selectBestDevice
+  ctx           <- CUDA.create dev [CUDA.SchedAuto]
+  knl           <- Hash.new
+  mem           <- new
+  debug verbose $  deviceInfo dev prp
   return $ CUDAState prp ctx knl mem
+
+
+-- Debugging
+-- ---------
+
+-- Nicely format a summary of the selected CUDA device, example:
+--
+-- Device 0: GeForce 9600M GT (compute capability 1.1)
+--           4 multiprocessors @ 1.25GHz (32 cores), 512MB global memory
+--
+deviceInfo :: CUDA.Device -> CUDA.DeviceProperties -> String
+deviceInfo dev prp = render $
+  devID <> colon <+> vcat [ name <+> parens compute
+                          , processors <+> at <+> text clock <+> parens cores <> comma <+> memory
+                          ]
+  where
+    name        = text (CUDA.deviceName prp)
+    compute     = text "compute capatability" <+> double (CUDA.computeCapability prp)
+    devID       = text "Device" <+> int (fromIntegral $ CUDA.useDevice dev)     -- hax
+    processors  = int (CUDA.multiProcessorCount prp)                              <+> text "multiprocessors"
+    cores       = int (CUDA.multiProcessorCount prp * coresPerMultiProcessor prp) <+> text "cores"
+    memory      = text mem <+> text "global memory"
+    --
+    clock       = showFFloatSIBase (Just 2) 1000 (fromIntegral $ CUDA.clockRate prp * 1000 :: Double) "Hz"
+    mem         = showFFloatSIBase (Just 0) 1024 (fromIntegral $ CUDA.totalGlobalMem prp   :: Double) "B"
+    at          = char '@'
+
+
+showFFloatSIBase :: RealFloat a => Maybe Int -> a -> a -> ShowS
+showFFloatSIBase p b n
+  = showString
+  . nubBy (\x y -> x == ' ' && y == ' ')
+  $ showFFloat p n' [ ' ', si_unit ]
+  where
+    n'          = n / (b ^^ (pow-4))
+    pow         = max 0 . min 8 . (+) 4 . floor $ logBase b n
+    si_unit     = "pnµm kMGT" !! pow
 
 
 -- Persistent caching (deprecated)

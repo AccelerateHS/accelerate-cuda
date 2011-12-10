@@ -28,14 +28,25 @@ import qualified Foreign.CUDA.Driver    as CUDA
 --
 selectBestDevice :: IO (Device, DeviceProperties)
 selectBestDevice = do
-  dev  <- mapM CUDA.device . enumFromTo 0 . subtract 1 . fromIntegral =<< CUDA.count
-  prop <- mapM CUDA.props dev
+  dev   <- mapM CUDA.device . enumFromTo 0 . subtract 1 =<< CUDA.count
+  prop  <- mapM CUDA.props dev
   return . head . sortBy (flip cmp `on` snd) $ zip dev prop
   where
-    compute = computeCapability
-    flops d = multiProcessorCount d * clockRate d * cores d
-    cores d | compute d < 2 = 8
-            | otherwise     = 32
-    cmp x y | compute x == compute y = comparing flops x y
-            | otherwise              = comparing compute x y
+    compute     = computeCapability
+    flops d     = multiProcessorCount d * coresPerMultiProcessor d * clockRate d
+    cmp x y
+      | compute x == compute y  = comparing flops   x y
+      | otherwise               = comparing compute x y
+
+
+-- Number of CUDA cores per streaming multiprocessor for a given architecture
+-- revision. This is the number of SIMD arithmetic units per multiprocessor,
+-- executing in lockstep in half-warp groupings (16 ALUs).
+--
+coresPerMultiProcessor :: DeviceProperties -> Int
+coresPerMultiProcessor prp
+  | computeCapability prp < 2   = 8
+  | computeCapability prp < 2.1 = 32
+  | otherwise                   = 48
+
 
