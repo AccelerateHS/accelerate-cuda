@@ -461,7 +461,7 @@ compile table acc fvar = do
     done        = mempty
     key         = hashlazy code
     code        = toLazyByteString
-                . fullRender PageMode cols 1.5 put done
+                . fullRender LeftMode cols 1.5 put done
                 . pretty
                 $ codeGenAcc acc fvar
 
