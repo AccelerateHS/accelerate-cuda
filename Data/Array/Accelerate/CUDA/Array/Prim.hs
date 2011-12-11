@@ -151,7 +151,8 @@ mallocArray
     -> ArrayData e
     -> Int
     -> IO ()
-mallocArray !mt !ad !n = do
+mallocArray !mt !ad !n0 = do
+  let !n = 1 `max` n0
   exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr b)))
   unless exists $ do
     ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
@@ -171,8 +172,9 @@ useArray
     -> ArrayData e
     -> Int
     -> IO ()
-useArray !mt !ad !n =
+useArray !mt !ad !n0 =
   let src = ptrsOfArrayData ad
+      !n  = 1 `max` n0
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
@@ -191,8 +193,9 @@ useArrayAsync
     -> Int
     -> Maybe CUDA.Stream
     -> IO ()
-useArrayAsync !mt !ad !n !ms =
+useArrayAsync !mt !ad !n0 !ms =
   let src = CUDA.HostPtr (ptrsOfArrayData ad)
+      !n  = 1 `max` n0
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
