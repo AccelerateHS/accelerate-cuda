@@ -1,3 +1,4 @@
+{-# LANGUAGE QuasiQuotes #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Util
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -11,14 +12,20 @@
 module Data.Array.Accelerate.CUDA.CodeGen.Util
   where
 
-import Language.C
 import Data.Array.Accelerate.CUDA.CodeGen.Data
+
+import Data.Loc
+import Data.Symbol
+import Language.C.Syntax
+import Language.C.Quote.CUDA
+import qualified Language.C                             as C
 
 data Direction = Forward | Backward
 
 -- Common device functions
 -- -----------------------
 
+{--
 mkIdentity :: [CExpr] -> CExtDecl
 mkIdentity = mkDeviceFun "identity" (typename "TyOut") []
 
@@ -38,24 +45,31 @@ mkSliceIndex =
 mkSliceReplicate :: [CExpr] -> CExtDecl
 mkSliceReplicate =
   mkDeviceFun "sliceIndex" (typename "Slice") [(typename "SliceDim","dim")]
-
+--}
 
 -- Helper functions
 -- ----------------
 
-cvar :: String -> CExpr
-cvar x = CVar (internalIdent x) internalNode
+cvar :: String -> C.Exp
+cvar x = [cexp|$id:x|] --Var (Id x) noSrcLoc
 
-ccall :: String -> [CExpr] -> CExpr
-ccall fn args = CCall (cvar fn) args internalNode
+ccall :: String -> [C.Exp] -> C.Exp
+ccall fn args = [cexp|$id:fn ($args:args)|]
 
-typename :: String -> CType
-typename var = [CTypeDef (internalIdent var) internalNode]
+typename :: String -> C.Type
+typename var = Type (DeclSpec [] [] (Tnamed (Id var noSrcLoc) noSrcLoc) noSrcLoc) (DeclRoot noSrcLoc) noSrcLoc
 
-fromBool :: Bool -> CExpr
-fromBool True  = CConst $ CIntConst (cInteger 1) internalNode
-fromBool False = CConst $ CIntConst (cInteger 0) internalNode
+cchar :: Char -> C.Exp
+cchar c = [cexp|$char:c|]
 
+cintegral :: Integral a => a -> C.Exp
+cintegral n = [cexp|$int:n|]
+
+fromBool :: Bool -> C.Exp
+fromBool = cintegral . fromEnum
+
+
+{--
 mkDim :: String -> Int -> CExtDecl
 mkDim name n =
   mkTypedef name False False [CTypeDef (internalIdent ("DIM" ++ show n)) internalNode]
@@ -151,4 +165,4 @@ mkDeviceFun' name tyout args body =
         CDecl (CTypeQual (CConstQual internalNode) : map CTypeSpec ty)
               [(Just (CDeclr (Just (internalIdent var)) [] Nothing [] internalNode), Nothing, Nothing)]
               internalNode
-
+--}

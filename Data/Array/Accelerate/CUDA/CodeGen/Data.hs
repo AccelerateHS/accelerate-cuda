@@ -10,32 +10,27 @@
 -- Common data types for code generation
 --
 
-module Data.Array.Accelerate.CUDA.CodeGen.Data
-  (
-    CType, CMacro, CUTranslSkel(..)
-  )
-  where
+module Data.Array.Accelerate.CUDA.CodeGen.Data (Macro, CUTranslSkel(..)) where
 
 import Language.C
-import Text.PrettyPrint
+import Text.PrettyPrint.Mainland
 
-type CType        = [CTypeSpec]
-type CMacro       = (Ident, Maybe CExpr)
-data CUTranslSkel = CUTranslSkel CTranslUnit [CMacro] FilePath
+type Macro              = (Id, Maybe Exp)
+data CUTranslSkel       = CUTranslSkel [DeclSpec] [Macro] FilePath
 
 instance Pretty CUTranslSkel where
-  pretty (CUTranslSkel code defs skel) =
-    vcat [ include "accelerate_cuda_extras.h"
-         , vcat (map macro defs)
-         , pretty code
-         , include skel
-         ]
+  ppr (CUTranslSkel code defs skel) =
+    stack [ include "accelerate_cuda_extras.h"
+          , stack (map macro defs)
+          , ppr code
+          , include skel
+          ]
 
 
 include :: FilePath -> Doc
 include hdr = text "#include <" <> text hdr <> text ">"
 
-macro :: CMacro -> Doc
-macro (d,v) = text "#define" <+> text (identToString d)
-                             <+> maybe empty (parens . pretty) v
+macro :: Macro -> Doc
+macro (d,v) = text "#define" <+> ppr d
+                             <+> maybe empty (parens . ppr) v
 
