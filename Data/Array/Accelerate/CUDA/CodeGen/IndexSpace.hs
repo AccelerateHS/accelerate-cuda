@@ -21,19 +21,22 @@ import Language.C.Syntax
 import Language.C.Quote.CUDA
 
 import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.Monad
 
 
--- Construct a new array by applying a function to each index
+-- Construct a new array by applying a function to each index. Each thread
+-- processes multiple elements, striding the array by the grid size.
 --
 -- generate :: (Shape ix, Elt e)
 --          => Exp ix
 --          -> (Exp ix -> Exp a)
 --          -> Acc (Array ix a)
 --
-mkGenerate :: ([Type], Int) -> [Exp] -> CUTranslSkel
-mkGenerate (tyOut, dimOut) fn =
-  CUTranslSkel [cunit|
-    $edecl:(dim "DimOut" dimOut)
+mkGenerate :: Int -> [Type] -> [Exp] -> CGM CUTranslSkel
+mkGenerate dimOut tyOut fn = do
+  env   <- environment
+  return $ CUTranslSkel [cunit|
+    $edecl:(cdim "DimOut" dimOut)
 
     extern "C"
     __global__ void
@@ -47,15 +50,18 @@ mkGenerate (tyOut, dimOut) fn =
         const int n        = size(shOut);
         const int gridSize = __umul24(blockDim.x, gridDim.x);
 
-        for (idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x; idx < n; idx += gridSize)
+        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; idx < n
+            ; idx += gridSize)
         {
               $decls:shape
+              $decls:env
               $stms:(zipWith apply fn xs)
         }
     }
   |]
   where
-    (xs, args)  = unzip (params "d_out" tyOut)
+    (args, xs)  = unzip (setters tyOut)
     apply f x   = [cstm| $exp:x [idx] = $exp:f; |]
 
     -- destruct shapes into separate components, since the code generator no

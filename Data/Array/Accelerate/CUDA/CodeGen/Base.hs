@@ -15,7 +15,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   CUTranslSkel(..),
 
   -- Declaration generation
-  typename, cvar, ccall, char, integral, bool, dim, params, shape, global
+  typename, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
+  getters, setters
 
 ) where
 
@@ -53,33 +54,53 @@ ccall fn args = [cexp|$id:fn ($args:args)|]
 typename :: String -> Type
 typename name = Type (DeclSpec [] [] (Tnamed (Id name noSrcLoc) noSrcLoc) noSrcLoc) (DeclRoot noSrcLoc) noSrcLoc
 
-char :: Char -> Exp
-char c = [cexp|$char:c|]
+cchar :: Char -> Exp
+cchar c = [cexp|$char:c|]
 
-integral :: Integral a => a -> Exp
-integral n = [cexp|$int:n|]
+cintegral :: Integral a => a -> Exp
+cintegral n = [cexp|$int:n|]
 
-bool :: Bool -> Exp
-bool = integral . fromEnum
+cbool :: Bool -> Exp
+cbool = cintegral . fromEnum
 
-dim :: String -> Int -> Definition
-dim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+cdim :: String -> Int -> Definition
+cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 
-params :: String -> [Type] -> [(Exp, Param)]
-params base ts = zipWith param ts names
+
+cglobal :: String -> Type -> Definition
+cglobal name ty = [cedecl|static $ty:ty $id:name;|]
+
+cshape :: String -> Int -> Definition
+cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]
+
+
+-- Generate a list of function parameters and variable initialisers that read
+-- elements from the global input arrays at the given index.
+--
+getters :: Int -> [Type] -> [(Param, String -> InitGroup)]
+getters base ts = zipWith3 get ts arrs xs
   where
     n           = length ts
-    names       = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
-    param t x   = ( cvar x, [cparam| $ty:(ptr t) $id:x |] )
-    --
-    ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t    = Type d (Ptr [] r noSrcLoc) lb
-          | otherwise                                           = t
+    suffixes    = map (\x -> shows base "_a" ++ show x) [n-1, n-2.. 0]
+    arrs        = map ("d_in" ++) suffixes
+    xs          = map ('x':)      suffixes
+    get t arr x = ( [cparam| const $ty:(ptr t) $id:arr |]
+                  , \idx -> [cdecl| const $ty:t $id:x = $id:arr [$id:idx]; |] )
 
-global :: String -> Type -> Definition
-global name ty = [cedecl|static $ty:ty $id:name;|]
+-- Generate function parameters and corresponding variable names for the
+-- components of the given output array.
+--
+setters :: [Type] -> [(Param, Exp)]
+setters ts = zipWith param ts names
+  where
+    n           = length ts
+    names       = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
+    param t x   = ( [cparam| $ty:(ptr t) $id:x |]
+                  , cvar x )
 
-shape :: String -> Int -> Definition
-shape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]
+ptr :: Type -> Type
+ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t    = Type d (Ptr [] r noSrcLoc) lb
+      | otherwise                                           = t
 
 
 {--
