@@ -61,7 +61,7 @@ mkGenerate dimOut tyOut fn = do
     }
   |]
   where
-    (args, xs)  = unzip (setters tyOut)
+    (args, xs)  = setters tyOut
     apply f x   = [cstm| $exp:x [idx] = $exp:f; |]
 
     -- destruct shapes into separate components, since the code generator no

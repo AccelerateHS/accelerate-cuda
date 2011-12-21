@@ -77,30 +77,31 @@ cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:
 -- Generate a list of function parameters and variable initialisers that read
 -- elements from the global input arrays at the given index.
 --
-getters :: Int -> [Type] -> [(Param, String -> InitGroup)]
-getters base ts = zipWith3 get ts arrs xs
+getters :: Int -> [Type] -> ([Param], String -> [InitGroup])
+getters base ts = (zipWith param ts arrs, \idx -> zipWith3 (get idx) ts arrs xs)
   where
-    n           = length ts
-    suffixes    = map (\x -> shows base "_a" ++ show x) [n-1, n-2.. 0]
-    arrs        = map ("d_in" ++) suffixes
-    xs          = map ('x':)      suffixes
-    get t arr x = ( [cparam| const $ty:(ptr t) $id:arr |]
-                  , \idx -> [cdecl| const $ty:t $id:x = $id:arr [$id:idx]; |] )
+    n                   = length ts
+    suffixes            = map (\x -> shows base "_a" ++ show x) [n-1, n-2.. 0]
+    arrs                = map ("d_in" ++) suffixes
+    xs                  = map ('x':)      suffixes
+    param t arr         = [cparam| const $ty:(ptr t) $id:arr |]
+    get idx t arr x     = [cdecl| const $ty:t $id:x = $id:arr [$id:idx]; |]
 
 -- Generate function parameters and corresponding variable names for the
 -- components of the given output array.
 --
-setters :: [Type] -> [(Param, Exp)]
-setters ts = zipWith param ts names
+setters :: [Type] -> ([Param], [Exp])
+setters ts = (zipWith param ts names, map cvar names)
   where
     n           = length ts
     names       = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
-    param t x   = ( [cparam| $ty:(ptr t) $id:x |]
-                  , cvar x )
+    param t x   = [cparam| $ty:(ptr t) $id:x |]
 
+-- Turn a plain type into a ptr type
+--
 ptr :: Type -> Type
-ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t    = Type d (Ptr [] r noSrcLoc) lb
-      | otherwise                                           = t
+ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noSrcLoc) lb
+      | otherwise                                        = t
 
 
 {--

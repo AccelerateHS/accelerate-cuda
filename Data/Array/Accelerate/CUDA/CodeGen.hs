@@ -98,8 +98,15 @@ codegenAcc acc vars =
         Scanr' f e _      -> mkScanr' (codegenExpType e) (codegenExp e) (codegenFun f)
         Scanl1 f a        -> mkScanl1 (codegenAccType a) (codegenFun f)
         Scanr1 f a        -> mkScanr1 (codegenAccType a) (codegenFun f)
-        Map f a           -> mkMap (codegenAccType acc) (codegenAccType a) (codegenFun f)
-        ZipWith f a b     -> mkZipWith (codegenAccTypeDim acc) (codegenAccTypeDim a) (codegenAccTypeDim b) (codegenFun f)
+--}
+        Map f a           -> do
+          f'    <- codegenFun f
+          mkMap (codegenAccType acc) (codegenAccType a) f'
+
+        ZipWith f a b     -> do
+          f'    <- codegenFun f
+          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccType b) f'
+{--
         Permute f _ g a   -> mkPermute (codegenAccType a) (accDim acc) (accDim a) (codegenFun f) (codegenFun g)
         Backpermute _ f a -> mkBackpermute (codegenAccType a) (accDim acc) (accDim a) (codegenFun f)
         Replicate sl _ a  ->
