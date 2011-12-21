@@ -457,7 +457,7 @@ compile table acc fvar = do
   --
   return key
   where
-    cols        = 100
+    cols        = 1000
     key         = hashlazy code
     code        = toLazyByteString
                 . layout . render cols . ppr
