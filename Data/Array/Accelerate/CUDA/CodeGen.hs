@@ -15,28 +15,31 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 
 ) where
 
+-- libraries
 import Data.Loc
+import Data.List
 import Data.Char
 import Data.Symbol
-import Text.PrettyPrint
-import Language.C.Syntax
+import Text.PrettyPrint.Mainland
+import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
+import qualified Language.C.Syntax
 
+-- friends
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Analysis.Stencil
-import Data.Array.Accelerate.Array.Representation
+-- import Data.Array.Accelerate.Analysis.Stencil
+-- import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Foreign.Storable                               as F
 
 import Data.Array.Accelerate.CUDA.AST
-import Data.Array.Accelerate.CUDA.CodeGen.Data
-import Data.Array.Accelerate.CUDA.CodeGen.Util
--- import Data.Array.Accelerate.CUDA.CodeGen.Skeleton
+import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 
 #include "accelerate.h"
 
@@ -54,13 +57,11 @@ import Data.Array.Accelerate.CUDA.CodeGen.Util
 -- are array variables.
 --
 codegenAcc :: forall aenv a. OpenAcc aenv a -> [AccBinding aenv] -> CUTranslSkel
-codegenAcc acc vars = undefined
-{--
-  let fvars                      = concatMap (liftAcc acc) vars
-      CUTranslSkel code def skel = codegen acc
-      CTranslUnit decl node      = code
+codegenAcc acc vars =
+  let fvars             = concatMap (liftAcc acc) vars
+      CUTranslSkel code = codegen acc
   in
-  CUTranslSkel (CTranslUnit (fvars ++ decl) node) def skel
+  CUTranslSkel (fvars ++ code)
   where
     codegen :: OpenAcc aenv a -> CUTranslSkel
     codegen (OpenAcc pacc) =
@@ -80,6 +81,7 @@ codegenAcc acc vars = undefined
         -- computation nodes
         --
         Generate _ f      -> mkGenerate (codegenAccTypeDim acc) (codegenFun f)
+{--
         Fold f e a        -> mkFold  (codegenAccTypeDim a) (codegenExp e) (codegenFun f)
         Fold1 f a         -> mkFold1 (codegenAccTypeDim a) (codegenFun f)
         FoldSeg f e a s   -> mkFoldSeg  (codegenAccTypeDim a) (codegenAccType s) (codegenExp e) (codegenFun f)
@@ -137,33 +139,32 @@ codegenAcc acc vars = undefined
                      (sten 1 ty1) (codegenAccType a1) (map (reverse . Sugar.shapeToList) pos1) (codegenBoundary a1 bndy1)
                      (sten 0 ty0) (codegenAccType a0) (map (reverse . Sugar.shapeToList) pos0) (codegenBoundary a0 bndy0)
                      (codegenFun f)
+--}
 
     --
     -- Generate binding points (texture references and shapes) for arrays lifted
     -- from scalar expressions
     --
-    liftAcc :: OpenAcc aenv a -> AccBinding aenv -> [CExtDecl]
+    liftAcc :: OpenAcc aenv a -> AccBinding aenv -> [C.Definition]
     liftAcc _ (ArrayVar idx) =
       let avar    = OpenAcc (Avar idx)
           idx'    = show $ deBruijnToInt idx
-          sh      = mkShape (accDim avar) ("sh" ++ idx')
+          sh      = shape ("sh" ++ idx') (accDim avar)
           ty      = codegenTupleTex (accType avar)
-          arr n   = "arr" ++ idx' ++ "_a" ++ show n
-          var t n = mkGlobal (map CTypeSpec t) (arr n)
+          arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
       in
-      sh : zipWith var (reverse ty) (enumFrom 0 :: [Int])
+      sh : zipWith (\t n -> global (arr n) t) (reverse ty) [0..]
 
     --
     -- caffeine and misery
     --
     internalError =
-      let msg = unlines ["unsupported array primitive", render (nest 2 doc)]
-          ppr = show acc
-          doc | length ppr <= 250 = text ppr
-              | otherwise         = text (take 250 ppr) <+> text "... {truncated}"
+      let msg = unlines ["unsupported array primitive", pretty 100 (nest 2 doc)]
+          pac = show acc
+          doc | length pac <= 250 = text pac
+              | otherwise         = text (take 250 pac) <+> text "... {truncated}"
       in
       INTERNAL_ERROR(error) "codegenAcc" msg
---}
 
 -- code generation for stencil boundary conditions
 --
@@ -182,6 +183,8 @@ mkPrj ndim var c
   | otherwise   = [cexp| $exp:v . $id:field |]
                     where v     = cvar var
                           field = 'a' : show c
+
+--mkPrj _ base c = cvar (base ++ "_a" ++ show c)
 
 
 -- Scalar Expressions
@@ -205,8 +208,6 @@ codegenFun (Body body) = codegenExp body
 -- of the scalar computation; namely, the arguments to 'IndexScalar' and 'Shape'
 --
 codegenExp :: forall env aenv t. OpenExp env aenv t -> [C.Exp]
-codegenExp = undefined
-{--
 codegenExp (Let _ _)       = INTERNAL_ERROR(error) "codegenExp" "Let: not implemented yet"
 codegenExp (PrimConst c)   = [codegenPrimConst c]
 codegenExp (PrimApp f arg) = [codegenPrim f (codegenExp arg)]
@@ -224,31 +225,31 @@ codegenExp IndexAny         = INTERNAL_ERROR(error) "codegenExp" "IndexAny: not 
 codegenExp (IndexCons ix i) = codegenExp ix ++ codegenExp i
 
 codegenExp (IndexHead sh@(Shape a)) =
-  let [var] = codegenExp sh
-  in if accDim a > 1
-        then [CMember var (internalIdent "a0") False internalNode]
-        else [var]
+  let [var]     = codegenExp sh
+  in  return    $ if accDim a > 1
+        then [cexp| $exp:var . $id:("a0") |]
+        else var
 
 codegenExp (IndexTail sh@(Shape a)) =
-  let [var] = codegenExp sh
-      idx   = reverse [1 .. accDim a - 1]
+  let [var]     = codegenExp sh
+      ndim      = accDim a
   in
-  map (\i -> CMember var (internalIdent ('a':show i)) False internalNode) idx
+  map (\i -> [cexp| $exp:var . $id:('a':show i) |]) [ndim-1, ndim-2 .. 1]
 
 codegenExp (IndexHead ix) = return . last $ codegenExp ix
 codegenExp (IndexTail ix) =          init $ codegenExp ix
 
 codegenExp (Var i) =
-  let var = cvar ('x' : show (idxToInt i))
+  let var       = cvar ('x' : show (idxToInt i))
   in
   case codegenTupleType (Sugar.eltType (undefined::t)) of
        [_] -> [var]
        cps -> reverse . take (length cps) . flip map (enumFrom 0 :: [Int]) $
-         \c -> CMember var (internalIdent ('a':show c)) False internalNode
+         \c -> [cexp| $exp:var . $id:('a':show c) |]
 
 codegenExp (Cond p t e) =
   let [predicate] = codegenExp p
-      branch a b  = CCond predicate (Just a) b internalNode
+      branch a b  = [cexp| $exp:predicate ? $exp:a : $exp:b |]
   in
   zipWith branch (codegenExp t) (codegenExp e)
 
@@ -259,21 +260,22 @@ codegenExp (Shape a)
 
 codegenExp (IndexScalar a e)
   | OpenAcc (Avar var) <- a =
-      let var'  = show $ deBruijnToInt var
-          arr n = cvar ("arr" ++ var' ++ "_a" ++ show n)
-          sh    = cvar ("sh"  ++ var')
-          ix    = ccall "toIndex" [sh, ccall "shape" (codegenExp e)]
+      let var'          = show $ deBruijnToInt var
+          arr c         = cvar ("arr" ++ var' ++ "_a" ++ show (c::Int))
+          sh            = cvar ("sh"  ++ var')
+          ix            = ccall "toIndex" [sh, ccall "shape" (codegenExp e)]    -- share
           --
-          ty         = codegenTupleTex (accType a)
-          indexA t n = ccall indexer [arr n, ix]
-            where
-              indexer = case t of
-                          [CDoubleType _] -> "indexDArray"
-                          _               -> "indexArray"
+          n             = length types
+          types         = codegenTupleTex (accType a)
+          index ty c
+            | C.Type (C.DeclSpec _ _ (C.Tnamed (C.Id name _) _) _) _ _ <- ty
+            , "Double" `isSuffixOf` name        = ccall "indexDArray" [arr c, ix]
+            | otherwise                         = ccall "indexArray"  [arr c, ix]
       in
-      reverse $ zipWith indexA (reverse ty) (enumFrom 0 :: [Int])
+      zipWith index types [n-1,n-2.. 0]
+  --
   | otherwise               = INTERNAL_ERROR(error) "codegenExp" "expected array variable"
---}
+
 
 -- Tuples are defined as snoc-lists, so generate code right-to-left
 --
@@ -521,7 +523,7 @@ codegenNumScalar (IntegralNumType ty) = codegenIntegralScalar ty
 codegenNumScalar (FloatingNumType ty) = codegenFloatingScalar ty
 
 codegenIntegralScalar :: IntegralType a -> a -> C.Exp
-codegenIntegralScalar ty | IntegralDict <- integralDict ty = cintegral
+codegenIntegralScalar ty | IntegralDict <- integralDict ty = integral
 
 codegenFloatingScalar :: FloatingType a -> a -> C.Exp
 codegenFloatingScalar (TypeFloat   _) x = C.Const (FloatConst (shows x "f") (toRational x) noSrcLoc) noSrcLoc
@@ -530,7 +532,7 @@ codegenFloatingScalar (TypeDouble  _) x = C.Const (DoubleConst (show x) (toRatio
 codegenFloatingScalar (TypeCDouble _) x = C.Const (DoubleConst (show x) (toRational x) noSrcLoc) noSrcLoc
 
 codegenNonNumScalar :: NonNumType a -> a -> C.Exp
-codegenNonNumScalar (TypeBool   _) x = fromBool x
+codegenNonNumScalar (TypeBool   _) x = bool x
 codegenNonNumScalar (TypeChar   _) x = [cexp|$char:x|]
 codegenNonNumScalar (TypeCChar  _) x = [cexp|$char:(chr (fromIntegral x))|]
 codegenNonNumScalar (TypeCUChar _) x = [cexp|$char:(chr (fromIntegral x))|]

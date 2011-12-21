@@ -86,24 +86,27 @@ Flag internal-checks
 Library
   Include-Dirs:         include
 
-  Build-depends:        accelerate      == 0.9.*,
-                        array           >= 0.3,
-                        base            == 4.*,
-                        binary          >= 0.5,
-                        blaze-builder   >= 0.3,
-                        bytestring      >= 0.9,
-                        cuda            >= 0.4.0.2,
-                        cryptohash      >= 0.7,
-                        directory       >= 1.0,
-                        fclabels        >= 1.0,
-                        filepath        >= 1.0,
-                        hashable        >= 1.1,
-                        hashtables      >= 1.0.1,
-                        language-c      >= 0.3,
-                        mtl             >= 2.0,
-                        pretty          >= 1.0,
-                        process         >= 1.1,
-                        transformers    >= 0.2
+  Build-depends:        accelerate              == 0.9.*,
+                        array                   >= 0.3,
+                        base                    == 4.*,
+                        binary                  >= 0.5,
+                        blaze-builder           >= 0.3,
+                        bytestring              >= 0.9,
+                        cuda                    >= 0.4.0.2,
+                        cryptohash              >= 0.7,
+                        directory               >= 1.0,
+                        fclabels                >= 1.0,
+                        filepath                >= 1.0,
+                        hashable                >= 1.1,
+                        hashtables              >= 1.0.1,
+                        language-c-quote        >= 0.3,
+                        mainland-pretty         >= 0.1,
+                        mtl                     >= 2.0,
+                        pretty                  >= 1.0,
+                        process                 >= 1.1,
+                        symbol                  >= 0.1,
+                        srcloc                  >= 0.1,
+                        transformers            >= 0.2
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
 
@@ -114,11 +117,8 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
                         Data.Array.Accelerate.CUDA.CodeGen
-                        Data.Array.Accelerate.CUDA.CodeGen.Data
-                        Data.Array.Accelerate.CUDA.CodeGen.Skeleton
-                        Data.Array.Accelerate.CUDA.CodeGen.Stencil
-                        Data.Array.Accelerate.CUDA.CodeGen.Tuple
-                        Data.Array.Accelerate.CUDA.CodeGen.Util
+                        Data.Array.Accelerate.CUDA.CodeGen.Base
+                        Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
                         Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Debug
@@ -157,6 +157,7 @@ Library
                         FlexibleInstances,
                         GADTs,
                         PatternGuards,
+                        QuasiQuotes,
                         RankNTypes,
                         ScopedTypeVariables,
                         TemplateHaskell,

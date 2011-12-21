@@ -42,13 +42,12 @@ import Data.Label.PureM
 import Data.Maybe
 import Data.Monoid
 import Foreign.Storable
-import Language.C
 import System.Directory
 import System.Exit                                      ( ExitCode(..) )
 import System.FilePath
 import System.IO
 import System.Process
-import Text.PrettyPrint
+import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, render )
 import Data.ByteString.Internal                         ( w2c )
 import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as Hash
@@ -459,16 +458,16 @@ compile table acc fvar = do
   return key
   where
     cols        = 100
-    done        = mempty
     key         = hashlazy code
     code        = toLazyByteString
-                . fullRender LeftMode cols 1.5 put done
-                . pretty
-                $ codeGenAcc acc fvar
+                . layout . render cols . ppr
+                $ codegenAcc acc fvar
 
-    put (Chr c)  next = fromChar c   `mappend` next
-    put (Str s)  next = fromString s `mappend` next
-    put (PStr s) next = fromString s `mappend` next
+    layout (RText _ s next)     = fromString s  `mappend` layout next
+    layout (RChar c   next)     = fromChar c    `mappend` layout next
+    layout (RLine _   next)     = fromChar '\n' `mappend` layout next   -- no indenting
+    layout (RPos _    next)     = layout next                           -- no line markers
+    layout REmpty               = mempty                                -- done
 
 
 -- Wait for the compilation process to finish

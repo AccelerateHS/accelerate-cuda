@@ -1,6 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
 -- |
--- Module      : Data.Array.Accelerate.CUDA.CodeGen.Util
+-- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
 -- License     : BSD3
 --
@@ -9,23 +9,108 @@
 -- Portability : non-partable (GHC extensions)
 --
 
-module Data.Array.Accelerate.CUDA.CodeGen.Util
-  where
+module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
-import Data.Array.Accelerate.CUDA.CodeGen.Data
+  -- Types
+  CUTranslSkel(..),
+
+  -- Declaration generation
+  typename, cvar, ccall, char, integral, bool, dim, params, shape, global
+
+) where
 
 import Data.Loc
 import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
-import qualified Language.C                             as C
+import Text.PrettyPrint.Mainland                ( Pretty(..), Doc, stack, text, (<>) )
 
-data Direction = Forward | Backward
 
+-- Compilation unit
+-- ----------------
+
+newtype CUTranslSkel = CUTranslSkel [Definition]
+
+instance Pretty CUTranslSkel where
+  ppr (CUTranslSkel code) =
+    stack ( include "accelerate_cuda_extras.h"
+          : map ppr code
+          )
+
+include :: FilePath -> Doc
+include hdr = text "#include <" <> text hdr <> text ">"
+
+
+-- Expression and Declaration generation
+-- -------------------------------------
+
+cvar :: String -> Exp
+cvar x = [cexp|$id:x|]
+
+ccall :: String -> [Exp] -> Exp
+ccall fn args = [cexp|$id:fn ($args:args)|]
+
+typename :: String -> Type
+typename name = Type (DeclSpec [] [] (Tnamed (Id name noSrcLoc) noSrcLoc) noSrcLoc) (DeclRoot noSrcLoc) noSrcLoc
+
+char :: Char -> Exp
+char c = [cexp|$char:c|]
+
+integral :: Integral a => a -> Exp
+integral n = [cexp|$int:n|]
+
+bool :: Bool -> Exp
+bool = integral . fromEnum
+
+dim :: String -> Int -> Definition
+dim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+
+params :: String -> [Type] -> [(Exp, Param)]
+params base ts = zipWith param ts names
+  where
+    n           = length ts
+    names       = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
+    param t x   = ( cvar x, [cparam| $ty:(ptr t) $id:x |] )
+    --
+    ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t    = Type d (Ptr [] r noSrcLoc) lb
+          | otherwise                                           = t
+
+global :: String -> Type -> Definition
+global name ty = [cedecl|static $ty:ty $id:name;|]
+
+shape :: String -> Int -> Definition
+shape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]
+
+
+{--
+cstruct :: Bool -> String -> [Type] -> Definition
+cstruct volatile name types =
+  [cedecl| typedef struct $id:name {
+             $sdecls:(zipWith field names types)
+           } $id:name;
+  |]
+  where
+    n           = length types
+    names       = ['a':show v | v <- [n-1,n-2.. 0]]
+    field v ty  = [csdecl| $ty:(unstable ty) $id:v; |]
+    --
+    unstable ty
+      | volatile, Type (DeclSpec s q t la) r lb <- ty   = Type (DeclSpec s (Tvolatile noSrcLoc:q) t la) r lb
+      | otherwise                                       = ty
+
+ctypedef :: Bool -> String -> Type -> Definition
+ctypedef volatile name typ
+  | volatile    = [cedecl| typedef volatile $ty:typ $id:name; |]
+  | otherwise   = [cedecl| typedef          $ty:typ $id:name; |]
+--}
+
+{--
 -- Common device functions
 -- -----------------------
 
-{--
+data Direction = Forward | Backward
+
+
 mkIdentity :: [CExpr] -> CExtDecl
 mkIdentity = mkDeviceFun "identity" (typename "TyOut") []
 
@@ -46,28 +131,6 @@ mkSliceReplicate :: [CExpr] -> CExtDecl
 mkSliceReplicate =
   mkDeviceFun "sliceIndex" (typename "Slice") [(typename "SliceDim","dim")]
 --}
-
--- Helper functions
--- ----------------
-
-cvar :: String -> C.Exp
-cvar x = [cexp|$id:x|] --Var (Id x) noSrcLoc
-
-ccall :: String -> [C.Exp] -> C.Exp
-ccall fn args = [cexp|$id:fn ($args:args)|]
-
-typename :: String -> C.Type
-typename var = Type (DeclSpec [] [] (Tnamed (Id var noSrcLoc) noSrcLoc) noSrcLoc) (DeclRoot noSrcLoc) noSrcLoc
-
-cchar :: Char -> C.Exp
-cchar c = [cexp|$char:c|]
-
-cintegral :: Integral a => a -> C.Exp
-cintegral n = [cexp|$int:n|]
-
-fromBool :: Bool -> C.Exp
-fromBool = cintegral . fromEnum
-
 
 {--
 mkDim :: String -> Int -> CExtDecl
