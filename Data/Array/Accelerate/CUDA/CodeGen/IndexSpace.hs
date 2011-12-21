@@ -49,7 +49,7 @@ mkGenerate (tyOut, dimOut) fn =
 
         for (idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x; idx < n; idx += gridSize)
         {
-              const typename DimOut x0 = fromIndex(shOut, idx);
+              $decls:shape
               $stms:(zipWith apply fn xs)
         }
     }
@@ -57,4 +57,13 @@ mkGenerate (tyOut, dimOut) fn =
   where
     (xs, args)  = unzip (params "d_out" tyOut)
     apply f x   = [cstm| $exp:x [idx] = $exp:f; |]
+
+    -- destruct shapes into separate components, since the code generator no
+    -- longer treats tuples as structs
+    --
+    shape | dimOut == 1 = [[cdecl| const int x0_a0 = idx; |]]
+          | otherwise   = sh : map (unsh . show) [0 .. dimOut-1]
+          where
+            sh      = [cdecl| const typename DimOut x0 = fromIndex(shOut, idx); |]
+            unsh c  = [cdecl| const int $id:("x0_a" ++ c) = x0 . $id:('a':c); |]
 
