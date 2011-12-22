@@ -16,7 +16,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   typename, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  getters, setters
+  setters, getters, getters'
 
 ) where
 
@@ -78,14 +78,18 @@ cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:
 -- elements from the global input arrays at the given index.
 --
 getters :: Int -> [Type] -> ([Param], String -> [InitGroup])
-getters base ts = (zipWith param ts arrs, \idx -> zipWith3 (get idx) ts arrs xs)
+getters s = getters' ("d_in" ++ show s) ('x':show s)
+
+getters' :: String -> String -> [Type] -> ([Param], String -> [InitGroup])
+getters' arr x ts = (zipWith param ts arrs, \idx -> zipWith3 (get idx) ts arrs xs)
   where
     n                   = length ts
-    suffixes            = map (\x -> shows base "_a" ++ show x) [n-1, n-2.. 0]
-    arrs                = map ("d_in" ++) suffixes
-    xs                  = map ('x':)      suffixes
-    param t arr         = [cparam| const $ty:(ptr t) $id:arr |]
-    get idx t arr x     = [cdecl| const $ty:t $id:x = $id:arr [$id:idx]; |]
+    suffixes            = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
+    arrs                = map (arr ++) suffixes
+    xs                  = map (x   ++) suffixes
+    param t a           = [cparam| const $ty:(ptr t) $id:a |]
+    get idx t a v       = [cdecl| const $ty:t $id:v = $id:a [$id:idx]; |]
+
 
 -- Generate function parameters and corresponding variable names for the
 -- components of the given output array.

@@ -106,9 +106,17 @@ codegenAcc acc vars =
         ZipWith f a b     -> do
           f'    <- codegenFun f
           mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccType b) f'
+
+        Permute f _ g a   -> do
+          f'    <- codegenFun f
+          g'    <- codegenFun g
+          mkPermute (accDim acc) (accDim a) (codegenAccType a) f' g'
+
+        Backpermute _ f a -> do
+          f'    <- codegenFun f
+          mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
+
 {--
-        Permute f _ g a   -> mkPermute (codegenAccType a) (accDim acc) (accDim a) (codegenFun f) (codegenFun g)
-        Backpermute _ f a -> mkBackpermute (codegenAccType a) (accDim acc) (accDim a) (codegenFun f)
         Replicate sl _ a  ->
           let dimSl  = accDim a
               dimOut = accDim acc
