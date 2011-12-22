@@ -47,7 +47,7 @@ import System.Exit                                      ( ExitCode(..) )
 import System.FilePath
 import System.IO
 import System.Process
-import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, render )
+import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderCompact )
 import Data.ByteString.Internal                         ( w2c )
 import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as Hash
@@ -457,10 +457,9 @@ compile table acc fvar = do
   --
   return key
   where
-    cols        = 1000
     key         = hashlazy code
     code        = toLazyByteString
-                . layout . render cols . ppr
+                . layout . renderCompact . ppr
                 $ codegenAcc acc fvar
 
     layout (RText _ s next)     = fromString s  `mappend` layout next
