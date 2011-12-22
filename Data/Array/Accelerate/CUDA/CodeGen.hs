@@ -34,7 +34,7 @@ import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
 -- import Data.Array.Accelerate.Analysis.Stencil
--- import Data.Array.Accelerate.Array.Representation
+import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Foreign.Storable                               as F
 
@@ -116,7 +116,6 @@ codegenAcc acc vars =
           f'    <- codegenFun f
           mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
 
-{--
         Replicate sl _ a  ->
           let dimSl  = accDim a
               dimOut = accDim acc
@@ -126,7 +125,7 @@ codegenAcc acc vars =
               extend (SliceAll   sliceIdx) n = mkPrj dimOut "dim" n : extend sliceIdx (n+1)
               extend (SliceFixed sliceIdx) n = extend sliceIdx (n+1)
           in
-          mkReplicate (codegenAccType a) dimSl dimOut . reverse $ extend sl 0
+          mkReplicate dimSl dimOut (codegenAccType a) (reverse $ extend sl 0)
 
         Index sl a slix   ->
           let dimCo  = length (codegenExpType slix)
@@ -138,8 +137,9 @@ codegenAcc acc vars =
               restrict (SliceAll   sliceIdx) (m,n) = mkPrj dimSl "sl" n : restrict sliceIdx (m,n+1)
               restrict (SliceFixed sliceIdx) (m,n) = mkPrj dimCo "co" m : restrict sliceIdx (m+1,n)
           in
-          mkIndex (codegenAccType a) dimSl dimCo dimIn0 . reverse $ restrict sl (0,0)
+          mkSlice dimSl dimCo dimIn0 (codegenAccType a) (reverse $ restrict sl (0,0))
 
+{--
         Stencil f bndy a     ->
           let ty0   = codegenTupleTex (accType a)
               decl0 = map (map CTypeSpec) (reverse ty0)
@@ -204,8 +204,6 @@ mkPrj ndim var c
   | otherwise   = [cexp| $exp:v . $id:field |]
                     where v     = cvar var
                           field = 'a' : show c
-
---mkPrj _ base c = cvar (base ++ "_a" ++ show c)
 
 
 -- Scalar Expressions
@@ -299,14 +297,14 @@ codegenExp (IndexScalar a e)
           n             = length types
           sh            = cvar ("sh"  ++ var')
           arr c         = cvar ("arr" ++ var' ++ "_a" ++ show (c::Int))
-          index ix ty c
+          get ix ty c
             | C.Type (C.DeclSpec _ _ (C.Tnamed (C.Id name _) _) _) _ _ <- ty
             , "Double" `isSuffixOf` name        = ccall "indexDArray" [arr c, ix]
             | otherwise                         = ccall "indexArray"  [arr c, ix]
       in do
         e'    <- codegenExp e
         ix    <- bind [cty|int|] (ccall "toIndex" [sh, ccall "shape" e'])
-        return $ zipWith (index ix) types [n-1, n-2 .. 0]
+        return $ zipWith (get ix) types [n-1, n-2 .. 0]
   --
   | otherwise               = INTERNAL_ERROR(error) "codegenExp" "expected array variable"
 

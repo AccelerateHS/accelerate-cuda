@@ -45,23 +45,22 @@ mkMap tyOut tyIn0 fn = do
         const typename Ix shape
     )
     {
-              int idx;
+              int ix;
         const int gridSize = __umul24(blockDim.x, gridDim.x);
 
-        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; idx < shape
-            ; idx += gridSize)
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shape
+            ; ix += gridSize)
         {
-            $decls:(getIn0 "idx")
+            $decls:(getIn0 "ix")
             $decls:env
-            $stms:(zipWith apply fn varOut)
+            $stms:(setOut "ix" fn)
         }
     }
   |]
   where
-    (argOut, varOut)    = setters tyOut
-    (argIn0, getIn0)    = getters 0 tyIn0
-    apply f x           = [cstm| $exp:x [idx] = $exp:f; |]
+    (argOut, _, setOut) = setters tyOut
+    (argIn0, _, getIn0) = getters 0 tyIn0
 
 
 -- Apply the given binary function element-wise to the two arrays. The extent of
@@ -95,26 +94,25 @@ mkZipWith dim tyOut tyIn1 tyIn0 fn = do
         const typename DimIn0 shIn0
     )
     {
-              int idx;
+              int ix;
         const int shapeSize = size(shOut);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
 
-        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; idx < shapeSize
-            ; idx += gridSize)
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
         {
-            const int idx1 = toIndex(shIn1, fromIndex(shOut, idx));
-            const int idx0 = toIndex(shIn0, fromIndex(shOut, idx));
-            $decls:(getIn0 "idx0")
-            $decls:(getIn1 "idx1")
+            const int ix1 = toIndex(shIn1, fromIndex(shOut, ix));
+            const int ix0 = toIndex(shIn0, fromIndex(shOut, ix));
+            $decls:(getIn0 "ix0")
+            $decls:(getIn1 "ix1")
             $decls:env
-            $stms:(zipWith apply fn varOut)
+            $stms:(setOut "ix" fn)
         }
     }
   |]
   where
-    (argOut, varOut)    = setters tyOut
-    (argIn0, getIn0)    = getters 0 tyIn0
-    (argIn1, getIn1)    = getters 1 tyIn1
-    apply f x           = [cstm| $exp:x [idx] = $exp:f; |]
+    (argOut, _, setOut) = setters tyOut
+    (argIn0, _, getIn0) = getters 0 tyIn0
+    (argIn1, _, getIn1) = getters 1 tyIn1
 

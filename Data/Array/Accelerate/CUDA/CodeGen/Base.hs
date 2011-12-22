@@ -77,11 +77,15 @@ cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:
 -- Generate a list of function parameters and variable initialisers that read
 -- elements from the global input arrays at the given index.
 --
-getters :: Int -> [Type] -> ([Param], String -> [InitGroup])
+getters :: Int -> [Type] -> ([Param], [Exp], String -> [InitGroup])
 getters s = getters' ("d_in" ++ show s) ('x':show s)
 
-getters' :: String -> String -> [Type] -> ([Param], String -> [InitGroup])
-getters' arr x ts = (zipWith param ts arrs, \idx -> zipWith3 (get idx) ts arrs xs)
+getters' :: String -> String -> [Type] -> ([Param], [Exp], String -> [InitGroup])
+getters' arr x ts =
+  ( zipWith param ts arrs
+  , map cvar xs
+  , \idx -> zipWith3 (get idx) ts arrs xs
+  )
   where
     n                   = length ts
     suffixes            = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
@@ -94,12 +98,16 @@ getters' arr x ts = (zipWith param ts arrs, \idx -> zipWith3 (get idx) ts arrs x
 -- Generate function parameters and corresponding variable names for the
 -- components of the given output array.
 --
-setters :: [Type] -> ([Param], [Exp])
-setters ts = (zipWith param ts names, map cvar names)
+setters :: [Type] -> ([Param], [Exp], String -> [Exp] -> [Stm])
+setters ts =
+  ( zipWith param ts arrs
+  , map cvar arrs
+  , \ix e -> zipWith (set ix) arrs e )
   where
     n           = length ts
-    names       = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
+    arrs        = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
     param t x   = [cparam| $ty:(ptr t) $id:x |]
+    set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 
 -- Turn a plain type into a ptr type
 --

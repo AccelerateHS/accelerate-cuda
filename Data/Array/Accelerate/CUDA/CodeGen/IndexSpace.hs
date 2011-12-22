@@ -15,7 +15,10 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
   mkGenerate,
 
   -- Permutations
-  mkPermute, mkBackpermute
+  mkPermute, mkBackpermute,
+
+  -- Multidimensional index and replicate
+  mkSlice, mkReplicate
 
 ) where
 
@@ -50,24 +53,23 @@ mkGenerate dimOut tyOut fn = do
         const typename DimOut shOut
     )
     {
-              int idx;
+              int ix;
         const int n        = size(shOut);
         const int gridSize = __umul24(blockDim.x, gridDim.x);
 
-        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; idx < n
-            ; idx += gridSize)
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < n
+            ; ix += gridSize)
         {
-              $decls:shape
-              $decls:env
-              $stms:(zipWith apply fn xs)
+            $decls:shape
+            $decls:env
+            $stms:(set "ix" fn)
         }
     }
   |]
   where
-    (args, xs)  = setters tyOut
-    apply f x   = [cstm| $exp:x [idx] = $exp:f; |]
-    shape       = fromIndex dimOut "DimOut" "shOut" "idx" "x0"
+    (args, _, set)      = setters tyOut
+    shape               = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
 
 
 -- Forward permutation specified by an index mapping that determines for each
@@ -103,38 +105,35 @@ mkPermute dimOut dimIn0 types combine index = do
         const typename DimIn0 shIn0
     )
     {
-              int idx;
+              int ix;
         const int shapeSize = size(shIn0);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
 
-        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; idx < shapeSize
-            ; idx += gridSize)
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
         {
             typename DimOut dst;
             $decls:src
             $decls:env
-            $stms:project
+            $stms:dst
 
             if (!ignore(dst))
             {
-                const int j = toIndex(shOut, dst);
-                $decls:(getIn0 "idx")
-                $decls:(getOut "j")
-                $stms:(zipWith apply combine varOut)
+                const int jx = toIndex(shOut, dst);
+                $decls:(getIn0 "ix")
+                $decls:(getOut "jx")
+                $stms:(setOut "jx" combine)
             }
         }
     }
   |]
   where
-    (argOut, varOut)    = setters types
-    (argIn0, getIn0)    = getters 0 types
-    (_,      getOut)    = getters' "d_out" "x1" types
-    src                 = fromIndex dimIn0 "DimIn0" "shIn0" "idx" "x0"
-    apply f x           = [cstm| $exp:x [j] = $exp:f; |]
-    project
-      | [e] <- index    = [[cstm| dst = $exp:e; |]]
-      | otherwise       = zipWith (\f c -> [cstm| dst . $id:('a':show c) = $exp:f; |]) index [dimOut-1, dimOut-2 .. 0]
+    (argOut, _, setOut) = setters types
+    (argIn0, _, getIn0) = getters 0 types
+    (_,      _, getOut) = getters' "d_out" "x1" types
+    src                 = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
+    dst                 = project dimOut "dst" index
 
 {--
     -- A version of 'apply' using atomicCAS which will correctly combine
@@ -147,7 +146,7 @@ mkPermute dimOut dimIn0 types combine index = do
     suf x               = map (\c -> x ++ "_a" ++ show c) [n-1, n-2.. 0]
     varOut'             = zipWith (\t v -> [cdecl| $ty:t $id:v; |]) types (suf "v1")
     applyCAS f a x x'   = [cstm| do { $id:x' = $id:x;
-                                      $id:x = atomicCAS( & $id:a [j], $id:x', $exp:f);
+                                      $id:x = atomicCAS( & $id:a [jx], $id:x', $exp:f);
                                     } while ( $id:x' != $id:x ); |]
 --}
 
@@ -178,35 +177,136 @@ mkBackpermute dimOut dimIn0 types index = do
         const typename DimIn0 shIn0
     )
     {
-              int idx;
+              int ix;
         const int shapeSize = size(shOut);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
 
-        for ( idx = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; idx < shapeSize
-            ; idx += gridSize)
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
         {
             typename DimIn0 src;
             $decls:dst
             $decls:env
-            $stms:project
+            $stms:src
             {
-                const int i = toIndex(shIn0, src);
-                $decls:(getIn0 "i")
-                $stms:(zipWith permute varOut [n-1,n-2..0])
+                const int jx = toIndex(shIn0, src);
+                $decls:(getIn0 "jx")
+                $stms:(setOut "ix" x0)
             }
         }
     }
   |]
   where
-    (argOut, varOut)    = setters types
-    (argIn0, getIn0)    = getters 0 types
-    dst                 = fromIndex dimOut "DimOut" "shOut" "idx" "x0"
-    n                   = length types
-    permute v c         = [cstm| $exp:v [idx] = $id:("x0_a" ++ show c); |]
-    project
-      | [e] <- index    = [[cstm| src = $exp:e; |]]
-      | otherwise       = zipWith (\f c -> [cstm| src . $id:('a':show c) = $exp:f; |]) index [dimIn0-1, dimIn0-2.. 0]
+    (argOut, _,  setOut)        = setters types
+    (argIn0, x0, getIn0)        = getters 0 types
+    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+    src                         = project dimIn0 "src" index
+
+
+-- Index an array with a generalised, multidimensional array index. The result
+-- is a new array (possibly a singleton) containing all dimensions in their
+-- entirety.
+--
+-- slice :: (Slice slix, Elt e)
+--       => Acc (Array (FullShape slix) e)
+--       -> Exp slix
+--       -> Acc (Array (SliceShape slix) e)
+--
+mkSlice :: Int -> Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
+mkSlice dimSl dimCo dimIn0 types slix = do
+  env   <- environment
+  return $ CUTranslSkel [cunit|
+    $edecl:(cdim "Slice"    dimSl)
+    $edecl:(cdim "CoSlice"  dimCo)
+    $edecl:(cdim "SliceDim" dimIn0)
+
+    extern "C"
+    __global__ void
+    slice
+    (
+        $params:argOut,
+        $params:argIn0,
+        const typename Slice    slice,
+        const typename CoSlice  co,
+        const typename SliceDim sliceDim
+    )
+    {
+              int ix;
+        const int shapeSize = size(slice);
+        const int gridSize  = __umul24(blockDim.x, gridDim.x);
+
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
+        {
+            typename Slice    sl  = fromIndex(slice, ix);
+            typename SliceDim src;
+            $decls:env
+            $stms:src
+            {
+                const int jx = toIndex(sliceDim, src);
+                $decls:(getIn0 "jx")
+                $stms:(setOut "ix" x0)
+            }
+        }
+    }
+  |]
+  where
+    (argOut, _,  setOut)        = setters types
+    (argIn0, x0, getIn0)        = getters 0 types
+    src                         = project dimIn0 "sl" slix
+
+
+-- Replicate an array across one or more dimensions as specified by the
+-- generalised array index.
+--
+-- replicate :: (Slice slix, Elt e)
+--           => Exp slix
+--           -> Acc (Array (SliceShape slix) e)
+--           -> Acc (Array (FullShape  slix) e)
+--
+mkReplicate :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
+mkReplicate dimSl dimOut types slix = do
+  env   <- environment
+  return $ CUTranslSkel [cunit|
+    $edecl:(cdim "Slice"    dimSl)
+    $edecl:(cdim "SliceDim" dimOut)
+
+    extern "C"
+    __global__ void
+    replicate
+    (
+        $params:argOut,
+        $params:argIn0,
+        const typename Slice    slice,
+        const typename SliceDim sliceDim
+    )
+    {
+              int ix;
+        const int shapeSize = size(sliceDim);
+        const int gridSize  = __umul24(blockDim.x, gridDim.x);
+
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
+        {
+            typename SliceDim dim = fromIndex(sliceDim, ix);
+            typename Slice    src;
+            $decls:env
+            $stms:src
+            {
+                const int jx = toIndex(slice, src);
+                $decls:(getIn0 "jx")
+                $stms:(setOut "ix" x0)
+            }
+        }
+    }
+  |]
+  where
+    (argOut, _,  setOut)        = setters types
+    (argIn0, x0, getIn0)        = getters 0 types
+    src                         = project dimSl "src" slix
 
 
 --------------------------------------------------------------------------------
@@ -222,4 +322,12 @@ fromIndex n dim sh ix base
     where
       sh0       = [cdecl| const typename $id:dim $id:base = fromIndex( $id:sh , $id:ix ); |]
       unsh c    = [cdecl| const int $id:(base ++ "_a" ++ c) = $id:base . $id:('a':c); |]
+
+
+-- apply expressions to the components of a shape
+--
+project :: Int -> String -> [Exp] -> [Stm]
+project n sh idx
+  | [e] <- idx  = [[cstm| $id:sh = $exp:e; |]]
+  | otherwise   = zipWith (\i c -> [cstm| $id:sh . $id:('a':show c) = $exp:i; |]) idx [n-1,n-2..0]
 
