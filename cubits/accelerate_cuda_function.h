@@ -58,6 +58,42 @@ static __inline__ __device__ T mod(const T x, const T y)
 }
 
 
+/*
+ * Type coercion
+ */
+template <typename T>
+static __inline__ __device__ uint32_t reinterpret32(const T x)
+{
+    union { T a; uint32_t b; } u;
+
+    u.a = x;
+    return u.b;
+}
+
+template <>
+static __inline__ __device__ uint32_t reinterpret32(const float x)
+{
+    return __float_as_int(x);
+}
+
+template <typename T>
+static __inline__ __device__ uint64_t reinterpret64(const T x)
+{
+    union { T a; uint64_t b; } u;
+
+    u.a = x;
+    return u.b;
+}
+
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 130
+template <>
+static __inline__ __device__ uint64_t reinterpret64(const double x)
+{
+    return __double_as_longlong(x);
+}
+#endif
+
+
 #if 0
 /* -----------------------------------------------------------------------------
  * Additional helper functions

@@ -65,7 +65,7 @@ codegenAcc :: forall aenv a.
            -> OpenAcc aenv a
            -> [AccBinding aenv]
            -> CUTranslSkel
-codegenAcc _ acc vars =
+codegenAcc dev acc vars =
   let fvars                     = concatMap (liftAcc acc) vars
       CUTranslSkel entry code   = runCGM $ codegen acc
   in
@@ -115,7 +115,7 @@ codegenAcc _ acc vars =
         Permute f _ g a   -> do
           f'    <- codegenFun f
           g'    <- codegenFun g
-          mkPermute (accDim acc) (accDim a) (codegenAccType a) f' g'
+          mkPermute dev (accDim acc) (accDim a) (codegenAccType a) (sizeOfAccTypes a) f' g'
 
         Backpermute _ f a -> do
           f'    <- codegenFun f
@@ -258,18 +258,7 @@ codegenExp (IndexTail sh@(Shape a)) = do
 codegenExp (IndexHead ix)       = return . last <$> codegenExp ix
 codegenExp (IndexTail ix)       =          init <$> codegenExp ix
 
-{--
-  - hmm... shapes are real tuples
-codegenExp (Var i) =
-  let var       = cvar ('x' : show (idxToInt i))
-  in
-  case codegenTupleType (Sugar.eltType (undefined::t)) of
-       [_] -> [var]
-       cps -> reverse . take (length cps) . flip map (enumFrom 0 :: [Int]) $
-         \c -> [cexp| $exp:var . $id:('a':show c) |]
---}
-
-codegenExp (Var i) =
+codegenExp (Var i)              =
   let base      = 'x':show (idxToInt i)
       var x     = [cexp| $id:(base ++ "_a" ++ show (x::Int))|]
       n         = length $ codegenTupleType (Sugar.eltType (undefined::t))
@@ -343,8 +332,13 @@ codegenAccType =  codegenTupleType . accType
 codegenExpType :: OpenExp aenv env t -> [C.Type]
 codegenExpType =  codegenTupleType . expType
 
-codegenAccTypeDim :: OpenAcc aenv (Sugar.Array dim e) -> ([C.Type], Int)
-codegenAccTypeDim acc = (codegenAccType acc, accDim acc)
+sizeOfAccTypes :: OpenAcc aenv (Sugar.Array dim e) -> [Int]
+sizeOfAccTypes = sizeOf' . accType
+  where
+    sizeOf' :: TupleType a -> [Int]
+    sizeOf' UnitTuple           = []
+    sizeOf' x@(SingleTuple _)   = [sizeOf x]
+    sizeOf' (PairTuple a b)     = sizeOf' a ++ sizeOf' b
 
 
 -- Implementation

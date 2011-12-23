@@ -23,12 +23,14 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
 ) where
 
 import Data.Loc
+import Data.List
 import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Foreign.CUDA.Analysis
 
 
 -- Construct a new array by applying a function to each index. Each thread
@@ -88,8 +90,8 @@ mkGenerate dimOut tyOut fn = do
 --         -> Acc (Array ix  a)                 -- permuted array
 --         -> Acc (Array ix' a)
 --
-mkPermute :: Int -> Int -> [Type] -> [Exp] -> [Exp] -> CGM CUTranslSkel
-mkPermute dimOut dimIn0 types combine index = do
+mkPermute :: DeviceProperties -> Int -> Int -> [Type] -> [Int] -> [Exp] -> [Exp] -> CGM CUTranslSkel
+mkPermute dev dimOut dimIn0 types sizeof combine index = do
   env   <- environment
   return $ CUTranslSkel "permute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
@@ -122,33 +124,56 @@ mkPermute dimOut dimIn0 types combine index = do
             {
                 const int jx = toIndex(shOut, dst);
                 $decls:(getIn0 "ix")
-                $decls:(getOut "jx")
-                $stms:(setOut "jx" combine)
+                $decls:temps
+                $stms:write
             }
         }
     }
   |]
   where
-    (argOut, _, setOut) = setters types
-    (argIn0, _, getIn0) = getters 0 types
-    (_,      _, getOut) = getters' "d_out" "x1" types
-    src                 = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
-    dst                 = project dimOut "dst" index
+    (argOut, arrOut, setOut)    = setters types
+    (argIn0, _,      getIn0)    = getters 0 types
+    src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
+    dst                         = project dimOut "dst" index
+    sm                          = computeCapability dev
+    unsafe                      = setOut "jx" combine
+    (temps,write)               =
+      let n = length types
+      in  unzip $ zipWith6 apply unsafe combine types arrOut sizeof [n-1,n-2..0]
 
-{--
-    -- A version of 'apply' using atomicCAS which will correctly combine
-    -- elements that write to the same location (e.g. histogram). Requires type
-    -- casting, and only works for 32-bit (compute > 1.1) or 64-bit
-    -- (compute > 1.2) elements. This operates on each element of a tuple
-    -- individually, which could put restrictions on the combining function.
+    -- Apply the combining function between old and new values. If multiple
+    -- threads attempt to write to the same location, the hardware
+    -- write-combining mechanism will accept one transaction and all other
+    -- updates be lost.
     --
-    n                   = length types
-    suf x               = map (\c -> x ++ "_a" ++ show c) [n-1, n-2.. 0]
-    varOut'             = zipWith (\t v -> [cdecl| $ty:t $id:v; |]) types (suf "v1")
-    applyCAS f a x x'   = [cstm| do { $id:x' = $id:x;
-                                      $id:x = atomicCAS( & $id:a [jx], $id:x', $exp:f);
-                                    } while ( $id:x' != $id:x ); |]
---}
+    -- If the hardware supports it, we can use atomicCAS (compare-and-swap) to
+    -- work around this. This requires at least compute 1.1 for 32-bit values,
+    -- and compute 1.2 for 64-bit values. If hardware support is not available,
+    -- write the result as normal and hope for the best.
+    --
+    -- Each element of a tuple is necessarily written individually, so the tuple
+    -- as a whole is not stored atomically.
+    --
+    apply set f t a s n
+      | Just (t',cast) <- reinterpret s =
+          let z         = "x1_a" ++ show n
+              z'        = '_':z
+              get       = [cexp| $exp:a [ $id:("jx") ] |]
+          in
+          ( [cdecl| $ty:t' $id:z, $id:z' = $exp:cast ( $exp:get ); |]
+          , [cstm| do { $id:z  = $id:z';
+                        $id:z' = atomicCAS ( ( $ty:(cptr t') ) & $exp:a [ $id:("jx") ], $id:z, $exp:cast ( $exp:f ) );
+                      } while ( $id:z != $id:z' ); |]
+          )
+      | otherwise                       =
+          ( [cdecl| const $ty:t $id:("x1_a" ++ show n) = $exp:a [ $id:("jx") ]; |]
+          , set
+          )
+
+    reinterpret :: Int -> Maybe (Type, Exp)
+    reinterpret 4 | sm >= 1.1   = Just (typename "uint32_t", [cexp| $id:("reinterpret32") |])
+    reinterpret 8 | sm >= 1.2   = Just (typename "uint64_t", [cexp| $id:("reinterpret64") |])
+    reinterpret _               = Nothing
 
 
 -- Backwards permutation (gather) of an array according to a permutation

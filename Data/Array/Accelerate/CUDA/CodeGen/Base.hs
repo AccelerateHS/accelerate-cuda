@@ -15,8 +15,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   CUTranslSkel(..),
 
   -- Declaration generation
-  typename, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  setters, getters, getters'
+  typename, cptr, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
+  setters, getters
 
 ) where
 
@@ -93,12 +93,12 @@ getters' arr x ts =
   , \idx -> zipWith3 (get idx) ts arrs xs
   )
   where
-    n                   = length ts
-    suffixes            = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
-    arrs                = map (arr ++) suffixes
-    xs                  = map (x   ++) suffixes
-    param t a           = [cparam| const $ty:(ptr t) $id:a |]
-    get idx t a v       = [cdecl| const $ty:t $id:v = $id:a [$id:idx]; |]
+    n           = length ts
+    suffixes    = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
+    arrs        = map (arr ++) suffixes
+    xs          = map (x   ++) suffixes
+    param t a   = [cparam| const $ty:(cptr t) $id:a |]
+    get i t a v = [cdecl| const $ty:t $id:v = $id:a [$id:i]; |]
 
 
 -- Generate function parameters and corresponding variable names for the
@@ -112,14 +112,14 @@ setters ts =
   where
     n           = length ts
     arrs        = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
-    param t x   = [cparam| $ty:(ptr t) $id:x |]
+    param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 
 -- Turn a plain type into a ptr type
 --
-ptr :: Type -> Type
-ptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noSrcLoc) lb
-      | otherwise                                        = t
+cptr :: Type -> Type
+cptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noSrcLoc) lb
+       | otherwise                                        = t
 
 
 {--
