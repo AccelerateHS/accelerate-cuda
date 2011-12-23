@@ -14,7 +14,7 @@
 
 module Data.Array.Accelerate.CUDA.Debug (
 
-  debug, when,
+  debug, when, mode,
   dump_cuda, dump_gc, dump_exec, verbose
 
 ) where
@@ -62,17 +62,17 @@ initialise = parse `fmap` getArgs
 options :: IORef Flags
 options = unsafePerformIO $ newIORef =<< initialise
 
+{-# INLINE mode #-}
+mode :: (Flags :-> Bool) -> Bool
+mode f = unsafePerformIO $ get f `fmap` readIORef options
+
 {-# INLINE debug #-}
 debug :: MonadIO m => (Flags :-> Bool) -> String -> m ()
-debug f str =
-  if unsafePerformIO $ get f `fmap` readIORef options
-     then liftIO (putTraceMsg str)
-     else return ()
+debug f str = when f (liftIO $ putTraceMsg str)
 
 {-# INLINE when #-}
 when :: MonadIO m => (Flags :-> Bool) -> m () -> m ()
-when f action =
-  if unsafePerformIO $ get f `fmap` readIORef options
-     then action
-     else return ()
+when f action
+  | mode f      = action
+  | otherwise   = return ()
 

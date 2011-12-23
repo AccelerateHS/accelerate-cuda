@@ -492,6 +492,9 @@ compileFlags cufile =
                   4 -> "-m32"
                   8 -> "-m64"
                   _ -> error "huh? non 32-bit or 64-bit architecture"
+      verbose = if D.mode D.verbose
+                  then "--ptxas-options=-v"
+                  else "--disable-warnings"
   in do
   arch <- CUDA.computeCapability <$> gets deviceProps
   ddir <- liftIO getDataDir
@@ -501,6 +504,7 @@ compileFlags cufile =
          , "-DUNIX"
          , "-cubin"
          , "-o", cufile `replaceExtension` "cubin"
+         , verbose
          , machine
          , cufile ]
 
