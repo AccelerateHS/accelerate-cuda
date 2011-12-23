@@ -280,7 +280,7 @@ prepareAcc rootAcc = travA rootAcc
         Var ix          -> return (Var ix, vars)
         Const c         -> return (Const c, vars)
         PrimConst c     -> return (PrimConst c, vars)
-        IndexAny        -> INTERNAL_ERROR(error) "prepareAcc" "IndexAny: not implemented yet"
+        IndexAny        -> return (IndexAny, vars)
         IndexNil        -> return (IndexNil, vars)
         IndexCons ix i  -> do
           (ix', var1) <- travE ix vars

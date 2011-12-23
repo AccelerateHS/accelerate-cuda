@@ -241,7 +241,7 @@ codegenExp p@(Prj idx e)
   . reverse <$> codegenExp e
 
 codegenExp IndexNil             = return []
-codegenExp IndexAny             = INTERNAL_ERROR(error) "codegenExp" "IndexAny: not implemented yet"
+codegenExp IndexAny             = return []
 codegenExp (IndexCons ix i)     = (++) <$> codegenExp ix <*> codegenExp i
 
 codegenExp (IndexHead sh@(Shape a)) = do
