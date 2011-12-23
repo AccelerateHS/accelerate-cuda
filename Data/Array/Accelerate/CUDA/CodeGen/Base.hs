@@ -30,10 +30,16 @@ import Text.PrettyPrint.Mainland                ( Pretty(..), Doc, stack, text, 
 -- Compilation unit
 -- ----------------
 
-newtype CUTranslSkel = CUTranslSkel [Definition]
+-- A CUDA compilation unit, together with the name of the main __global__ entry
+-- function.
+--
+data CUTranslSkel = CUTranslSkel String [Definition]
+
+instance Show CUTranslSkel where
+  show (CUTranslSkel entry _) = entry
 
 instance Pretty CUTranslSkel where
-  ppr (CUTranslSkel code) =
+  ppr (CUTranslSkel _ code) =
     stack ( include "accelerate_cuda_extras.h"
           : map ppr code
           )

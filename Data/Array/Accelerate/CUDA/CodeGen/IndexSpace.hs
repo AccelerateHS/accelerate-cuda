@@ -42,7 +42,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 mkGenerate :: Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkGenerate dimOut tyOut fn = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "generate" [cunit|
     $edecl:(cdim "DimOut" dimOut)
 
     extern "C"
@@ -91,7 +91,7 @@ mkGenerate dimOut tyOut fn = do
 mkPermute :: Int -> Int -> [Type] -> [Exp] -> [Exp] -> CGM CUTranslSkel
 mkPermute dimOut dimIn0 types combine index = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "permute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
 
@@ -163,7 +163,7 @@ mkPermute dimOut dimIn0 types combine index = do
 mkBackpermute :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkBackpermute dimOut dimIn0 types index = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "backpermute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
 
@@ -216,7 +216,7 @@ mkBackpermute dimOut dimIn0 types index = do
 mkSlice :: Int -> Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkSlice dimSl dimCo dimIn0 types slix = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "slice" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "CoSlice"  dimCo)
     $edecl:(cdim "SliceDim" dimIn0)
@@ -269,7 +269,7 @@ mkSlice dimSl dimCo dimIn0 types slix = do
 mkReplicate :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkReplicate dimSl dimOut types slix = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "replicate" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "SliceDim" dimOut)
 

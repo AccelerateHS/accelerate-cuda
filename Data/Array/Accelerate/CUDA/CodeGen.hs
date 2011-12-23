@@ -26,6 +26,8 @@ import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Language.C.Syntax
+import qualified Foreign.Storable                               as F
+import qualified Foreign.CUDA.Analysis                          as CUDA
 
 -- friends
 import Data.Array.Accelerate.Type
@@ -36,7 +38,6 @@ import Data.Array.Accelerate.Analysis.Shape
 -- import Data.Array.Accelerate.Analysis.Stencil
 import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
-import qualified Foreign.Storable                               as F
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
@@ -59,12 +60,16 @@ import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- scalar code. We require that the only array form allowed within expressions
 -- are array variables.
 --
-codegenAcc :: forall aenv a. OpenAcc aenv a -> [AccBinding aenv] -> CUTranslSkel
-codegenAcc acc vars =
-  let fvars             = concatMap (liftAcc acc) vars
-      CUTranslSkel code = runCGM $ codegen acc
+codegenAcc :: forall aenv a.
+              CUDA.DeviceProperties
+           -> OpenAcc aenv a
+           -> [AccBinding aenv]
+           -> CUTranslSkel
+codegenAcc _ acc vars =
+  let fvars                     = concatMap (liftAcc acc) vars
+      CUTranslSkel entry code   = runCGM $ codegen acc
   in
-  CUTranslSkel (fvars ++ code)
+  CUTranslSkel entry (fvars ++ code)
   where
     codegen :: OpenAcc aenv a -> CGM CUTranslSkel
     codegen (OpenAcc pacc) =

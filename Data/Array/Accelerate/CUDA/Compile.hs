@@ -144,45 +144,45 @@ prepareAcc rootAcc = travA rootAcc
         Generate e f -> do
           (e', _)    <- travE e []
           (f', var1) <- travF f []
-          kernel     <- build "generate" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Generate e' f')
 
         Replicate slix e a -> do
           (e', _) <- travE e []
           a'      <- travA a
-          kernel  <- build "replicate" acc []
+          kernel  <- build acc []
           return $ exec kernel [] (Replicate slix e' a')
 
         Index slix a e -> do
           a'      <- travA a
           (e', _) <- travE e []
-          kernel  <- build "slice" acc []
+          kernel  <- build acc []
           return $ exec kernel [] (Index slix a' e')
 
         Map f a -> do
           (f', var1) <- travF f []
           a'         <- travA a
-          kernel     <- build "map" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Map f' a')
 
         ZipWith f a b -> do
           (f', var1) <- travF f []
           a'         <- travA a
           b'         <- travA b
-          kernel     <- build "zipWith" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (ZipWith f' a' b')
 
         Fold f e a -> do
           (f', var1) <- travF f []
           (e', var2) <- travE e var1
           a'         <- travA a
-          kernel     <- build "fold" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Fold f' e' a')
 
         Fold1 f a -> do
           (f', var1) <- travF f []
           a'         <- travA a
-          kernel     <- build "fold" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Fold1 f' a')
 
         FoldSeg f e a s -> do
@@ -190,54 +190,54 @@ prepareAcc rootAcc = travA rootAcc
           (e', var2) <- travE e var1
           a'         <- travA a
           s'         <- travA (scan s)
-          kernel     <- build "foldSeg" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (FoldSeg f' e' a' s')
 
         Fold1Seg f a s -> do
           (f', var1) <- travF f []
           a'         <- travA a
           s'         <- travA (scan s)
-          kernel     <- build "foldSeg" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Fold1Seg f' a' s')
 
         Scanl f e a -> do
           (f', var1) <- travF f []
           (e', var2) <- travE e var1
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Scanl f' e' a')
 
         Scanl' f e a -> do
           (f', var1) <- travF f []
           (e', var2) <- travE e var1
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Scanl' f' e' a')
 
         Scanl1 f a -> do
           (f', var1) <- travF f []
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Scanl1 f' a')
 
         Scanr f e a -> do
           (f', var1) <- travF f []
           (e', var2) <- travE e var1
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Scanr f' e' a')
 
         Scanr' f e a -> do
           (f', var1) <- travF f []
           (e', var2) <- travE e var1
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Scanr' f' e' a')
 
         Scanr1 f a -> do
           (f', var1) <- travF f []
           a'         <- travA a
-          kernel     <- build "inclusive_scan" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Scanr1 f' a')
 
         Permute f a g b -> do
@@ -245,27 +245,27 @@ prepareAcc rootAcc = travA rootAcc
           (g', var2) <- travF g var1
           a'         <- travA a
           b'         <- travA b
-          kernel     <- build "permute" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Permute f' a' g' b')
 
         Backpermute e f a -> do
           (e', _)    <- travE e []
           (f', var2) <- travF f []
           a'         <- travA a
-          kernel     <- build "backpermute" acc var2
+          kernel     <- build acc var2
           return $ exec kernel var2 (Backpermute e' f' a')
 
         Stencil f b a -> do
           (f', var1) <- travF f []
           a'         <- travA a
-          kernel     <- build "stencil" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Stencil f' b a')
 
         Stencil2 f b1 a1 b2 a2 -> do
           (f', var1) <- travF f []
           a1'        <- travA a1
           a2'        <- travA a2
-          kernel     <- build "stencil2" acc var1
+          kernel     <- build acc var1
           return $ exec kernel var1 (Stencil2 f' b1 a1' b2 a2')
 
 
@@ -384,18 +384,17 @@ prepareAcc rootAcc = travA rootAcc
 -- Initiate compilation and provide a closure to later link the compiled module
 -- when it is required.
 --
--- TLM: should get name(s) from code generation
---
-build :: String -> OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
-build name acc fvar = do
-  mvar   <- liftIO newEmptyMVar
-  table  <- gets kernelTable
-  key    <- compile table acc fvar
-  return . (name,) . liftIO $ memo mvar (link table key)
+build :: OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
+build acc fvar = do
+  mvar          <- liftIO newEmptyMVar
+  props         <- gets deviceProps
+  table         <- gets kernelTable
+  (entry,key)   <- compile table props acc fvar
+  return . (entry,) . liftIO $ memo mvar (link table key)
 
 
 -- A simple memoisation routine
--- TLM: maybe we can be a bit clever than this...
+-- TLM: maybe we can be a bit clever than this... does it even work?
 --
 memo :: MVar a -> IO a -> IO a
 memo mvar fun = do
@@ -441,8 +440,12 @@ link table key =
 
 -- Generate and compile code for a single open array expression
 --
-compile :: KernelTable -> OpenAcc aenv a -> [AccBinding aenv] -> CIO KernelKey
-compile table acc fvar = do
+compile :: KernelTable
+        -> CUDA.DeviceProperties
+        -> OpenAcc aenv a
+        -> [AccBinding aenv]
+        -> CIO (String, KernelKey)
+compile table dev acc fvar = do
   exists        <- isJust `fmap` liftIO (Hash.lookup table key)
   unless exists $ do
     debug       $  unlines [ show key, map w2c (L.unpack code) ]
@@ -455,13 +458,14 @@ compile table acc fvar = do
     --
     liftIO $ Hash.insert table key (KernelEntry file (Left pid))
   --
-  return key
+  return (entry, key)
   where
+    cunit       = codegenAcc dev acc fvar
+    entry       = show cunit
     key         = hashlazy code
     code        = toLazyByteString
-                . layout . renderCompact . ppr
-                $ codegenAcc acc fvar
-
+                . layout . renderCompact $ ppr cunit
+    --
     layout (RText _ s next)     = fromString s  `mappend` layout next
     layout (RChar c   next)     = fromChar c    `mappend` layout next
     layout (RLine _   next)     = fromChar '\n' `mappend` layout next   -- no indenting

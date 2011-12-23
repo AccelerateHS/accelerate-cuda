@@ -35,7 +35,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 mkMap :: [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkMap tyOut tyIn0 fn = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "map" [cunit|
     extern "C"
     __global__ void
     map
@@ -77,7 +77,7 @@ mkMap tyOut tyIn0 fn = do
 mkZipWith :: Int -> [Type] -> [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkZipWith dim tyOut tyIn1 tyIn0 fn = do
   env   <- environment
-  return $ CUTranslSkel [cunit|
+  return $ CUTranslSkel "zipWith" [cunit|
     $edecl:(cdim "DimOut" dim)
     $edecl:(cdim "DimIn0" dim)
     $edecl:(cdim "DimIn1" dim)
