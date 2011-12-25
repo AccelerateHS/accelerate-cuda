@@ -19,7 +19,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   setters, getters, shared,
 
   -- Mutable operations
-  (.=.)
+  (.=.), locals
 
 ) where
 
@@ -137,7 +137,12 @@ cptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noS
 (.=.) :: [Exp] -> [Exp] -> [Stm]
 (.=.) = zipWith (\v e -> [cstm| $exp:v = $exp:e; |])
 
-
+locals :: String -> [Type] -> ([Exp], [InitGroup])
+locals base elt = unzip (zipWith local elt names)
+  where
+    suf         = let n = length elt in map show [n-1,n-2..0]
+    names       = map (\n -> base ++ "_a" ++ n) suf
+    local t n   = ( cvar n, [cdecl| $ty:t $id:n; |] )
 
 
 {--

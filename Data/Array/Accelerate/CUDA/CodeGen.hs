@@ -98,16 +98,16 @@ codegenAcc dev acc vars =
           e'    <- codegenExp e
           f'    <- codegenFun f
           case accDim acc of
-            0   -> mkFoldAll dev (codegenAccType acc) f' (Just e')
+            0   -> mkFoldAll dev   (codegenAccType acc) f' (Just e')
+            r   -> mkFold    dev r (codegenAccType acc) f' (Just e')
 
         Fold1 f _         -> do
           f'    <- codegenFun f
           case accDim acc of
-            0   -> mkFoldAll dev (codegenAccType acc) f' Nothing
+            0   -> mkFoldAll dev   (codegenAccType acc) f' Nothing
+            r   -> mkFold    dev r (codegenAccType acc) f' Nothing
 
 {--
-        Fold f e a        -> mkFold  (codegenAccTypeDim a) (codegenExp e) (codegenFun f)
-        Fold1 f a         -> mkFold1 (codegenAccTypeDim a) (codegenFun f)
         FoldSeg f e a s   -> mkFoldSeg  (codegenAccTypeDim a) (codegenAccType s) (codegenExp e) (codegenFun f)
         Fold1Seg f a s    -> mkFold1Seg (codegenAccTypeDim a) (codegenAccType s) (codegenFun f)
         Scanl f e _       -> mkScanl  (codegenExpType e) (codegenExp e) (codegenFun f)
