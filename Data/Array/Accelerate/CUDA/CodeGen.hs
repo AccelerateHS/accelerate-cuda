@@ -94,46 +94,6 @@ codegenAcc dev acc vars =
           f'    <- codegenFun f
           mkGenerate (accDim acc) (codegenAccType acc) f'
 
-        Fold f e _        -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          case accDim acc of
-            0   -> mkFoldAll dev   (codegenAccType acc) f' (Just e')
-            r   -> mkFold    dev r (codegenAccType acc) f' (Just e')
-
-        Fold1 f _         -> do
-          f'    <- codegenFun f
-          case accDim acc of
-            0   -> mkFoldAll dev   (codegenAccType acc) f' Nothing
-            r   -> mkFold    dev r (codegenAccType acc) f' Nothing
-
-{--
-        FoldSeg f e a s   -> mkFoldSeg  (codegenAccTypeDim a) (codegenAccType s) (codegenExp e) (codegenFun f)
-        Fold1Seg f a s    -> mkFold1Seg (codegenAccTypeDim a) (codegenAccType s) (codegenFun f)
-        Scanl f e _       -> mkScanl  (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanr f e _       -> mkScanr  (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanl' f e _      -> mkScanl' (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanr' f e _      -> mkScanr' (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanl1 f a        -> mkScanl1 (codegenAccType a) (codegenFun f)
-        Scanr1 f a        -> mkScanr1 (codegenAccType a) (codegenFun f)
---}
-        Map f a           -> do
-          f'    <- codegenFun f
-          mkMap (codegenAccType acc) (codegenAccType a) f'
-
-        ZipWith f a b     -> do
-          f'    <- codegenFun f
-          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccType b) f'
-
-        Permute f _ g a   -> do
-          f'    <- codegenFun f
-          g'    <- codegenFun g
-          mkPermute dev (accDim acc) (accDim a) (codegenAccType a) (sizeOfAccTypes a) f' g'
-
-        Backpermute _ f a -> do
-          f'    <- codegenFun f
-          mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
-
         Replicate sl _ a  ->
           let dimSl  = accDim a
               dimOut = accDim acc
@@ -157,6 +117,53 @@ codegenAcc dev acc vars =
           in
           mkSlice dimSl dimCo dimIn0 (codegenAccType a) (reverse $ restrict sl (0,0))
 
+        Map f a           -> do
+          f'    <- codegenFun f
+          mkMap (codegenAccType acc) (codegenAccType a) f'
+
+        ZipWith f a b     -> do
+          f'    <- codegenFun f
+          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccType b) f'
+
+        Fold f e _        -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          case accDim acc of
+            0   -> mkFoldAll dev   (codegenAccType acc) f' (Just e')
+            r   -> mkFold    dev r (codegenAccType acc) f' (Just e')
+
+        Fold1 f _         -> do
+          f'    <- codegenFun f
+          case accDim acc of
+            0   -> mkFoldAll dev   (codegenAccType acc) f' Nothing
+            r   -> mkFold    dev r (codegenAccType acc) f' Nothing
+
+        FoldSeg f e _ _   -> do
+          f'    <- codegenFun f
+          e'    <- codegenExp e
+          mkFoldSeg dev (accDim acc) (codegenAccType acc) f' (Just e')
+
+        Fold1Seg f _ _    -> do
+          f'    <- codegenFun f
+          mkFoldSeg dev (accDim acc) (codegenAccType acc) f' Nothing
+
+{--
+        Scanl f e _       -> mkScanl  (codegenExpType e) (codegenExp e) (codegenFun f)
+        Scanr f e _       -> mkScanr  (codegenExpType e) (codegenExp e) (codegenFun f)
+        Scanl' f e _      -> mkScanl' (codegenExpType e) (codegenExp e) (codegenFun f)
+        Scanr' f e _      -> mkScanr' (codegenExpType e) (codegenExp e) (codegenFun f)
+        Scanl1 f a        -> mkScanl1 (codegenAccType a) (codegenFun f)
+        Scanr1 f a        -> mkScanr1 (codegenAccType a) (codegenFun f)
+--}
+
+        Permute f _ g a   -> do
+          f'    <- codegenFun f
+          g'    <- codegenFun g
+          mkPermute dev (accDim acc) (accDim a) (codegenAccType a) (sizeOfAccTypes a) f' g'
+
+        Backpermute _ f a -> do
+          f'    <- codegenFun f
+          mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
 {--
         Stencil f bndy a     ->
           let ty0   = codegenTupleTex (accType a)
