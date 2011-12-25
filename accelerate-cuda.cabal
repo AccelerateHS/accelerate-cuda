@@ -121,6 +121,7 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.Monad
                         Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
                         Data.Array.Accelerate.CUDA.CodeGen.Mapping
+                        Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Debug

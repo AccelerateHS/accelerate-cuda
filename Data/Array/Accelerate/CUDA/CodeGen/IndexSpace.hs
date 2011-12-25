@@ -144,7 +144,7 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
     -- write-combining mechanism will accept one transaction and all other
-    -- updates be lost.
+    -- updates will be lost.
     --
     -- If the hardware supports it, we can use atomicCAS (compare-and-swap) to
     -- work around this. This requires at least compute 1.1 for 32-bit values,

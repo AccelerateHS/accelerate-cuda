@@ -16,7 +16,10 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   typename, cptr, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  setters, getters
+  setters, getters, shared,
+
+  -- Mutable operations
+  (.=.)
 
 ) where
 
@@ -24,7 +27,7 @@ import Data.Loc
 import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
-import Text.PrettyPrint.Mainland                ( Pretty(..), Doc, stack, text, (<>) )
+import Text.PrettyPrint.Mainland                ( Pretty(..) )
 
 
 -- Compilation unit
@@ -39,13 +42,7 @@ instance Show CUTranslSkel where
   show (CUTranslSkel entry _) = entry
 
 instance Pretty CUTranslSkel where
-  ppr (CUTranslSkel _ code) =
-    stack ( include "accelerate_cuda_extras.h"
-          : map ppr code
-          )
-
-include :: FilePath -> Doc
-include hdr = text "#include <" <> text hdr <> text ">"
+  ppr  (CUTranslSkel _ code)  = ppr code
 
 
 -- Expression and Declaration generation
@@ -84,19 +81,17 @@ cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:
 -- elements from the global input arrays at the given index.
 --
 getters :: Int -> [Type] -> ([Param], [Exp], String -> [InitGroup])
-getters s = getters' ("d_in" ++ show s) ('x':show s)
-
-getters' :: String -> String -> [Type] -> ([Param], [Exp], String -> [InitGroup])
-getters' arr x ts =
+getters base ts =
   ( zipWith param ts arrs
   , map cvar xs
   , \idx -> zipWith3 (get idx) ts arrs xs
   )
   where
     n           = length ts
+    b           = show base
     suffixes    = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
-    arrs        = map (arr ++) suffixes
-    xs          = map (x   ++) suffixes
+    arrs        = let k = "d_in" ++ b in map (k++) suffixes
+    xs          = let k = 'x':b       in map (k++) suffixes
     param t a   = [cparam| const $ty:(cptr t) $id:a |]
     get i t a v = [cdecl| const $ty:t $id:v = $id:a [$id:i]; |]
 
@@ -115,11 +110,34 @@ setters ts =
     param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 
+-- shared memory declarations
+--
+shared :: Int -> Exp -> [Type] -> ([Exp], [InitGroup])
+shared base ix elt =
+  ( map cvar vars
+  , sdata' : zipWith3 sdata (tail elt) (tail vars) vars)
+  where
+    n           = length elt
+    vars        = let k = ('s':shows base "_a") in map ((k++) . show) [n-1,n-2..0]
+    sdata'      = [cdecl| extern volatile __shared__ $ty:(head elt) $id:(head vars) []; |]
+    sdata t v p = [cdecl| volatile $ty:(cptr t) $id:v = ( $ty:(cptr t) ) & $id:p [ $exp:ix ]; |]
+
 -- Turn a plain type into a ptr type
 --
 cptr :: Type -> Type
 cptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noSrcLoc) lb
        | otherwise                                        = t
+
+
+-- Mutable operations
+-- ------------------
+
+-- Variable assignment
+--
+(.=.) :: [Exp] -> [Exp] -> [Stm]
+(.=.) = zipWith (\v e -> [cstm| $exp:v = $exp:e; |])
+
+
 
 
 {--

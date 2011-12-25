@@ -41,9 +41,10 @@ import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
+import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 
 #include "accelerate.h"
 
@@ -67,9 +68,10 @@ codegenAcc :: forall aenv a.
            -> CUTranslSkel
 codegenAcc dev acc vars =
   let fvars                     = concatMap (liftAcc acc) vars
+      extras                    = [cedecl| $esc:("#include <accelerate_cuda_extras.h>") |]
       CUTranslSkel entry code   = runCGM $ codegen acc
   in
-  CUTranslSkel entry (fvars ++ code)
+  CUTranslSkel entry (extras : fvars ++ code)
   where
     codegen :: OpenAcc aenv a -> CGM CUTranslSkel
     codegen (OpenAcc pacc) =
@@ -91,6 +93,17 @@ codegenAcc dev acc vars =
         Generate _ f      -> do
           f'    <- codegenFun f
           mkGenerate (accDim acc) (codegenAccType acc) f'
+
+        Fold f e _        -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          case accDim acc of
+            0   -> mkFoldAll dev (codegenAccType acc) f' (Just e')
+
+        Fold1 f _         -> do
+          f'    <- codegenFun f
+          case accDim acc of
+            0   -> mkFoldAll dev (codegenAccType acc) f' Nothing
 
 {--
         Fold f e a        -> mkFold  (codegenAccTypeDim a) (codegenExp e) (codegenFun f)
