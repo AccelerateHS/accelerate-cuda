@@ -60,9 +60,9 @@ mkFoldAll dev elt combine mseed = do
         const int tid      = threadIdx.x;
         const int gridSize = blockDim.x * gridDim.x;
               int i        = blockIdx.x * blockDim.x + tid;
-        $decls:decl_smem
-        $decls:decl_x0
-        $decls:decl_x1
+        $decls:smem
+        $decls:decl0
+        $decls:decl1
         $decls:env
 
         /*
@@ -105,15 +105,15 @@ mkFoldAll dev elt combine mseed = do
     }
   |]
   where
-    name                = maybe "fold1All" (const "foldAll") mseed
-    (argOut, _, setOut) = setters elt
-    (argIn0, _, _)      = getters 0 elt
-    (svar, decl_smem)   = shared 0 [cexp| blockDim.x |] elt
-    (x0, decl_x0)       = locals "x0" elt
-    (x1, decl_x1)       = locals "x1" elt
+    name                        = maybe "fold1All" (const "foldAll") mseed
+    (argOut, _,         setOut) = setters elt
+    (argIn0, x0, decl0, _)      = getters 0 elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
     --
-    sdata ix            = map (\v -> [cexp| $exp:v [ $id:ix ] |]) svar
-    getIn0 ix           = let k = length elt in map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
+    getIn0 ix =
+      let k = length elt
+      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
     --
     inclusive_fold      = setOut "blockIdx.x" x1
     exclusive_fold seed = [[cstm|
@@ -215,9 +215,9 @@ mkFold dev dim elt combine mseed = do
         const int thread_id    = blockDim.x * blockIdx.x + threadIdx.x;
         const int vector_id    = thread_id / warpSize;
         const int thread_lane  = threadIdx.x & (warpSize - 1);
-        $decls:decl_smem
-        $decls:decl_x1
-        $decls:decl_x0
+        $decls:smem
+        $decls:decl1
+        $decls:decl0
         $decls:env
 
         /*
@@ -286,15 +286,15 @@ mkFold dev dim elt combine mseed = do
     }
   |]
   where
-    name                = maybe "fold1" (const "fold") mseed
-    (argOut, _, setOut) = setters elt
-    (argIn0, _, getTmp) = getters 0 elt
-    (svar, decl_smem)   = shared 0 [cexp| blockDim.x |] elt
-    (x0,  decl_x0)      = locals "x0" elt
-    (x1,  decl_x1)      = locals "x1" elt
+    name                        = maybe "fold1" (const "fold") mseed
+    (argOut, _,         setOut) = setters elt
+    (argIn0, x0, decl0, getTmp) = getters 0 elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
     --
-    getIn0 ix           = let k = length elt in map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
-    sdata ix            = map (\v -> [cexp| $exp:v [ $id:ix ] |]) svar
+    getIn0 ix =
+      let k = length elt
+      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|
@@ -390,12 +390,12 @@ mkFoldSeg dev dim elt combine mseed = do
         const int num_segments      = indexHead(shOut);
         const int total_segments    = size(shOut);
 
-        $decls:decl_smem
-        $decls:decl_x1
-        $decls:decl_x0
+        $decls:smem
+        $decls:decl1
+        $decls:decl0
         $decls:env
 
-        volatile typename Ix s_ptrs[][2] = (typename Ix**) &s0_a0[blockDim.x];
+        volatile int s_ptrs[][2] = (typename Ix**) &s0_a0[blockDim.x];
 
         for (int seg = vector_id; seg < total_segments; seg += num_vectors)
         {
@@ -408,7 +408,7 @@ mkFoldSeg dev dim elt combine mseed = do
              * separate transactions.
              */
             if (thread_lane < 2)
-                s_ptrs[vector_lane][thread_lane] = d_offset[s + thread_lane];
+                s_ptrs[vector_lane][thread_lane] = (int) d_offset[s + thread_lane];
 
             const int   start        = base + s_ptrs[vector_lane][0];
             const int   end          = base + s_ptrs[vector_lane][1];
@@ -476,15 +476,15 @@ mkFoldSeg dev dim elt combine mseed = do
     }
   |]
   where
-    name                = maybe "fold1Seg" (const "foldSeg") mseed
-    (argOut, _, setOut) = setters elt
-    (argIn0, _, getTmp) = getters 0 elt
-    (svar, decl_smem)   = shared 0 [cexp| blockDim.x |] elt
-    (x0,  decl_x0)      = locals "x0" elt
-    (x1,  decl_x1)      = locals "x1" elt
+    name                        = maybe "fold1Seg" (const "foldSeg") mseed
+    (argOut, _,         setOut) = setters elt
+    (argIn0, x0, decl0, getTmp) = getters 0 elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
     --
-    sdata ix            = map (\v -> [cexp| $exp:v [ $id:ix ] |]) svar
-    getIn0 ix           = let k = length elt in map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
+    getIn0 ix =
+      let k = length elt
+      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|

@@ -59,8 +59,8 @@ mkMap tyOut tyIn0 fn = do
     }
   |]
   where
-    (argOut, _, setOut) = setters tyOut
-    (argIn0, _, getIn0) = getters 0 tyIn0
+    (argOut, _,    setOut)      = setters tyOut
+    (argIn0, _, _, getIn0)      = getters 0 tyIn0
 
 
 -- Apply the given binary function element-wise to the two arrays. The extent of
@@ -112,7 +112,7 @@ mkZipWith dim tyOut tyIn1 tyIn0 fn = do
     }
   |]
   where
-    (argOut, _, setOut) = setters tyOut
-    (argIn0, _, getIn0) = getters 0 tyIn0
-    (argIn1, _, getIn1) = getters 1 tyIn1
+    (argOut, _,    setOut)      = setters tyOut
+    (argIn0, _, _, getIn0)      = getters 0 tyIn0
+    (argIn1, _, _, getIn1)      = getters 1 tyIn1
 

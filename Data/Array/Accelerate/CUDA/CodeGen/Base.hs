@@ -16,7 +16,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   typename, cptr, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  setters, getters, shared,
+  setters, setters', getters, getters', shared,
 
   -- Mutable operations
   (.=.), locals
@@ -77,45 +77,66 @@ cshape :: String -> Int -> Definition
 cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]
 
 
--- Generate a list of function parameters and variable initialisers that read
--- elements from the global input arrays at the given index.
+-- Generate a set of variable bindings and declarations to read from an input
+-- array (as function parameter)
 --
-getters :: Int -> [Type] -> ([Param], [Exp], String -> [InitGroup])
-getters base ts =
+getters :: Int                          -- input array number (c.f. de Bruijn index)
+        -> [Type]                       -- the element type
+        -> ( [Param]                    -- function parameters
+           , [Exp]                      -- variable names
+           , [InitGroup]                -- non-const variable declarations
+           , String -> [InitGroup])     -- const declaration and initialisation with data at index
+getters base = let b = show base
+               in  getters' ("d_in"++b) ('x':b)
+
+getters' :: String -> String -> [Type] -> ([Param], [Exp], [InitGroup], String -> [InitGroup])
+getters' arr_ x_ ts =
   ( zipWith param ts arrs
   , map cvar xs
+  , zipWith decls ts xs
   , \idx -> zipWith3 (get idx) ts arrs xs
   )
   where
     n           = length ts
-    b           = show base
     suffixes    = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
-    arrs        = let k = "d_in" ++ b in map (k++) suffixes
-    xs          = let k = 'x':b       in map (k++) suffixes
+    arrs        = map (arr_++) suffixes
+    xs          = map (x_  ++) suffixes
     param t a   = [cparam| const $ty:(cptr t) $id:a |]
+    decls t v   = [cdecl| $ty:t $id:v; |]
     get i t a v = [cdecl| const $ty:t $id:v = $id:a [$id:i]; |]
 
 
 -- Generate function parameters and corresponding variable names for the
 -- components of the given output array.
 --
-setters :: [Type] -> ([Param], [Exp], String -> [Exp] -> [Stm])
-setters ts =
+setters :: [Type]                       -- element type
+        -> ( [Param]                    -- function parameter declarations
+           , [Exp]                      -- variable name
+           , String -> [Exp] -> [Stm])  -- store a value to the given index
+setters = setters' "d_out_a"
+
+setters' :: String -> [Type] -> ([Param], [Exp], String -> [Exp] -> [Stm])
+setters' base ts =
   ( zipWith param ts arrs
   , map cvar arrs
   , \ix e -> zipWith (set ix) arrs e )
   where
     n           = length ts
-    arrs        = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
+    arrs        = map (\x -> base ++ show x) [n-1, n-2 .. 0]
     param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 
--- shared memory declarations
+-- shared memory declaration: this can only be issued once since all __shared__
+-- declarations begin at the same base pointer and must be offset manually
 --
-shared :: Int -> Exp -> [Type] -> ([Exp], [InitGroup])
+shared :: Int                           -- shared memory shadowing which input array
+       -> Exp                           -- how much shared memory per type
+       -> [Type]                        -- element types
+       -> ( [InitGroup]                 -- shared memory declaration
+          , String -> [Exp] )           -- index shared memory
 shared base ix elt =
-  ( map cvar vars
-  , sdata' : zipWith3 sdata (tail elt) (tail vars) vars)
+  ( sdata' : zipWith3 sdata (tail elt) (tail vars) vars
+  , \i -> map (\v -> [cexp| $id:v [ $id:i ] |]) vars )
   where
     n           = length elt
     vars        = let k = ('s':shows base "_a") in map ((k++) . show) [n-1,n-2..0]

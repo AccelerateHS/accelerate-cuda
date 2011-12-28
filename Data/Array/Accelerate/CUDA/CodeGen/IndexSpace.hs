@@ -132,7 +132,7 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
   |]
   where
     (argOut, arrOut, setOut)    = setters types
-    (argIn0, _,      getIn0)    = getters 0 types
+    (argIn0, _, _,   getIn0)    = getters 0 types
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
     dst                         = project dimOut "dst" index
     sm                          = computeCapability dev
@@ -223,8 +223,8 @@ mkBackpermute dimOut dimIn0 types index = do
     }
   |]
   where
-    (argOut, _,  setOut)        = setters types
-    (argIn0, x0, getIn0)        = getters 0 types
+    (argOut, _,     setOut)     = setters types
+    (argIn0, x0, _, getIn0)     = getters 0 types
     dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
     src                         = project dimIn0 "src" index
 
@@ -278,8 +278,8 @@ mkSlice dimSl dimCo dimIn0 types slix = do
     }
   |]
   where
-    (argOut, _,  setOut)        = setters types
-    (argIn0, x0, getIn0)        = getters 0 types
+    (argOut, _,     setOut)     = setters types
+    (argIn0, x0, _, getIn0)     = getters 0 types
     src                         = project dimIn0 "sl" slix
 
 
@@ -329,8 +329,8 @@ mkReplicate dimSl dimOut types slix = do
     }
   |]
   where
-    (argOut, _,  setOut)        = setters types
-    (argIn0, x0, getIn0)        = getters 0 types
+    (argOut, _,     setOut)     = setters types
+    (argIn0, x0, _, getIn0)     = getters 0 types
     src                         = project dimSl "src" slix
 
 
