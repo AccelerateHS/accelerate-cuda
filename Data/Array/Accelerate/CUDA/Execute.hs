@@ -335,8 +335,11 @@ foldOp kernel bindings acc aenv (Array sh0 in0)
   -- Reduction over the innermost dimension of an array (single pass operation)
   --
   | otherwise    = do
-      res@(Array sh out) <- allocateArray $ toElt (fst sh0)
-      execute kernel bindings acc aenv (size (fst sh0)) (((((),out),in0),convertIx sh),convertIx sh0)
+      let (sh, sz)      = sh0
+          interval_size = sz
+          num_intervals = size sh
+      res@(Array _ out) <- allocateArray $ toElt sh
+      execute kernel bindings acc aenv num_intervals (((((),out),in0),interval_size),num_intervals)
       return res
 
 foldSegOp :: Shape dim

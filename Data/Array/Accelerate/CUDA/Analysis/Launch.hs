@@ -17,7 +17,6 @@ import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Sugar                (Array(..), EltRepr)
 import Data.Array.Accelerate.Analysis.Type              hiding (accType, expType)
-import Data.Array.Accelerate.Analysis.Shape             hiding (accDim)
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
@@ -35,8 +34,8 @@ import qualified Foreign.Storable                       as F
 
 -- |Reify dimensionality of array computations
 --
-accDim :: ExecOpenAcc aenv (Array sh e) -> Int
-accDim (ExecAcc _ _ _ acc) = preAccDim accDim acc
+--accDim :: ExecOpenAcc aenv (Array sh e) -> Int
+--accDim (ExecAcc _ _ _ acc) = preAccDim accDim acc
 
 -- |Reify type of arrays and scalar expressions
 --
@@ -90,8 +89,6 @@ blockSize p _            r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) 
 gridSize :: CUDA.DeviceProperties -> PreOpenAcc ExecOpenAcc aenv a -> Int -> Int -> Int
 gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
 gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
-gridSize p acc@(Fold _ _ a)      size cta = if accDim a == 1 then split acc size cta else split acc (size * CUDA.warpSize p) cta
-gridSize p acc@(Fold1 _ a)       size cta = if accDim a == 1 then split acc size cta else split acc (size * CUDA.warpSize p) cta
 gridSize _ acc                   size cta = split acc size cta
 
 split :: PreOpenAcc ExecOpenAcc aenv a -> Int -> Int -> Int

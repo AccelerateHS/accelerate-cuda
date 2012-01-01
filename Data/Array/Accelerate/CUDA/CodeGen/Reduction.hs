@@ -11,7 +11,11 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Reduction (
 
-  mkFold, mkFoldAll, mkFoldSeg
+  -- skeletons
+  mkFold, mkFoldAll, mkFoldSeg,
+
+  -- closets
+  reduceWarp, reduceBlock
 
 ) where
 
@@ -57,9 +61,8 @@ mkFoldAll dev elt combine mseed = do
         const typename Ix len
     )
     {
-        const int tid      = threadIdx.x;
         const int gridSize = blockDim.x * gridDim.x;
-              int i        = blockIdx.x * blockDim.x + tid;
+              int i        = blockIdx.x * blockDim.x + threadIdx.x;
         $decls:smem
         $decls:decl0
         $decls:decl1
@@ -87,18 +90,17 @@ mkFoldAll dev elt combine mseed = do
          * Each thread puts its local sum into shared memory, then threads
          * cooperatively reduce the shared array to a single value.
          */
-        $stms:(sdata "tid" .=. x1)
+        $stms:(sdata "threadIdx.x" .=. x1)
         __syncthreads();
 
         i = min((int) len, blockDim.x);
-        $stms:reduceBlock
-        $stm:reduceWarp
+        $stms:(reduceBlock dev elt "i" sdata combine)
 
         /*
          * Write the results of this block back to global memory. If we are the last
          * phase of a recursive multi-block reduction, include the seed element.
          */
-        if (tid == 0)
+        if (threadIdx.x == 0)
         {
             $stms:(maybe inclusive_fold exclusive_fold mseed)
         }
@@ -128,52 +130,6 @@ mkFoldAll dev elt combine mseed = do
           $stms:(setOut "blockIdx.x" seed)
       }
     |]]
-    --
-    -- All threads cooperatively reduce this block's data in shared memory
-    --
-    reduceBlock = map (reduce . ((2::Int)^)) [u,u-1..v+1]
-      where
-        u               = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
-        v               = floor (logBase 2 (fromIntegral $ warpSize dev           :: Double)) :: Int
-        reduce n        = [cstm|
-          if ( i > $int:n ) {
-              if ( tid < $int:n && tid + $int:n < i ) {
-                  $stms:(x0 .=. sdata ("tid + " ++ show n))
-                  $stms:(x1 .=. combine)
-                  $stms:(sdata "tid" .=. x1)
-              }
-              __syncthreads();
-          }
-        |]
-    --
-    -- Threads of a warp run in lockstep (SIMD) so once we reduce to a single
-    -- warp's worth of data we no longer need to __syncthreads().
-    --
-    reduceWarp = [cstm|
-      if ( tid < $int:(warpSize dev) ) {
-          $stms:(map (reduce . ((2::Int)^)) [v,v-1..0])
-      }
-    |]
-      where
-        v               = floor (logBase 2 (fromIntegral $ warpSize dev :: Double)) :: Int
-        reduce 1        = [cstm|
-          if ( i > 1 ) {
-              if ( tid + 1 < i ) {
-                  $stms:(x0 .=. sdata "tid + 1")
-                  $stms:(x1 .=. combine)
-              }
-          }
-        |]
-        reduce n        = [cstm|
-          if ( i > $int:n ) {
-              if ( tid + $int:n < i ) {
-                  $stms:(x0 .=. sdata ("tid + " ++ show n))
-                  $stms:(x1 .=. combine)
-                  $stms:(sdata "tid" .=. x1)
-              }
-          }
-        |]
-
 
 
 -- Reduction of the innermost dimension of an array of arbitrary rank. The first
@@ -191,59 +147,58 @@ mkFoldAll dev elt combine mseed = do
 --       -> Acc (Array (ix :. Int) a)
 --       -> Acc (Array ix a)
 --
-mkFold :: DeviceProperties -> Int -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
-mkFold dev dim elt combine mseed = do
+mkFold :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
+mkFold dev elt combine mseed = do
   env   <- environment
   return $ CUTranslSkel name [cunit|
-    $edecl:(cdim "DimOut" dim)
-    $edecl:(cdim "DimIn0" (dim+1))
-
     extern "C"
     __global__ void
     $id:name
     (
         $params:argOut,
         $params:argIn0,
-        const typename DimOut shOut,
-        const typename DimIn0 shIn0
+        const typename Ix sz,
+        const typename Ix sh
     )
     {
-        const int num_elements = indexHead(shIn0);
-        const int num_segments = size(shOut);
+        /*
+         * Reassign these to real ints to save registers. For a standard
+         * multidimensional reduction, 'interval_size' corresponds to the size
+         * of the innermost dimension that we are folding over, and
+         * 'num_intervals' is the product of all remaining dimensions.
+         */
+        const int interval_size = sz;   // indexHead(shIn0)
+        const int num_intervals = sh;   // size(shOut)
 
-        const int num_vectors  = blockDim.x / warpSize * gridDim.x;
-        const int thread_id    = blockDim.x * blockIdx.x + threadIdx.x;
-        const int vector_id    = thread_id / warpSize;
-        const int thread_lane  = threadIdx.x & (warpSize - 1);
         $decls:smem
         $decls:decl1
         $decls:decl0
         $decls:env
 
         /*
-         * Each warp reduces elements along a projection through an innermost
-         * dimension to a single value
+         * Threads in a block cooperatively reduce all elements in an interval.
          */
-        for (int seg = vector_id; seg < num_segments; seg += num_vectors)
+        for (int seg = blockIdx.x; seg < num_intervals; seg += gridDim.x)
         {
-            const int start = seg   * num_elements;
-            const int end   = start + num_elements;
+            const int start = seg   * interval_size;
+            const int end   = start + interval_size;
 
-            if (num_elements > warpSize)
+            /*
+             * Ensure aligned access to global memory, and that each thread
+             * initialises its local sum
+             */
+            int i = start - (start & (warpSize - 1)) + threadIdx.x;
+
+            if (i == start || interval_size > blockDim.x)
             {
-                /*
-                 * Ensure aligned access to global memory, and that each thread
-                 * initialises its local sum.
-                 */
-                int i = start - (start & (warpSize - 1)) + thread_lane;
                 if (i >= start)
                 {
                     $stms:(x1 .=. getIn0 "i")
                 }
 
-                if (i + warpSize < end)
+                if (i + blockDim.x < end)
                 {
-                    $decls:(getTmp "i + warpSize")
+                    $decls:(getTmp "i + blockDim.x")
 
                     if (i >= start) {
                         $stms:(x1 .=. combine)
@@ -254,31 +209,33 @@ mkFold dev dim elt combine mseed = do
                 }
 
                 /*
-                 * Now, iterate along the inner-most dimension collecting a local sum
+                 * Now, iterate collecting a local sum
                  */
-                for (i += 2 * warpSize; i < end; i += warpSize)
+                for (i += 2 * blockDim.x; i < end; i += blockDim.x)
                 {
                     $stms:(x0 .=. getIn0 "i")
                     $stms:(x1 .=. combine)
                 }
             }
-            else if (start + thread_lane < end)
+            else
             {
-                $stms:(x1 .=. getIn0 "start + thread_lane")
+                $stms:(x1 .=. getIn0 "start + threadIdx.x")
             }
 
             /*
-             * Each thread puts its local sum into shared memory, then cooperatively
-             * reduce the shared array to a single value.
+             * Each thread puts its local sum into shared memory, and
+             * cooperatively reduces this to a single value
              */
-            const int n = min(num_elements, warpSize);
             $stms:(sdata "threadIdx.x" .=. x1)
-            $stms:reduceWarp
+            __syncthreads();
+
+            const int n = min(interval_size, blockDim.x);
+            $stms:(reduceBlock dev elt "n" sdata combine)
 
             /*
              * Finally, the first thread writes the result for this segment
              */
-            if (thread_lane == 0)
+            if (threadIdx.x == 0)
             {
                 $stms:(maybe inclusive_fold exclusive_fold mseed)
             }
@@ -286,7 +243,7 @@ mkFold dev dim elt combine mseed = do
     }
   |]
   where
-    name                        = maybe "fold1" (const "fold") mseed
+    name                = maybe "fold1" (const "fold") mseed
     (argOut, _,         setOut) = setters elt
     (argIn0, x0, decl0, getTmp) = getters 0 elt
     (x1,   decl1)               = locals "x1" elt
@@ -298,31 +255,13 @@ mkFold dev dim elt combine mseed = do
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|
-      if (num_elements > 0) {
+      if (interval_size > 0) {
           $stms:(x0 .=. seed)
           $stms:(x1 .=. combine)
       } else {
           $stms:(x1 .=. seed)
       }|] :
       setOut "seg" x1
-    --
-    reduceWarp          = map (reduce . ((2::Int)^)) [v,v-1..0]
-      where
-        v               = floor (logBase 2 (fromIntegral $ warpSize dev :: Double)) :: Int
-        tid             = "threadIdx.x"
-        reduce 1        = [cstm|
-          if (n > 1 && thread_lane + 1 < n) {
-              $stms:(x0 .=. sdata "threadIdx.x + 1")
-              $stms:(x1 .=. combine)
-          }
-        |]
-        reduce i        = [cstm|
-          if (n > $int:i && thread_lane + $int:i < n) {
-              $stms:(x0 .=. sdata (tid ++ "+" ++ show i))
-              $stms:(x1 .=. combine)
-              $stms:(sdata tid .=. x1)
-          }
-        |]
 
 
 
@@ -463,7 +402,7 @@ mkFoldSeg dev dim elt combine mseed = do
              */
             const int n = min(num_elements, warpSize);
             $stms:(sdata "threadIdx.x" .=. x1)
-            $stms:reduceWarp
+            $stms:(reduceWarp dev elt "n" "thread_lane" sdata combine)
 
             /*
              * Finally, the first thread writes the result for this segment
@@ -495,22 +434,77 @@ mkFoldSeg dev dim elt combine mseed = do
           $stms:(x1 .=. seed)
       }|] :
       setOut "seg" x1
+
+
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+-- Threads of a warp run in lockstep, so there is no need to synchronise. We
+-- hijack the standard local variable sets (x0 and x1) for the combination
+-- function. The initial values must already be stored in shared memory. The
+-- final result is stored in x1.
+--
+reduceWarp :: DeviceProperties
+           -> [Type]
+           -> String                    -- number of elements
+           -> String                    -- thread identifier: usually the lane or thread id
+           -> (String -> [Exp])         -- index shared memory
+           -> [Exp]                     -- binary associative combination function
+           -> [Stm]
+reduceWarp dev elt n tid sdata combine = map (reduce . pow2) [v,v-1..0]
+  where
+    v           = floor (logBase 2 (fromIntegral $ warpSize dev :: Double)) :: Int
+    pow2 x      = (2::Int) ^ x
+    (x0, _)     = locals "x0" elt
+    (x1, _)     = locals "x1" elt
     --
-    reduceWarp          = map (reduce . ((2::Int)^)) [v,v-1..0]
-      where
-        v               = floor (logBase 2 (fromIntegral $ warpSize dev :: Double)) :: Int
-        tid             = "threadIdx.x"
-        reduce 1        = [cstm|
-          if (n > 1 && thread_lane + 1 < n) {
-              $stms:(x0 .=. sdata "threadIdx.x + 1")
+    reduce 1    = [cstm|
+      if ( $id:n > 1 && $id:tid + 1 < $id:n ) {
+          $stms:(x0 .=. sdata "threadIdx.x + 1")
+          $stms:(x1 .=. combine)
+      }
+    |]
+    reduce i    = [cstm|
+      if ( $id:n > $int:i && $id:tid + $int:i < $id:n ) {
+          $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+          $stms:(x1 .=. combine)
+          $stms:(sdata "threadIdx.x" .=. x1)
+      }
+    |]
+
+
+-- All threads cooperatively reduce this block's data in shared memory. We
+-- hijack the standard local variables (x0 and x1) for the combination function.
+-- The initial values must already be stored in shared memory.
+--
+reduceBlock :: DeviceProperties
+            -> [Type]
+            -> String                   -- number of elements
+            -> (String -> [Exp])        -- index shared memory
+            -> [Exp]                    -- binary associative function
+            -> [Stm]
+reduceBlock dev elt n sdata combine = map (reduce . pow2) [u,u-1..v]
+  where
+    u           = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
+    v           = floor (logBase 2 (fromIntegral $ warpSize dev           :: Double)) :: Int
+    pow2 x      = (2::Int) ^ x
+    (x0, _)     = locals "x0" elt
+    (x1, _)     = locals "x1" elt
+    --
+    reduce 32   = [cstm|
+      if ( threadIdx.x < $int:(warpSize dev) ) {
+          $stms:(reduceWarp dev elt n "threadIdx.x" sdata combine)
+      }
+    |]
+    reduce i    = [cstm|
+      if ( $id:n > $int:i ) {
+          if ( threadIdx.x < $int:i && threadIdx.x + $int:i < $id:n ) {
+              $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
               $stms:(x1 .=. combine)
+              $stms:(sdata "threadIdx.x" .=. x1)
           }
-        |]
-        reduce i        = [cstm|
-          if (n > $int:i && thread_lane + $int:i < n) {
-              $stms:(x0 .=. sdata (tid ++ "+" ++ show i))
-              $stms:(x1 .=. combine)
-              $stms:(sdata tid .=. x1)
-          }
-        |]
+          __syncthreads();
+      }
+    |]
+
 
