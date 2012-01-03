@@ -85,15 +85,20 @@ getters :: Int                          -- input array number (c.f. de Bruijn in
         -> ( [Param]                    -- function parameters
            , [Exp]                      -- variable names
            , [InitGroup]                -- non-const variable declarations
+           , String -> [Exp]            -- index global input array
            , String -> [InitGroup])     -- const declaration and initialisation with data at index
 getters base = let b = show base
                in  getters' ("d_in"++b) ('x':b)
 
-getters' :: String -> String -> [Type] -> ([Param], [Exp], [InitGroup], String -> [InitGroup])
+getters' :: String
+         -> String
+         -> [Type]
+         -> ([Param], [Exp], [InitGroup], String -> [Exp], String -> [InitGroup])
 getters' arr_ x_ ts =
   ( zipWith param ts arrs
   , map cvar xs
   , zipWith decls ts xs
+  , \idx -> map (index idx) arrs
   , \idx -> zipWith3 (get idx) ts arrs xs
   )
   where
@@ -103,6 +108,7 @@ getters' arr_ x_ ts =
     xs          = map (x_  ++) suffixes
     param t a   = [cparam| const $ty:(cptr t) $id:a |]
     decls t v   = [cdecl| $ty:t $id:v; |]
+    index i a   = [cexp| $id:a [$id:i] |]
     get i t a v = [cdecl| const $ty:t $id:v = $id:a [$id:i]; |]
 
 
@@ -113,7 +119,7 @@ setters :: [Type]                       -- element type
         -> ( [Param]                    -- function parameter declarations
            , [Exp]                      -- variable name
            , String -> [Exp] -> [Stm])  -- store a value to the given index
-setters = setters' "d_out_a"
+setters = setters' "d_out"
 
 setters' :: String -> [Type] -> ([Param], [Exp], String -> [Exp] -> [Stm])
 setters' base ts =
@@ -122,7 +128,7 @@ setters' base ts =
   , \ix e -> zipWith (set ix) arrs e )
   where
     n           = length ts
-    arrs        = map (\x -> base ++ show x) [n-1, n-2 .. 0]
+    arrs        = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
     param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 

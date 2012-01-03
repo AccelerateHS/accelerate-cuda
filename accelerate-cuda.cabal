@@ -119,8 +119,9 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Base
                         Data.Array.Accelerate.CUDA.CodeGen.Monad
-                        Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
                         Data.Array.Accelerate.CUDA.CodeGen.Mapping
+                        Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
+                        Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
                         Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Compile

@@ -131,16 +131,15 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     }
   |]
   where
-    (argOut, arrOut, setOut)    = setters types
-    (argIn0, _, _,   getIn0)    = getters 0 types
+    (argOut, arrOut,   setOut)  = setters types
+    (argIn0, x0, _, _, getIn0)  = getters 0 types
+    (x0', _)                    = locals "_x0" types
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
     dst                         = project dimOut "dst" index
     sm                          = computeCapability dev
     unsafe                      = setOut "jx" combine
-    (temps,write)               =
-      let n = length types
-      in  unzip $ zipWith6 apply unsafe combine types arrOut sizeof [n-1,n-2..0]
-
+    (temps,write)               = unzip $ zipWith7 apply unsafe combine types arrOut x0 x0' sizeof
+    --
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
     -- write-combining mechanism will accept one transaction and all other
@@ -154,22 +153,20 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    apply set f t a s n
+    apply set f t a z z' s
       | Just (t',cast) <- reinterpret s =
-          let z         = "x1_a" ++ show n
-              z'        = '_':z
-              get       = [cexp| $exp:a [ $id:("jx") ] |]
+          let get       = [cexp| $exp:a [ $id:("jx") ] |]
           in
-          ( [cdecl| $ty:t' $id:z, $id:z' = $exp:cast ( $exp:get ); |]
-          , [cstm| do { $id:z  = $id:z';
-                        $id:z' = atomicCAS ( ( $ty:(cptr t') ) & $exp:a [ $id:("jx") ], $id:z, $exp:cast ( $exp:f ) );
-                      } while ( $id:z != $id:z' ); |]
+          ( [cdecl| $ty:t' $id:(show z), $id:(show z') = $exp:cast ( $exp:get ); |]
+          , [cstm| do { $exp:z  = $exp:z';
+                        $exp:z' = atomicCAS ( ( $ty:(cptr t') ) & $exp:a [ $id:("jx") ], $exp:z, $exp:cast ( $exp:f ) );
+                      } while ( $exp:z != $exp:z' ); |]
           )
       | otherwise                       =
-          ( [cdecl| const $ty:t $id:("x1_a" ++ show n) = $exp:a [ $id:("jx") ]; |]
+          ( [cdecl| const $ty:t $id:(show z) = $exp:a [ $id:("jx") ]; |]
           , set
           )
-
+    --
     reinterpret :: Int -> Maybe (Type, Exp)
     reinterpret 4 | sm >= 1.1   = Just (typename "uint32_t", [cexp| $id:("reinterpret32") |])
     reinterpret 8 | sm >= 1.2   = Just (typename "uint64_t", [cexp| $id:("reinterpret64") |])
@@ -223,8 +220,8 @@ mkBackpermute dimOut dimIn0 types index = do
     }
   |]
   where
-    (argOut, _,     setOut)     = setters types
-    (argIn0, x0, _, getIn0)     = getters 0 types
+    (argOut, _,        setOut)  = setters types
+    (argIn0, x0, _, _, getIn0)  = getters 0 types
     dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
     src                         = project dimIn0 "src" index
 
@@ -278,8 +275,8 @@ mkSlice dimSl dimCo dimIn0 types slix = do
     }
   |]
   where
-    (argOut, _,     setOut)     = setters types
-    (argIn0, x0, _, getIn0)     = getters 0 types
+    (argOut, _,        setOut)  = setters types
+    (argIn0, x0, _, _, getIn0)  = getters 0 types
     src                         = project dimIn0 "sl" slix
 
 
@@ -329,8 +326,8 @@ mkReplicate dimSl dimOut types slix = do
     }
   |]
   where
-    (argOut, _,     setOut)     = setters types
-    (argIn0, x0, _, getIn0)     = getters 0 types
+    (argOut, _,        setOut)  = setters types
+    (argIn0, x0, _, _, getIn0)  = getters 0 types
     src                         = project dimSl "src" slix
 
 

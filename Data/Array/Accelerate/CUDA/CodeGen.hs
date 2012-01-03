@@ -41,9 +41,10 @@ import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
-import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Mapping
+import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
+import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 
 #include "accelerate.h"
@@ -147,14 +148,33 @@ codegenAcc dev acc vars =
           f'    <- codegenFun f
           mkFoldSeg dev (accDim acc) (codegenAccType acc) f' Nothing
 
-{--
-        Scanl f e _       -> mkScanl  (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanr f e _       -> mkScanr  (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanl' f e _      -> mkScanl' (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanr' f e _      -> mkScanr' (codegenExpType e) (codegenExp e) (codegenFun f)
-        Scanl1 f a        -> mkScanl1 (codegenAccType a) (codegenFun f)
-        Scanr1 f a        -> mkScanr1 (codegenAccType a) (codegenFun f)
---}
+        Scanl f e _       -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          mkScanl dev (codegenExpType e) f' (Just e')
+
+        Scanl' f e _      -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          mkScanl dev (codegenExpType e) f' (Just e')
+
+        Scanl1 f _        -> do
+          f'    <- codegenFun f
+          mkScanl dev (codegenAccType acc) f' Nothing
+
+        Scanr f e _       -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          mkScanr dev (codegenExpType e) f' (Just e')
+
+        Scanr' f e _      -> do
+          e'    <- codegenExp e
+          f'    <- codegenFun f
+          mkScanr dev (codegenExpType e) f' (Just e')
+
+        Scanr1 f _        -> do
+          f'    <- codegenFun f
+          mkScanr dev (codegenAccType acc) f' Nothing
 
         Permute f _ g a   -> do
           f'    <- codegenFun f

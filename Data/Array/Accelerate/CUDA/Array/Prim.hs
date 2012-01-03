@@ -14,7 +14,8 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   DevicePtrs, HostPtrs,
 
   mallocArray, useArray, useArrayAsync, indexArray, copyArray, peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, marshalArrayData, marshalTextureData, devicePtrsOfArrayData
+  pokeArray, pokeArrayAsync, marshalDevicePtrs, marshalArrayData, marshalTextureData,
+  devicePtrsOfArrayData, advancePtrsOfArrayData
 
 ) where
 
@@ -286,6 +287,16 @@ pokeArrayAsync !mt !ad !n !st =
     CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
 
+-- Marshal device pointers to arguments that can be passed to kernel invocation
+--
+marshalDevicePtrs
+    :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b)
+    => ArrayData e
+    -> DevicePtrs e
+    -> CUDA.FunParam
+marshalDevicePtrs !_ !ptr = CUDA.VArg ptr
+
+
 -- Wrap a device pointer corresponding corresponding to a host-side array into
 -- arguments that can be passed to a kernel upon invocation
 --
@@ -294,7 +305,7 @@ marshalArrayData
     => MemoryTable
     -> ArrayData e
     -> IO CUDA.FunParam
-marshalArrayData !mt !ad = CUDA.VArg <$> devicePtrsOfArrayData mt ad
+marshalArrayData !mt !ad = marshalDevicePtrs ad <$> devicePtrsOfArrayData mt ad
 
 
 -- Bind device memory to the given texture reference, setting appropriate type
@@ -327,4 +338,15 @@ devicePtrsOfArrayData !mt !ad = do
     Nothing -> do
       sn <- makeStableName ad
       INTERNAL_ERROR(error) "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
+
+
+-- Advance device pointers by a given number of elements
+--
+advancePtrsOfArrayData
+    :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Storable b)
+    => Int
+    -> ArrayData e
+    -> DevicePtrs e
+    -> DevicePtrs e
+advancePtrsOfArrayData !n !_ !ptr = CUDA.advanceDevPtr ptr n
 

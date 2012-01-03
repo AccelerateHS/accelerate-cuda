@@ -107,18 +107,14 @@ mkFoldAll dev elt combine mseed = do
     }
   |]
   where
-    name                        = maybe "fold1All" (const "foldAll") mseed
-    (argOut, _,         setOut) = setters elt
-    (argIn0, x0, decl0, _)      = getters 0 elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
+    name                                = maybe "fold1All" (const "foldAll") mseed
+    (argOut, _,                 setOut) = setters elt
+    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
     --
-    getIn0 ix =
-      let k = length elt
-      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
-    --
-    inclusive_fold      = setOut "blockIdx.x" x1
-    exclusive_fold seed = [[cstm|
+    inclusive_fold                      = setOut "blockIdx.x" x1
+    exclusive_fold seed                 = [[cstm|
       if (len > 0) {
           if (gridDim.x == 1) {
               $stms:(x0 .=. seed)
@@ -158,7 +154,8 @@ mkFold dev elt combine mseed = do
         $params:argOut,
         $params:argIn0,
         const typename Ix sz,
-        const typename Ix sh
+        const typename Ix sh,
+        const typename Ix ss
     )
     {
         /*
@@ -169,6 +166,7 @@ mkFold dev elt combine mseed = do
          */
         const int interval_size = sz;   // indexHead(shIn0)
         const int num_intervals = sh;   // size(shOut)
+        const int num_elements  = ss;   // size(shIn0)
 
         $decls:smem
         $decls:decl1
@@ -180,8 +178,8 @@ mkFold dev elt combine mseed = do
          */
         for (int seg = blockIdx.x; seg < num_intervals; seg += gridDim.x)
         {
-            const int start = seg   * interval_size;
-            const int end   = start + interval_size;
+            const int start = seg * interval_size;
+            const int end   = min(start + interval_size, num_elements);
 
             /*
              * Ensure aligned access to global memory, and that each thread
@@ -243,15 +241,11 @@ mkFold dev elt combine mseed = do
     }
   |]
   where
-    name                = maybe "fold1" (const "fold") mseed
-    (argOut, _,         setOut) = setters elt
-    (argIn0, x0, decl0, getTmp) = getters 0 elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
-    --
-    getIn0 ix =
-      let k = length elt
-      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
+    name                                = maybe "fold1" (const "fold") mseed
+    (argOut, _,                 setOut) = setters elt
+    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|
@@ -283,15 +277,8 @@ mkFold dev elt combine mseed = do
 --          -> Acc (Array (ix :. Int) a)
 --
 -- Each segment of the vector is assigned to a warp, which computes the
--- reduction of the i-th section, in parallel.
---
--- This division of work implies that the data arrays are accessed in a
--- contiguous manner (if not necessarily aligned). For devices of compute
--- capability 1.2 and later, these accesses will be coalesced. A single
--- transaction will be issued if all of the addresses for a half-warp happen to
--- fall within a single 128-byte boundary. Extra transactions will be made to
--- cover any spill. The same applies for 2.x devices, except that all widths are
--- doubled since transactions occur on a per-warp basis.
+-- reduction of the i-th section, in parallel. Care is taken to ensure that data
+-- array access is aligned to a warp boundary.
 --
 -- Since an entire 32-thread warp is assigned for each segment, many threads
 -- will remain idle when the segments are very small. This code relies on
@@ -334,7 +321,7 @@ mkFoldSeg dev dim elt combine mseed = do
         $decls:decl0
         $decls:env
 
-        volatile int s_ptrs[][2] = (typename Ix**) &s0_a0[blockDim.x];
+        volatile int s_ptrs[][2] = (int**) &s0_a0[blockDim.x];
 
         for (int seg = vector_id; seg < total_segments; seg += num_vectors)
         {
@@ -415,15 +402,11 @@ mkFoldSeg dev dim elt combine mseed = do
     }
   |]
   where
-    name                        = maybe "fold1Seg" (const "foldSeg") mseed
-    (argOut, _,         setOut) = setters elt
-    (argIn0, x0, decl0, getTmp) = getters 0 elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 [cexp| blockDim.x |] elt
-    --
-    getIn0 ix =
-      let k = length elt
-      in  map (\s -> [cexp| $id:("d_in0_a"++s) [ $id:ix ] |]) (map show [k-1,k-2..0])
+    name                                = maybe "fold1Seg" (const "foldSeg") mseed
+    (argOut, _,                 setOut) = setters elt
+    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|

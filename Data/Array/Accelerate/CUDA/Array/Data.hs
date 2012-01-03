@@ -16,8 +16,8 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   useArray,  useArrayAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
-  marshalArrayData, marshalTextureData,
-  devicePtrsOfArrayData,
+  marshalArrayData, marshalTextureData, marshalDevicePtrs,
+  devicePtrsOfArrayData, advancePtrsOfArrayData,
 
   -- * Garbage collection
   cleanupArrayData
@@ -223,6 +223,22 @@ pokeArrayAsync (Array sh adata) ms = doPoke =<< getM memoryTable
         mkPrimDispatch(pokePrim,Prim.pokeArrayAsync)
 
 
+-- |Wrap device pointers into arguments that can be passed to a kernel
+-- invocation
+--
+marshalDevicePtrs :: ArrayElt e => ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
+marshalDevicePtrs adata = marshalR arrayElt adata
+  where
+    marshalR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
+    marshalR ArrayEltRunit             _  _       = []
+    marshalR (ArrayEltRpair aeR1 aeR2) ad (p1,p2) = marshalR aeR1 (fst ad) p1 ++
+                                                    marshalR aeR2 (snd ad) p2
+    marshalR aer                       ad ptr     = [marshalPrim aer ad ptr]
+    --
+    marshalPrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> CUDA.FunParam
+    mkPrimDispatch(marshalPrim,Prim.marshalDevicePtrs)
+
+
 -- |Wrap the device pointers corresponding to a host-side array into arguments
 -- that can be passed to a kernel upon invocation.
 --
@@ -279,4 +295,20 @@ devicePtrsOfArrayData adata = ptrs =<< gets memoryTable
         --
         ptrsPrim :: ArrayEltR e -> MemoryTable -> ArrayData e -> IO (Prim.DevicePtrs e)
         mkPrimDispatch(ptrsPrim,Prim.devicePtrsOfArrayData)
+
+
+-- |Advance a set of device pointers by the given number of elements each
+--
+advancePtrsOfArrayData :: ArrayElt e => ArrayData e -> Int -> Prim.DevicePtrs e -> Prim.DevicePtrs e
+advancePtrsOfArrayData adata n = advanceR arrayElt adata
+  where
+    advanceR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
+    advanceR ArrayEltRunit             _  _       = ()
+    advanceR (ArrayEltRpair aeR1 aeR2) ad (p1,p2) = (advanceR aeR1 (fst ad) p1
+                                                    ,advanceR aeR2 (snd ad) p2)
+    advanceR aer                       ad ptr     = advancePrim aer ad ptr
+    --
+    advancePrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
+    mkPrimDispatch(advancePrim,Prim.advancePtrsOfArrayData n)
+
 

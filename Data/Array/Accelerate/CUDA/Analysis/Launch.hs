@@ -27,7 +27,6 @@ import Control.Monad.IO.Class
 
 import qualified Foreign.CUDA.Analysis                  as CUDA
 import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Foreign.Storable                       as F
 
 #include "accelerate.h"
 
@@ -35,12 +34,12 @@ import qualified Foreign.Storable                       as F
 -- |Reify dimensionality of array computations
 --
 --accDim :: ExecOpenAcc aenv (Array sh e) -> Int
---accDim (ExecAcc _ _ _ acc) = preAccDim accDim acc
+--accDim (ExecAcc _ _ acc) = preAccDim accDim acc
 
 -- |Reify type of arrays and scalar expressions
 --
 accType :: ExecOpenAcc aenv (Array sh e) -> TupleType (EltRepr e)
-accType (ExecAcc _ _ _ acc) = preAccType accType acc
+accType (ExecAcc _ _ acc) = preAccType accType acc
 
 expType :: PreOpenExp ExecOpenAcc aenv env t -> TupleType (EltRepr t)
 expType = preExpType accType
@@ -135,7 +134,7 @@ sharedMem _ (Scanr' _ x _)       blockDim = sizeOf (expType x) * blockDim
 sharedMem _ (Scanl1 _ a)         blockDim = sizeOf (accType a) * blockDim
 sharedMem _ (Scanr1 _ a)         blockDim = sizeOf (accType a) * blockDim
 sharedMem p (FoldSeg _ _ a _)    blockDim =
-  (blockDim `div` CUDA.warpSize p) * 4 * F.sizeOf (undefined::Int) + blockDim * sizeOf (accType a)
+  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)
 sharedMem p (Fold1Seg _ a _) blockDim =
-  (blockDim `div` CUDA.warpSize p) * 4 * F.sizeOf (undefined::Int) + blockDim * sizeOf (accType a)
+  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)
 
