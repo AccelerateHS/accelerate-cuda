@@ -69,14 +69,26 @@ launchConfig acc n fn = do
 
 
 -- |
--- Determine the optimal thread block size for a given array computation. Fold
--- requires blocks with a power-of-two number of threads.
+-- Determine an optimal thread block size for a given array computation. Fold
+-- requires blocks with a power-of-two number of threads. Scans select the
+-- largest size thread block possible, because if only one thread block is
+-- needed we can calculate the scan in a single pass.
 --
-blockSize :: CUDA.DeviceProperties -> PreOpenAcc ExecOpenAcc aenv a -> Int -> (Int -> Int) -> (Int, CUDA.Occupancy)
-blockSize p (Fold _ _ _) r s = CUDA.optimalBlockSizeBy p CUDA.incPow2 (const r) s
-blockSize p (Fold1 _ _)  r s = CUDA.optimalBlockSizeBy p CUDA.incPow2 (const r) s
-blockSize p _            r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-
+blockSize
+    :: CUDA.DeviceProperties
+    -> PreOpenAcc ExecOpenAcc aenv a
+    -> Int                      -- number of registers
+    -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
+    -> (Int, CUDA.Occupancy)
+blockSize p (Fold _ _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.decPow2 (const r) s
+blockSize p (Fold1 _ _)    r s = CUDA.optimalBlockSizeBy p CUDA.decPow2 (const r) s
+blockSize p (Scanl _ _ _)  r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p (Scanl' _ _ _) r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p (Scanl1 _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p (Scanr _ _ _)  r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p (Scanr' _ _ _) r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p (Scanr1 _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
+blockSize p _              r s = CUDA.optimalBlockSizeBy p CUDA.decWarp (const r) s
 
 -- |
 -- Determine the number of blocks of the given size necessary to process the

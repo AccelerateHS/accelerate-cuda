@@ -92,7 +92,7 @@ Library
                         binary                  >= 0.5,
                         blaze-builder           >= 0.3,
                         bytestring              >= 0.9,
-                        cuda                    >= 0.4.0.2,
+                        cuda                    >= 0.4.1,
                         cryptohash              >= 0.7,
                         directory               >= 1.0,
                         fclabels                >= 1.0,
