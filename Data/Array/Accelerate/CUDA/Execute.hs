@@ -33,6 +33,8 @@ import Data.Array.Accelerate.CUDA.Array.Sugar                   hiding
    (dim, size, index, shapeToList, sliceIndex)
 import Data.Array.Accelerate.CUDA.Analysis.Launch
 import qualified Data.Array.Accelerate.CUDA.Array.Sugar         as Sugar
+import qualified Data.Array.Accelerate.CUDA.Debug               as D ( debug, dump_exec )
+
 
 -- libraries
 import Prelude                                                  hiding (sum)
@@ -574,6 +576,10 @@ bindStencil s mdl (Array sh ad) =
 -- Kernel execution
 -- ----------------
 
+-- Include the name of the kernel entry point with the object code
+--
+data Function = F String {-# UNPACK #-} !CUDA.Fun
+
 -- Data which can be marshalled as arguments to a kernel invocation. For Int and
 -- Word, we match the device bit-width of these types.
 --
@@ -636,18 +642,18 @@ execute kernel bindings acc aenv n args =
 configure :: AccKernel a
           -> PreOpenAcc ExecOpenAcc aenv a
           -> Int
-          -> CIO (CUDA.Module, CUDA.Fun, (Int,Int,Int))
-configure (name, kernel) acc n = do
+          -> CIO (CUDA.Module, Function, (Int,Int,Int))
+configure (Kernel name kernel) acc n = do
   mdl <- kernel
   fun <- liftIO $ CUDA.getFun mdl name
   cfg <- launchConfig acc n fun
-  return (mdl, fun, cfg)
+  return (mdl, F name fun, cfg)
 
 
 -- Binding of lifted array expressions and kernel invocation
 --
 dispatch :: Marshalable args
-         => (CUDA.Module, CUDA.Fun, (Int,Int,Int))
+         => (CUDA.Module, Function, (Int,Int,Int))
          -> [AccBinding aenv]
          -> Val aenv
          -> args
@@ -659,9 +665,10 @@ dispatch (mdl, fun, cfg) fvs aenv args = do
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
-launch :: Marshalable args => (Int,Int,Int) -> CUDA.Fun -> args -> CIO ()
-launch (cta,grid,smem) fn a = do
+launch :: Marshalable args => (Int,Int,Int) -> Function -> args -> CIO ()
+launch (cta,grid,smem) (F entry fn) a = do
   args  <- marshal a
+  debug  $ entry ++ " <<< " ++ shows cta ", " ++ shows grid ", " ++ shows smem " >>>"
   liftIO $ CUDA.launchKernel' fn (grid,1,1) (cta,1,1) smem Nothing args
 
 
@@ -702,4 +709,17 @@ applyArraysR
 applyArraysR _ ArraysRunit         ()       = return ()
 applyArraysR f (ArraysRpair r1 r0) (a1, a0) = applyArraysR f r1 a1 >> applyArraysR f r0 a0
 applyArraysR f ArraysRarray        arr      = f arr
+
+
+-- Debug
+-- -----
+
+{-# INLINE trace #-}
+trace :: String -> CIO a -> CIO a
+trace msg next = D.debug D.dump_exec ("exec: " ++ msg) >> next
+
+{-# INLINE debug #-}
+debug :: String -> CIO ()
+debug s = s `trace` return ()
+
 
