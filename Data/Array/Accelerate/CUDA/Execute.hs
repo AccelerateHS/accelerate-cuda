@@ -37,6 +37,7 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D ( debug, du
 
 
 -- libraries
+import Numeric
 import Prelude                                                  hiding (sum)
 import Control.Applicative                                      hiding (Const)
 import Control.Monad
@@ -45,6 +46,7 @@ import System.IO.Unsafe
 
 import Foreign.Ptr (Ptr)
 import qualified Foreign.CUDA.Driver                            as CUDA
+import qualified Foreign.CUDA.Analysis                          as CUDA
 
 #include "accelerate.h"
 
@@ -602,9 +604,9 @@ bindStencil s mdl (Array sh ad) =
 -- Kernel execution
 -- ----------------
 
--- Include the name of the kernel entry point with the object code
+-- Include auxiliary information together with the compiled function
 --
-data Function = F String {-# UNPACK #-} !CUDA.Fun
+data Function = F String {-# UNPACK #-} !CUDA.Occupancy {-# UNPACK #-} !CUDA.Fun
 
 -- Data which can be marshalled as arguments to a kernel invocation. For Int and
 -- Word, we match the device bit-width of these types.
@@ -670,10 +672,10 @@ configure :: AccKernel a
           -> Int
           -> CIO (CUDA.Module, Function, (Int,Int,Int))
 configure (Kernel name kernel) acc n = do
-  mdl <- kernel
-  fun <- liftIO $ CUDA.getFun mdl name
-  cfg <- launchConfig acc n fun
-  return (mdl, F name fun, cfg)
+  mdl           <- kernel
+  fun           <- liftIO $ CUDA.getFun mdl name
+  (t,g,s,occ)   <- launchConfig acc n fun
+  return (mdl, F name occ fun, (t,g,s))
 
 
 -- Binding of lifted array expressions and kernel invocation
@@ -692,10 +694,17 @@ dispatch (mdl, fun, cfg) fvs aenv args = do
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
 launch :: Marshalable args => (Int,Int,Int) -> Function -> args -> CIO ()
-launch (cta,grid,smem) (F entry fn) a = do
+launch (cta,grid,smem) (F entry !occ !fn) a = do
+  debug msg1 ; debug msg2
+  --
   args  <- marshal a
-  debug  $ entry ++ " <<< " ++ shows cta ", " ++ shows grid ", " ++ shows smem " >>>"
   liftIO $ CUDA.launchKernel' fn (grid,1,1) (cta,1,1) smem Nothing args
+  where
+    msg1 = entry ++ " <<< " ++ shows cta ", " ++ shows grid ", " ++ shows smem " >>>"
+    msg2 = entry ++ " occupancy = "           ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% "
+                 ++ ": activeThreads = "      ++ shows (CUDA.activeThreads occ)
+                    ", activeThreadBlocks = " ++ shows (CUDA.activeThreadBlocks occ)
+                    ", activeWarps = "        ++ show  (CUDA.activeWarps occ)
 
 
 -- Auxiliary functions

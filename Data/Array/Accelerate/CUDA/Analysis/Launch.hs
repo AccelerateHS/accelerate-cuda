@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, GADTs, RankNTypes #-}
+{-# LANGUAGE CPP, GADTs #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Analysis.Launch
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -15,8 +15,8 @@ module Data.Array.Accelerate.CUDA.Analysis.Launch (launchConfig)
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Array.Sugar                (Array(..), EltRepr)
-import Data.Array.Accelerate.Analysis.Type              hiding (accType, expType)
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), EltRepr )
+import Data.Array.Accelerate.Analysis.Type              hiding ( accType, expType )
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
@@ -55,7 +55,11 @@ expType = preExpType accType
 -- physically resident blocks. Hence, kernels may need to process multiple
 -- elements per thread.
 --
-launchConfig :: PreOpenAcc ExecOpenAcc aenv a -> Int -> CUDA.Fun -> CIO (Int, Int, Int)
+launchConfig
+    :: PreOpenAcc ExecOpenAcc aenv a
+    -> Int
+    -> CUDA.Fun
+    -> CIO (Int, Int, Int, CUDA.Occupancy)
 launchConfig acc n fn = do
   regs <- liftIO $ CUDA.requires fn CUDA.NumRegs
   stat <- liftIO $ CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
@@ -65,7 +69,7 @@ launchConfig acc n fn = do
       (cta, occ) = blockSize prop acc regs ((stat+) . dyn)
       mbk        = CUDA.multiProcessorCount prop * CUDA.activeThreadBlocks occ
 
-  return (cta, mbk `min` gridSize prop acc n cta, dyn cta)
+  return (cta, mbk `min` gridSize prop acc n cta, dyn cta, occ)
 
 
 -- |
