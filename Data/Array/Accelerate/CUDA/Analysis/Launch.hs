@@ -9,40 +9,22 @@
 -- Portability : non-partable (GHC extensions)
 --
 
-module Data.Array.Accelerate.CUDA.Analysis.Launch (launchConfig)
-  where
+module Data.Array.Accelerate.CUDA.Analysis.Launch (
+
+  launchConfig, determineOccupancy
+
+) where
 
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), EltRepr )
-import Data.Array.Accelerate.Analysis.Type              hiding ( accType, expType )
-
-import Data.Array.Accelerate.CUDA.AST
-import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.Analysis.Type
 
 -- library
-import Data.Label.PureM
-import Control.Monad.IO.Class
-
 import qualified Foreign.CUDA.Analysis                  as CUDA
 import qualified Foreign.CUDA.Driver                    as CUDA
 
 #include "accelerate.h"
-
-
--- |Reify dimensionality of array computations
---
---accDim :: ExecOpenAcc aenv (Array sh e) -> Int
---accDim (ExecAcc _ _ acc) = preAccDim accDim acc
-
--- |Reify type of arrays and scalar expressions
---
-accType :: ExecOpenAcc aenv (Array sh e) -> TupleType (EltRepr e)
-accType (ExecAcc _ _ acc) = preAccType accType acc
-
-expType :: PreOpenExp ExecOpenAcc aenv env t -> TupleType (EltRepr t)
-expType = preExpType accType
 
 
 -- |
@@ -50,26 +32,41 @@ expType = preExpType accType
 -- as compiled function module). This consists of the thread block size, number
 -- of blocks, and dynamically allocated shared memory (bytes), respectively.
 --
--- By default, this launches the kernel with the minimum block size that gives
--- maximum occupancy, and the grid size limited to the maximum number of
--- physically resident blocks. Hence, kernels may need to process multiple
--- elements per thread.
+-- For most operations, this selects the minimum block size that gives maximum
+-- occupancy, and the grid size limited to the maximum number of physically
+-- resident blocks. Hence, kernels may need to process multiple elements per
+-- thread. Scan operations select the largest block size of maximum occupancy.
 --
 launchConfig
-    :: PreOpenAcc ExecOpenAcc aenv a
-    -> Int
-    -> CUDA.Fun
-    -> CIO (Int, Int, Int, CUDA.Occupancy)
-launchConfig acc n fn = do
-  regs <- liftIO $ CUDA.requires fn CUDA.NumRegs
-  stat <- liftIO $ CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
-  prop <- gets deviceProps
+    :: OpenAcc aenv a
+    -> CUDA.DeviceProperties
+    -> CUDA.Occupancy           -- kernel occupancy information
+    -> Int                      -- number of elements to configure for
+    -> (Int, Int, Int)
+launchConfig (OpenAcc acc) dev occ = \n ->
+  let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
+      maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
+      smem      = sharedMem dev acc cta
+  in
+  (cta, maxGrid `min` gridSize dev acc n cta, smem)
 
-  let dyn        = sharedMem prop acc
-      (cta, occ) = blockSize prop acc regs ((stat+) . dyn)
-      mbk        = CUDA.multiProcessorCount prop * CUDA.activeThreadBlocks occ
 
-  return (cta, mbk `min` gridSize prop acc n cta, dyn cta, occ)
+-- |
+-- Determine maximal occupancy statistics for the given kernel / device
+-- combination.
+--
+determineOccupancy
+    :: OpenAcc aenv a
+    -> CUDA.DeviceProperties
+    -> CUDA.Fun                 -- corresponding __global__ entry function
+    -> Int                      -- maximum number of threads per block
+    -> IO CUDA.Occupancy
+determineOccupancy (OpenAcc acc) dev fn maxBlock = do
+  registers     <- CUDA.requires fn CUDA.NumRegs
+  static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
+  return . snd  $  blockSize dev acc maxBlock registers (\threads -> static_smem + dynamic_smem threads)
+  where
+    dynamic_smem = sharedMem dev acc
 
 
 -- |
@@ -80,19 +77,25 @@ launchConfig acc n fn = do
 --
 blockSize
     :: CUDA.DeviceProperties
-    -> PreOpenAcc ExecOpenAcc aenv a
-    -> Int                      -- number of registers
+    -> PreOpenAcc OpenAcc aenv a
+    -> Int                      -- maximum number of threads per block
+    -> Int                      -- number of registers used
     -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
     -> (Int, CUDA.Occupancy)
-blockSize p (Fold _ _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.decPow2 (const r) s
-blockSize p (Fold1 _ _)    r s = CUDA.optimalBlockSizeBy p CUDA.decPow2 (const r) s
-blockSize p (Scanl _ _ _)  r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p (Scanl' _ _ _) r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p (Scanl1 _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p (Scanr _ _ _)  r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p (Scanr' _ _ _) r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p (Scanr1 _ _)   r s = CUDA.optimalBlockSizeBy p CUDA.incWarp (const r) s
-blockSize p _              r s = CUDA.optimalBlockSizeBy p CUDA.decWarp (const r) s
+blockSize dev acc lim regs smem =
+  CUDA.optimalBlockSizeBy dev (filter (<= lim) . strategy) (const regs) smem
+  where
+    strategy = case acc of
+      Fold _ _ _        -> CUDA.decPow2
+      Fold1 _ _         -> CUDA.decPow2
+      Scanl _ _ _       -> CUDA.incWarp
+      Scanl' _ _ _      -> CUDA.incWarp
+      Scanl1 _ _        -> CUDA.incWarp
+      Scanr _ _ _       -> CUDA.incWarp
+      Scanr' _ _ _      -> CUDA.incWarp
+      Scanr1 _ _        -> CUDA.incWarp
+      _                 -> CUDA.decWarp
+
 
 -- |
 -- Determine the number of blocks of the given size necessary to process the
@@ -101,12 +104,12 @@ blockSize p _              r s = CUDA.optimalBlockSizeBy p CUDA.decWarp (const r
 --
 -- foldSeg: 'size' is the number of segments, require one warp per segment
 --
-gridSize :: CUDA.DeviceProperties -> PreOpenAcc ExecOpenAcc aenv a -> Int -> Int -> Int
+gridSize :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
 gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
 gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
 gridSize _ acc                   size cta = split acc size cta
 
-split :: PreOpenAcc ExecOpenAcc aenv a -> Int -> Int -> Int
+split :: PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
 split acc size cta = (size `between` eltsPerThread acc) `between` cta
   where
     between arr n   = 1 `max` ((n + arr - 1) `div` n)
@@ -118,7 +121,7 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 -- memory usage as a function of thread block size. This can be used by the
 -- occupancy calculator to optimise kernel launch shape.
 --
-sharedMem :: CUDA.DeviceProperties -> PreOpenAcc ExecOpenAcc aenv a -> Int -> Int
+sharedMem :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int
 -- non-computation forms
 sharedMem _ (Alet _ _)     _ = INTERNAL_ERROR(error) "sharedMem" "Let"
 sharedMem _ (Alet2 _ _)    _ = INTERNAL_ERROR(error) "sharedMem" "Let2"

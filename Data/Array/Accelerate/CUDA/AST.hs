@@ -13,7 +13,7 @@ module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
   AccKernel(..), AccBinding(..), ExecAcc, ExecAfun, ExecOpenAcc(..),
-  List(..), FullList(..)
+  List(..), FullList(..), retag
 
 ) where
 
@@ -21,20 +21,28 @@ module Data.Array.Accelerate.CUDA.AST (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
-import Data.Array.Accelerate.CUDA.State                 ( CIO )
-import Foreign.CUDA.Driver                              ( Module )
+import qualified Foreign.CUDA.Driver                    as CUDA
+import qualified Foreign.CUDA.Analysis                  as CUDA
 
 -- system
 import Text.PrettyPrint
 
 
--- A non-empty list of binary objects will be used to execute a kernel
+-- A non-empty list of binary objects will be used to execute a kernel. We keep
+-- auxiliary information together with the compiled module, such as entry point
+-- and execution information.
 --
-data AccKernel a = Kernel String !(CIO Module)
+data AccKernel a = Kernel String CUDA.Module CUDA.Fun CUDA.Occupancy (Int -> (Int,Int,Int))
 
 data FullList a  = FL a !(List a)
 data List a      = a :> !(List a) | Nil
 infixr 5 :>
+
+-- The kernel lists are monomorphic, so sometimes we need to change the phantom
+-- type of the object code.
+--
+retag :: AccKernel a -> AccKernel b
+retag (Kernel x m f o l) = Kernel x m f o l
 
 
 -- Kernel execution is asynchronous, barriers allow (cross-stream)

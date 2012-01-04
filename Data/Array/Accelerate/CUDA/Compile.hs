@@ -26,14 +26,15 @@ import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
+import Data.Array.Accelerate.CUDA.Analysis.Launch
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 -- libraries
+import Numeric
 import Prelude                                          hiding ( exp, catch )
 import Control.Applicative                              hiding ( Const )
 import Blaze.ByteString.Builder
 import Blaze.ByteString.Builder.Char8
-import Control.Concurrent.MVar
 import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
@@ -46,12 +47,14 @@ import System.Directory
 import System.Exit                                      ( ExitCode(..) )
 import System.FilePath
 import System.IO
+import System.IO.Unsafe
 import System.Process
 import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderCompact )
 import Data.ByteString.Internal                         ( w2c )
 import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as Hash
 import qualified Foreign.CUDA.Driver                    as CUDA
+import qualified Foreign.CUDA.Analysis                  as CUDA
 
 import Paths_accelerate_cuda                            ( getDataDir )
 
@@ -207,7 +210,7 @@ prepareAcc rootAcc = travA rootAcc
           add           <- build (OpenAcc (Fold1 f mat)) var2
           scan1         <- build (OpenAcc (Scanl1 f a))  var2
           scan          <- build acc var2
-          return $ ExecAcc (FL (cast add) (cast scan1 :> scan :> Nil)) var2 (Scanl' f' e' a')
+          return $ ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var2 (Scanl' f' e' a')
 
         Scanl1 f a -> do
           (f', var1)    <- travF f []
@@ -232,7 +235,7 @@ prepareAcc rootAcc = travA rootAcc
           add           <- build (OpenAcc (Fold1 f mat)) var2
           scan1         <- build (OpenAcc (Scanr1 f a))  var2
           scan          <- build acc var2
-          return $ ExecAcc (FL (cast add) (cast scan1 :> scan :> Nil)) var2 (Scanr' f' e' a')
+          return $ ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var2 (Scanr' f' e' a')
 
         Scanr1 f a -> do
           (f', var1)    <- travF f []
@@ -368,9 +371,6 @@ prepareAcc rootAcc = travA rootAcc
     exec :: AccKernel a -> [AccBinding aenv] -> PreOpenAcc ExecOpenAcc aenv a -> ExecOpenAcc aenv a
     exec k = ExecAcc (FL k Nil)
 
-    cast :: AccKernel a -> AccKernel b
-    cast (Kernel x m) = Kernel x m
-
     noKernel :: FullList (AccKernel a)
     noKernel =  FL (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
 
@@ -391,24 +391,31 @@ prepareAcc rootAcc = travA rootAcc
 --
 build :: OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
 build acc fvar = do
-  mvar          <- liftIO newEmptyMVar
-  props         <- gets deviceProps
+  dev           <- gets deviceProps
   table         <- gets kernelTable
-  (entry,key)   <- compile table props acc fvar
-  return        $  Kernel entry (liftIO $ memo mvar (link table key))
-
-
--- A simple memoisation routine
--- TLM: maybe we can be a bit clever than this... does it even work?
---
-memo :: MVar a -> IO a -> IO a
-memo mvar fun = do
-  full <- not `fmap` isEmptyMVar mvar
-  if full
-     then readMVar mvar
-     else do a <- fun
-             putMVar mvar a
-             return a
+  (entry,key)   <- compile table dev acc fvar
+  let (mdl,fun,occ) = unsafePerformIO $ do
+        m <- link table key
+        f <- CUDA.getFun m entry
+        l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
+        o <- determineOccupancy acc dev f l
+        D.when D.dump_cc (stats entry f o)
+        return (m,f,o)
+  --
+  return $ Kernel entry mdl fun occ (launchConfig acc dev occ)
+  where
+    stats name fn occ = do
+      regs      <- CUDA.requires fn CUDA.NumRegs
+      smem      <- CUDA.requires fn CUDA.SharedSizeBytes
+      cmem      <- CUDA.requires fn CUDA.ConstSizeBytes
+      lmem      <- CUDA.requires fn CUDA.LocalSizeBytes
+      message   $ "entry function '" ++ name ++ "' used "
+        ++ shows regs " registers, "  ++ shows smem " bytes smem, "
+        ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
+      message   $ "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
+        ++ shows (CUDA.activeThreads occ)       " threads over "
+        ++ shows (CUDA.activeWarps occ)         " warps in "
+        ++ shows (CUDA.activeThreadBlocks occ)  " blocks"
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
@@ -490,26 +497,24 @@ waitFor pid = do
 -- This is dependent on the host architecture and device capabilities.
 --
 compileFlags :: FilePath -> CIO [String]
-compileFlags cufile =
-  let machine = case sizeOf (undefined :: Int) of
-                  4 -> "-m32"
-                  8 -> "-m64"
-                  _ -> error "huh? non 32-bit or 64-bit architecture"
-      verbose = if D.mode D.verbose
-                  then "--ptxas-options=-v"
-                  else "--disable-warnings"
-  in do
-  arch <- CUDA.computeCapability <$> gets deviceProps
+compileFlags cufile = do
+  arch <- CUDA.computeCapability `fmap` gets deviceProps
   ddir <- liftIO getDataDir
-  return [ "-I", ddir </> "cubits"
-         , "-O2", "--compiler-options", "-fno-strict-aliasing"
-         , "-arch=sm_" ++ show (round (arch * 10) :: Int)
-         , "-DUNIX"
-         , "-cubin"
-         , "-o", cufile `replaceExtension` "cubin"
-         , verbose
-         , machine
-         , cufile ]
+  return $ filter (not . null) $
+    [ "-I", ddir </> "cubits"
+    , "--compiler-options", "-fno-strict-aliasing"
+    , "-arch=sm_" ++ show (round (arch * 10) :: Int)
+    , "-cubin"
+    , "-o", cufile `replaceExtension` "cubin"
+    , if D.mode D.verbose then ""   else "--disable-warnings"
+    , if D.mode D.debug   then "-G" else "-O2"
+    , machine
+    , cufile ]
+  where
+    wordSize                    = sizeOf (undefined::Int)
+    machine | wordSize == 4     = "-m32"
+            | wordSize == 8     = "-m64"
+            | otherwise         = error "recreational scolding?"
 
 
 -- Open a unique file in the temporary directory used for compilation
