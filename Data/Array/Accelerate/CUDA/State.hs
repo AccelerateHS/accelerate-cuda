@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.State (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Debug                 ( debug, verbose )
+import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose )
 import Data.Array.Accelerate.CUDA.Array.Table
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
@@ -114,7 +114,7 @@ initialise = do
   ctx           <- CUDA.create dev [CUDA.SchedAuto]
   knl           <- Hash.new
   mem           <- new
-  debug verbose $  deviceInfo dev prp
+  message verbose $ deviceInfo dev prp
   return $ CUDAState prp ctx knl mem
 
 

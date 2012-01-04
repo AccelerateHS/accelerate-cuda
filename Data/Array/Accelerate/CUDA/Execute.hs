@@ -33,7 +33,7 @@ import Data.Array.Accelerate.CUDA.Array.Sugar                   hiding
    (dim, size, index, shapeToList, sliceIndex)
 import Data.Array.Accelerate.CUDA.Analysis.Launch
 import qualified Data.Array.Accelerate.CUDA.Array.Sugar         as Sugar
-import qualified Data.Array.Accelerate.CUDA.Debug               as D ( debug, dump_exec )
+import qualified Data.Array.Accelerate.CUDA.Debug               as D ( message, dump_exec )
 
 
 -- libraries
@@ -762,10 +762,10 @@ applyArraysR f ArraysRarray        arr      = f arr
 
 {-# INLINE trace #-}
 trace :: String -> CIO a -> CIO a
-trace msg next = D.debug D.dump_exec ("exec: " ++ msg) >> next
+trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
 
-{-# INLINE debug #-}
-debug :: String -> CIO ()
-debug s = s `trace` return ()
+{-# INLINE message #-}
+message :: String -> CIO ()
+message s = s `trace` return ()
 
 

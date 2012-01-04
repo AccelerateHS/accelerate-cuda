@@ -31,7 +31,7 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Data.HashTable.IO                      as Hash
 
 import Data.Array.Accelerate.Array.Data                 ( ArrayData )
-import qualified Data.Array.Accelerate.CUDA.Debug       as D ( debug, dump_gc )
+import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc )
 
 #include "accelerate.h"
 
@@ -171,7 +171,7 @@ withIORef ref f = readIORef ref >>= f
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
-trace msg next = D.debug D.dump_gc ("gc: " ++ msg) >> next
+trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
 
 {-# INLINE debug #-}
 debug :: String -> IO ()

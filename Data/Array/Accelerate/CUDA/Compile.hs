@@ -451,7 +451,7 @@ compile :: KernelTable
 compile table dev acc fvar = do
   exists        <- isJust `fmap` liftIO (Hash.lookup table key)
   unless exists $ do
-    debug       $  unlines [ show key, map w2c (L.unpack code) ]
+    message     $  unlines [ show key, map w2c (L.unpack code) ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
     (file,hdl)  <- openOutputFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
@@ -529,11 +529,11 @@ openOutputFile template = liftIO $ do
 -- Debug
 -- -----
 
-{-# INLINE debug #-}
-debug :: MonadIO m => String -> m ()
-debug msg = trace msg $ return ()
+{-# INLINE message #-}
+message :: MonadIO m => String -> m ()
+message msg = trace ("cc: " ++ msg) $ return ()
 
 {-# INLINE trace #-}
 trace :: MonadIO m => String -> m a -> m a
-trace msg next = D.debug D.dump_cuda msg >> next
+trace msg next = D.message D.dump_cc msg >> next
 
