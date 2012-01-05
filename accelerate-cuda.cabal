@@ -151,9 +151,6 @@ Library
                         -funbox-strict-fields
                         -threaded
 
-  if impl(ghc >= 7.0)
-    ghc-options:        -fspec-constr-count=25
-
   Extensions:           BangPatterns,
                         CPP,
                         ExistentialQuantification,

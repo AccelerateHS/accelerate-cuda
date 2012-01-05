@@ -435,12 +435,14 @@ link table key =
         waitFor pid
         mdl <- CUDA.loadFile (replaceExtension cufile ".cubin")
 
+#ifndef ACCELERATE_CUDA_PERSISTENT_CACHE
         -- remove build products
         --
         removeFile      cufile
         removeFile      (replaceExtension cufile ".cubin")
         removeDirectory (dropFileName cufile)
           `catch` \(_ :: IOError) -> return ()          -- directory not empty
+#endif
 
         -- update hash table
         --
