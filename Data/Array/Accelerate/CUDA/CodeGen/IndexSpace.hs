@@ -55,9 +55,9 @@ mkGenerate dimOut tyOut fn = do
         const typename DimOut shOut
     )
     {
-              int ix;
         const int n        = size(shOut);
         const int gridSize = __umul24(blockDim.x, gridDim.x);
+              int ix;
 
         for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
             ; ix < n
@@ -107,9 +107,9 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
         const typename DimIn0 shIn0
     )
     {
-              int ix;
         const int shapeSize = size(shIn0);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
+              int ix;
 
         for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
             ; ix < shapeSize

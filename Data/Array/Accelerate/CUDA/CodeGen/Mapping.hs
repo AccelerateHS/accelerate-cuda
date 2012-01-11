@@ -1,6 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
 -- |
--- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
+-- Module      : Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
 -- License     : BSD3
 --
@@ -42,14 +42,14 @@ mkMap tyOut tyIn0 fn = do
     (
         $params:argOut,
         $params:argIn0,
-        const typename Ix shape
+        const typename Ix num_elements
     )
     {
-              int ix;
         const int gridSize = __umul24(blockDim.x, gridDim.x);
+              int ix;
 
         for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shape
+            ; ix < num_elements
             ; ix += gridSize)
         {
             $decls:(getIn0 "ix")
@@ -94,9 +94,9 @@ mkZipWith dim tyOut tyIn1 tyIn0 fn = do
         const typename DimIn0 shIn0
     )
     {
-              int ix;
         const int shapeSize = size(shOut);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
+              int ix;
 
         for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
             ; ix < shapeSize

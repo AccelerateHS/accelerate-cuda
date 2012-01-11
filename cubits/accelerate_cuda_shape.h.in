@@ -15,7 +15,16 @@
 #include <stdint.h>
 #include <cuda_runtime.h>
 
-typedef @hs_int_type@                             Ix;
+/*
+ * For the time being, the D.A.A.CUDA.Execute converts shape components from
+ * Haskell Ints (which may be 32- or 64-bits) into CUDA integers which are
+ * 32-bit. This is to avoid undue register pressure. Lift this restriction if
+ * future hardware gains better 64-bit support and/or we need to access very
+ * large arrays.
+ *
+ * typedef @hs_int_type@                             Ix;
+ */
+typedef int32_t                                   Ix;
 typedef void*                                     DIM0;
 typedef Ix                                        DIM1;
 typedef struct { Ix a1,a0; }                      DIM2;

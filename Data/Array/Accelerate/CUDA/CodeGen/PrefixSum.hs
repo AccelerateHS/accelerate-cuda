@@ -118,12 +118,10 @@ mkScan dir dev elt combine mseed = do
         $params:argSum,
         $params:argIn0,
         $params:argBlk,
-        const typename Ix sz,
-        const typename Ix ss
+        const typename Ix interval_size,
+        const typename Ix num_elements
     )
     {
-        const int interval_size         = sz;
-        const int num_elements          = ss;
         $decls:smem
         $decls:decl0
         $decls:decl1

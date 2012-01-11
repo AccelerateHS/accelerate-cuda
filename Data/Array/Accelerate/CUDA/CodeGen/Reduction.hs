@@ -153,21 +153,11 @@ mkFold dev elt combine mseed = do
     (
         $params:argOut,
         $params:argIn0,
-        const typename Ix sz,
-        const typename Ix sh,
-        const typename Ix ss
+        const typename Ix interval_size,        // indexHead(shIn0)
+        const typename Ix num_intervals,        // size(shOut)
+        const typename Ix num_elements          // size(shIn0)
     )
     {
-        /*
-         * Reassign these to real ints to save registers. For a standard
-         * multidimensional reduction, 'interval_size' corresponds to the size
-         * of the innermost dimension that we are folding over, and
-         * 'num_intervals' is the product of all remaining dimensions.
-         */
-        const int interval_size = sz;   // indexHead(shIn0)
-        const int num_intervals = sh;   // size(shOut)
-        const int num_elements  = ss;   // size(shIn0)
-
         $decls:smem
         $decls:decl1
         $decls:decl0
