@@ -386,8 +386,10 @@ prepareAcc rootAcc = travA rootAcc
 -- Compilation
 -- -----------
 
--- Initiate compilation and provide a closure to later link the compiled module
--- when it is required.
+-- Generate, compile, and link code to evaluate an array computation. We use
+-- 'unsafePerformIO' here to leverage laziness, so that the 'link' function
+-- evaluates and blocks on the external compiler only once the compiled object
+-- is truly needed.
 --
 build :: OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
 build acc fvar = do
@@ -409,13 +411,18 @@ build acc fvar = do
       smem      <- CUDA.requires fn CUDA.SharedSizeBytes
       cmem      <- CUDA.requires fn CUDA.ConstSizeBytes
       lmem      <- CUDA.requires fn CUDA.LocalSizeBytes
-      message   $ "entry function '" ++ name ++ "' used "
-        ++ shows regs " registers, "  ++ shows smem " bytes smem, "
-        ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
-      message   $ "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
-        ++ shows (CUDA.activeThreads occ)       " threads over "
-        ++ shows (CUDA.activeWarps occ)         " warps in "
-        ++ shows (CUDA.activeThreadBlocks occ)  " blocks"
+      let msg1  = "entry function '" ++ name ++ "' used "
+                  ++ shows regs " registers, "  ++ shows smem " bytes smem, "
+                  ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
+          msg2  = "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
+                  ++ shows (CUDA.activeThreads occ)      " threads over "
+                  ++ shows (CUDA.activeWarps occ)        " warps in "
+                  ++ shows (CUDA.activeThreadBlocks occ) " blocks"
+      --
+      -- make sure kernel/stats are printed together
+      --
+      message   $ unlines [msg1, "cc: " ++ msg2]
+
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
