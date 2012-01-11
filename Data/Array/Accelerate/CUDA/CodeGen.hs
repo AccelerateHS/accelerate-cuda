@@ -140,14 +140,14 @@ codegenAcc dev acc vars =
             0   -> mkFoldAll dev (codegenAccType acc) f' Nothing
             _   -> mkFold    dev (codegenAccType acc) f' Nothing
 
-        FoldSeg f e _ _   -> do
+        FoldSeg f e _ s   -> do
           f'    <- codegenFun f
           e'    <- codegenExp e
-          mkFoldSeg dev (accDim acc) (codegenAccType acc) f' (Just e')
+          mkFoldSeg dev (accDim acc) (codegenAccSegmentsType s) (codegenAccType acc) f' (Just e')
 
-        Fold1Seg f _ _    -> do
+        Fold1Seg f _ s    -> do
           f'    <- codegenFun f
-          mkFoldSeg dev (accDim acc) (codegenAccType acc) f' Nothing
+          mkFoldSeg dev (accDim acc) (codegenAccSegmentsType s) (codegenAccType acc) f' Nothing
 
         Scanl f e _       -> do
           e'    <- codegenExp e
@@ -369,6 +369,11 @@ codegenAccType =  codegenTupleType . accType
 
 codegenExpType :: OpenExp aenv env t -> [C.Type]
 codegenExpType =  codegenTupleType . expType
+
+codegenAccSegmentsType :: OpenAcc aenv (Sugar.Segments) -> C.Type
+codegenAccSegmentsType seg
+  | [s] <- codegenAccType seg   = s
+  | otherwise                   = INTERNAL_ERROR(error) "codegenAcc" "non-scalar segment type"
 
 sizeOfAccTypes :: OpenAcc aenv (Sugar.Array dim e) -> [Int]
 sizeOfAccTypes = sizeOf' . accType
