@@ -1,7 +1,7 @@
 {-# LANGUAGE UndecidableInstances, OverlappingInstances, IncoherentInstances #-}
 {-# LANGUAGE BangPatterns, CPP, GADTs, ScopedTypeVariables, FlexibleInstances #-}
 {-# LANGUAGE RankNTypes, TupleSections, TypeOperators, TypeSynonymInstances #-}
-{-# OPTIONS -fno-warn-orphans -fno-warn-name-shadowing #-}
+{-# OPTIONS -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -38,7 +38,7 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D ( message, 
 
 
 -- libraries
-import Prelude                                                  hiding ( sum )
+import Prelude                                                  hiding ( sum, exp )
 import Control.Applicative                                      hiding ( Const )
 import Control.Monad
 import Control.Monad.Trans
@@ -99,7 +99,7 @@ executeOpenAcc (ExecAcc kernelList@(FL kernel _) bindings acc) aenv =
     --
     Avar ix  -> return (prj ix aenv)
 
-    Alet  a b -> do
+    Alet a b -> do
       a0 <- executeOpenAcc a aenv
       executeOpenAcc b (aenv `Push` a0)
 
@@ -287,7 +287,7 @@ indexOp
     -> slix
     -> CIO (Array sl e)
 indexOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
-  let dim               = toElt sh0                                                 :: dim
+  let sz                = toElt sh0                                                 :: dim
       sh                = toElt $ restrict sliceIndex (fromElt slix) sh0            :: sl
       sl                = Sugar.listToShape $ convertSlix sliceIndex (fromElt slix) :: sl
   res@(Array _ out)     <- allocateArray sh
@@ -296,7 +296,7 @@ indexOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
            , in0)
            , sh)
            , sl)
-           , dim)
+           , sz)
   return res
   where
     restrict :: SliceIndex slix' sl' co' dim' -> slix' -> dim' -> sl'
@@ -643,35 +643,68 @@ stencil2Op kernel@(Kernel _ mdl _ _ _) bindings aenv in1@(Array sh1 _) in0@(Arra
 -- Evaluate an open expression
 --
 executeOpenExp :: PreOpenExp ExecOpenAcc env aenv t -> Val env -> Val aenv -> CIO t
-executeOpenExp (Let _ _)         _   _    = INTERNAL_ERROR(error) "executeOpenExp" "Let: not implemented yet"
-executeOpenExp (Var idx)         env _    = return $ prj idx env
-executeOpenExp (Const c)         _   _    = return $ toElt c
-executeOpenExp (PrimConst c)     _   _    = return $ I.evalPrimConst c
-executeOpenExp (PrimApp fun arg) env aenv = I.evalPrim fun <$> executeOpenExp arg env aenv
-executeOpenExp (Tuple tup)       env aenv = toTuple                   <$> executeTuple tup env aenv
-executeOpenExp (Prj idx e)       env aenv = I.evalPrj idx . fromTuple <$> executeOpenExp e env aenv
-executeOpenExp IndexAny          _   _    = return Sugar.Any
-executeOpenExp IndexNil          _   _    = return Z
-executeOpenExp (IndexCons sh i)  env aenv = (:.) <$> executeOpenExp sh env aenv <*> executeOpenExp i env aenv
-executeOpenExp (IndexHead ix)    env aenv = (\(_:.h) -> h) <$> executeOpenExp ix env aenv
-executeOpenExp (IndexTail ix)    env aenv = (\(t:._) -> t) <$> executeOpenExp ix env aenv
-executeOpenExp (IndexScalar a e) env aenv = do
-  arr <- executeOpenAcc a aenv
-  ix  <- executeOpenExp e env aenv
-  indexArray arr ix
+executeOpenExp exp env aenv = do
+  case exp of
+    -- Local binders and variable indices, ranging over tuples and scalars
+    Var ix              -> return $! prj ix env
+    Let x e             -> do
+      x'                <- executeOpenExp x env aenv
+      executeOpenExp e (env `Push` x') aenv
 
-executeOpenExp (Shape a) _ aenv = do
-  (Array sh _) <- executeOpenAcc a aenv
-  return (toElt sh)
+    -- Constant values
+    Const c             -> return $! toElt c
+    PrimConst c         -> return $! I.evalPrimConst c
 
-executeOpenExp (ShapeSize e) env aenv = do
-  sh <- executeOpenExp e env aenv
-  return (size $ fromElt sh)
+    -- Primitive scalar operations
+    PrimApp fun arg     -> do
+      x                 <- executeOpenExp arg env aenv
+      return            $! I.evalPrim fun x
 
-executeOpenExp (Cond c t e) env aenv = do
-  p <- executeOpenExp c env aenv
-  if p then executeOpenExp t env aenv
-       else executeOpenExp e env aenv
+    -- Tuples
+    Tuple tup           -> do
+      t                 <- executeTuple tup env aenv
+      return            $! toTuple t
+
+    Prj ix e            -> do
+      t                 <- executeOpenExp e env aenv
+      return            $! I.evalPrj ix (fromTuple t)
+
+    -- Conditional expression
+    Cond p t e          -> do
+      p'                <- executeOpenExp p env aenv
+      case p' of
+        True            -> executeOpenExp t env aenv
+        False           -> executeOpenExp e env aenv
+
+    -- Array indices and shapes
+    IndexAny            -> return Sugar.Any
+    IndexNil            -> return Z
+    IndexCons sh sz     -> do
+      sh'               <- executeOpenExp sh env aenv
+      sz'               <- executeOpenExp sz env aenv
+      return            $! sh' :. sz'
+
+    IndexHead sh        -> do
+      (_ :. ix)         <- executeOpenExp sh env aenv
+      return            $! ix
+
+    IndexTail sh        -> do
+      (ix :. _)         <- executeOpenExp sh env aenv
+      return            $! ix
+
+    -- Array shape and element indexing
+    IndexScalar acc ix  -> do
+      arr'              <- executeOpenAcc acc aenv
+      ix'               <- executeOpenExp ix env aenv
+      indexArray arr' ix'
+
+    Shape acc           -> do
+      (Array sh _)      <- executeOpenAcc acc aenv
+      return            $! toElt sh
+
+    ShapeSize e         -> do
+      sh                <- executeOpenExp e env aenv
+      return            $! size (fromElt sh)
 
 
 -- Evaluate a closed expression

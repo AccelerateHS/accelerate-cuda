@@ -280,7 +280,7 @@ prepareAcc rootAcc = travA rootAcc
           -> CIO (PreOpenExp ExecOpenAcc env aenv e, [AccBinding aenv])
     travE exp vars =
       case exp of
-        Let _ _         -> INTERNAL_ERROR(error) "prepareAcc" "Let: not implemented yet"
+        Let a b         -> return (Let a b, vars)
         Var ix          -> return (Var ix, vars)
         Const c         -> return (Const c, vars)
         PrimConst c     -> return (PrimConst c, vars)
