@@ -108,7 +108,7 @@ mkScanr = mkScan R
 --
 mkScan :: Direction -> DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
 mkScan dir dev elt combine mseed = do
-  _env  <- environment
+  env   <- environment
   return $ CUTranslSkel name [cunit|
     extern "C"
     __global__ void
@@ -154,6 +154,7 @@ mkScan dir dev elt combine mseed = do
             $stms:(x1 .=. getIn0 "j")
 
             if (threadIdx.x == 0 && carry_in) {
+                $decls:env
                 $stms:(x1 .=. combine)
             }
 
@@ -163,7 +164,7 @@ mkScan dir dev elt combine mseed = do
             $stms:(sdata "threadIdx.x" .=. x1)
             __syncthreads();
 
-            $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata combine)
+            $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
 
             if ( $exp:(cbool exclusive) && threadIdx.x != 0 ) {
                 $stms:(x1 .=. sdata "threadIdx.x - 1")
@@ -225,9 +226,10 @@ scanBlock :: DeviceProperties
           -> Maybe Exp                  -- partially-full block bounds check?
           -> Exp                        -- CTA size
           -> (String -> [Exp])          -- index shared memory area
-          -> [Exp]                      -- binary function
+          -> Environment                -- local environment for the..
+          -> [Exp]                      -- ..binary function
           -> [Stm]
-scanBlock dev elt mlim cta sdata combine = map (scan . pow2) [0 .. maxThreads]
+scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThreads]
   where
     maxThreads  = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
     (x0, _)     = locals "x0" elt
@@ -242,6 +244,7 @@ scanBlock dev elt mlim cta sdata combine = map (scan . pow2) [0 .. maxThreads]
         if ( $exp:cta > $int:n ) {
             if ( $exp:inrange ) {
                 $stms:(x0 .=. sdata ix)
+                $decls:env
                 $stms:(x1 .=. combine)
                 __syncthreads();
                 $stms:(sdata "threadIdx.x" .=. x1)

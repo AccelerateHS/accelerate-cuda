@@ -131,14 +131,14 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     }
   |]
   where
-    (argOut, arrOut,   setOut)  = setters types
-    (argIn0, x0, _, _, getIn0)  = getters 0 types
-    (x0', _)                    = locals "_x0" types
+    (argOut, arrOut,  setOut)   = setters types
+    (argIn0, _, _, _, getIn0)   = getters 0 types
+    (x1, _)                     = locals "x1" types
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
     dst                         = project dimOut "dst" index
     sm                          = computeCapability dev
     unsafe                      = setOut "jx" combine
-    (temps,write)               = unzip $ zipWith7 apply unsafe combine types arrOut x0 x0' sizeof
+    (temps,write)               = unzip $ zipWith6 apply unsafe combine types arrOut x1 sizeof
     --
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
@@ -153,9 +153,10 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    apply set f t a z z' s
+    apply set f t a z s
       | Just (t',cast) <- reinterpret s =
-          let get       = [cexp| $exp:a [ $id:("jx") ] |]
+          let z'        = [cexp| $id:('_':show z) |]
+              get       = [cexp| $exp:a [ $id:("jx") ] |]
           in
           ( [cdecl| $ty:t' $id:(show z), $id:(show z') = $exp:cast ( $exp:get ); |]
           , [cstm| do { $exp:z  = $exp:z';
@@ -199,9 +200,9 @@ mkBackpermute dimOut dimIn0 types index = do
         const typename DimIn0 shIn0
     )
     {
-              int ix;
         const int shapeSize = size(shOut);
         const int gridSize  = __umul24(blockDim.x, gridDim.x);
+              int ix;
 
         for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
             ; ix < shapeSize
