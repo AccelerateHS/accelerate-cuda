@@ -199,7 +199,7 @@ mkScan dir dev elt combine mseed = do
     (argBlk, _,  _,     getBlk, _)      = getters' "d_blk" "b0" elt
     (argIn0, x0, decl0, getIn0, _)      = getters 0 elt
     (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
     exclusive                           = isJust mseed
     left                                = dir == L

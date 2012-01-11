@@ -111,7 +111,7 @@ mkFoldAll dev elt combine mseed = do
     (argOut, _,                 setOut) = setters elt
     (argIn0, x0, decl0, getIn0, _)      = getters 0 elt
     (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
     inclusive_fold                      = setOut "blockIdx.x" x1
     exclusive_fold seed                 = [[cstm|
@@ -235,7 +235,7 @@ mkFold dev elt combine mseed = do
     (argOut, _,                 setOut) = setters elt
     (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
     (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|
@@ -306,12 +306,11 @@ mkFoldSeg dev dim elt combine mseed = do
         const int num_segments      = indexHead(shOut);
         const int total_segments    = size(shOut);
 
+        extern volatile __shared__ int s_ptrs[][2];
+
         $decls:smem
         $decls:decl1
         $decls:decl0
-        $decls:env
-
-        volatile int s_ptrs[][2] = (int**) &s0_a0[blockDim.x];
 
         for (int seg = vector_id; seg < total_segments; seg += num_vectors)
         {
@@ -396,7 +395,7 @@ mkFoldSeg dev dim elt combine mseed = do
     (argOut, _,                 setOut) = setters elt
     (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
     (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 [cexp| blockDim.x |] elt
+    (smem, sdata)                       = shared 0 (Just $ [cexp| &s_ptrs[vectors_per_block][2] |]) [cexp| blockDim.x |] elt
     --
     inclusive_fold      = setOut "seg" x1
     exclusive_fold seed = [cstm|

@@ -132,22 +132,32 @@ setters' base ts =
     param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 
--- shared memory declaration: this can only be issued once since all __shared__
--- declarations begin at the same base pointer and must be offset manually
+
+
+-- shared memory declaration. All dynamically allocated __shared__ memory will
+-- begin at the same base address. If we call this more than once, or the kernel
+-- itself declares some shared memory, the first parameter is a pointer to where
+-- the new declarations should start from.
 --
 shared :: Int                           -- shared memory shadowing which input array
+       -> Maybe Exp                     -- (optional) initialise from this base address
        -> Exp                           -- how much shared memory per type
        -> [Type]                        -- element types
        -> ( [InitGroup]                 -- shared memory declaration
           , String -> [Exp] )           -- index shared memory
-shared base ix elt =
-  ( sdata' : zipWith3 sdata (tail elt) (tail vars) vars
+shared base = shared' ('s':shows base "_a")
+
+shared' :: String -> Maybe Exp -> Exp -> [Type] -> ([InitGroup], String -> [Exp])
+shared' base mprev ix elt =
+  ( sdecl (head elt) (head vars) : zipWith3 sdata (tail elt) (tail vars) vars
   , \i -> map (\v -> [cexp| $id:v [ $id:i ] |]) vars )
   where
-    n           = length elt
-    vars        = let k = ('s':shows base "_a") in map ((k++) . show) [n-1,n-2..0]
-    sdata'      = [cdecl| extern volatile __shared__ $ty:(head elt) $id:(head vars) []; |]
-    sdata t v p = [cdecl| volatile $ty:(cptr t) $id:v = ( $ty:(cptr t) ) & $id:p [ $exp:ix ]; |]
+    vars                = let k = length elt in map (\n -> base ++ show n) [k-1,k-2..0]
+    sdecl t v
+      | Just p <- mprev = [cdecl| volatile $ty:(cptr t) $id:v = ( $ty:(cptr t) ) $exp:p; |]
+      | otherwise       = [cdecl| extern volatile __shared__ $ty:t $id:v []; |]
+    sdata t v p         = [cdecl| volatile $ty:(cptr t) $id:v = ( $ty:(cptr t) ) & $id:p [ $exp:ix ]; |]
+
 
 -- Turn a plain type into a ptr type
 --
