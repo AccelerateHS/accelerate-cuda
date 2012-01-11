@@ -70,8 +70,8 @@ cdim :: String -> Int -> Definition
 cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 
 
-cglobal :: String -> Type -> Definition
-cglobal name ty = [cedecl|static $ty:ty $id:name;|]
+cglobal :: Type -> String -> Definition
+cglobal ty name = [cedecl|static $ty:ty $id:name;|]
 
 cshape :: String -> Int -> Definition
 cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]

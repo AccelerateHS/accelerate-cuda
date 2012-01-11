@@ -35,7 +35,7 @@ import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
--- import Data.Array.Accelerate.Analysis.Stencil
+import Data.Array.Accelerate.Analysis.Stencil
 import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 
@@ -46,6 +46,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
+import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 
 #include "accelerate.h"
 
@@ -184,30 +185,25 @@ codegenAcc dev acc vars =
         Backpermute _ f a -> do
           f'    <- codegenFun f
           mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
-{--
-        Stencil f bndy a     ->
-          let ty0   = codegenTupleTex (accType a)
-              decl0 = map (map CTypeSpec) (reverse ty0)
-              sten0 = zipWith mkGlobal decl0 (map (\n -> "stencil0_a" ++ show n) [0::Int ..])
-          in
-          mkStencil (codegenAccTypeDim acc)
-                    sten0 (codegenAccType a) (map (reverse . Sugar.shapeToList) $ offsets f a) (codegenBoundary a bndy)
-                    (codegenFun f)
 
-        Stencil2 f bndy1 a1 bndy0 a0 ->
-          let ty1          = codegenTupleTex (accType a1)
-              ty0          = codegenTupleTex (accType a0)
-              decl         = map (map CTypeSpec) . reverse
-              sten n       = zipWith (flip mkGlobal) (map (\k -> "stencil" ++ shows (n::Int) "_a" ++ show k) [0::Int ..]) . decl
-              (pos1, pos0) = offsets2 f a1 a0
-          in
-          mkStencil2 (codegenAccTypeDim acc)
-                     (sten 1 ty1) (codegenAccType a1) (map (reverse . Sugar.shapeToList) pos1) (codegenBoundary a1 bndy1)
-                     (sten 0 ty0) (codegenAccType a0) (map (reverse . Sugar.shapeToList) pos0) (codegenBoundary a0 bndy0)
-                     (codegenFun f)
---}
+        Stencil f b a     -> do
+          f'    <- codegenFun f
+          mkStencil (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccTypeTex a) b0 i0 f'
+          where
+            b0  = codegenBoundary a b
+            i0  = map Sugar.shapeToList (offsets f a)
 
-    --
+        Stencil2 f b1 a1 b0 a0 -> do
+          f'    <- codegenFun f
+          mkStencil2 (accDim acc) (codegenAccType acc)
+            (codegenAccType a1) (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
+            (codegenAccType a0) (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
+          where
+            (p1, p0)    = offsets2 f a1 a0
+            i0          = map Sugar.shapeToList p0
+            i1          = map Sugar.shapeToList p1
+
+
     -- Generate binding points (texture references and shapes) for arrays lifted
     -- from scalar expressions
     --
@@ -216,12 +212,21 @@ codegenAcc dev acc vars =
       let avar    = OpenAcc (Avar idx)
           idx'    = show $ deBruijnToInt idx
           sh      = cshape ("sh" ++ idx') (accDim avar)
-          ty      = codegenTupleTex (accType avar)
+          ty      = codegenAccTypeTex avar
           arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
       in
-      sh : zipWith (\t n -> cglobal (arr n) t) (reverse ty) [0..]
+      sh : zipWith (\t n -> cglobal t (arr n)) (reverse ty) [0..]
 
+    -- Shapes are still represented as C structs, so we need to generate field
+    -- indexing code for shapes
     --
+    mkPrj :: Int -> String -> Int -> C.Exp
+    mkPrj ndim var c
+      | ndim <= 1   = cvar var
+      | otherwise   = [cexp| $exp:v . $id:field |]
+                        where v     = cvar var
+                              field = 'a' : show c
+
     -- caffeine and misery
     --
     internalError =
@@ -242,13 +247,6 @@ codegenBoundary _ (Constant c) = Constant $ codegenConst (Sugar.eltType (undefin
 codegenBoundary _ Clamp        = Clamp
 codegenBoundary _ Mirror       = Mirror
 codegenBoundary _ Wrap         = Wrap
-
-mkPrj :: Int -> String -> Int -> C.Exp
-mkPrj ndim var c
-  | ndim <= 1   = cvar var
-  | otherwise   = [cexp| $exp:v . $id:field |]
-                    where v     = cvar var
-                          field = 'a' : show c
 
 
 -- Scalar Expressions
@@ -327,7 +325,7 @@ codegenExp (Shape a)
 codegenExp (IndexScalar a e)
   | OpenAcc (Avar var) <- a =
       let var'          = show $ deBruijnToInt var
-          types         = codegenTupleTex (accType a)
+          types         = codegenAccTypeTex a
           n             = length types
           sh            = cvar ("sh"  ++ var')
           arr c         = cvar ("arr" ++ var' ++ "_a" ++ show (c::Int))
@@ -443,6 +441,9 @@ codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
 
 -- Texture types
 --
+codegenAccTypeTex :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+codegenAccTypeTex = codegenTupleTex . accType
+
 codegenTupleTex :: TupleType a -> [C.Type]
 codegenTupleTex UnitTuple         = []
 codegenTupleTex (SingleTuple t)   = [codegenScalarTex t]
