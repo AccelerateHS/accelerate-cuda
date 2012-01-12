@@ -280,7 +280,11 @@ prepareAcc rootAcc = travA rootAcc
           -> CIO (PreOpenExp ExecOpenAcc env aenv e, [AccBinding aenv])
     travE exp vars =
       case exp of
-        Let a b         -> return (Let a b, vars)
+        Let a b         -> do
+          (a', var1) <- travE a []
+          (b', var2) <- travE b var1
+          return (Let a' b', var2)
+
         Var ix          -> return (Var ix, vars)
         Const c         -> return (Const c, vars)
         PrimConst c     -> return (PrimConst c, vars)
