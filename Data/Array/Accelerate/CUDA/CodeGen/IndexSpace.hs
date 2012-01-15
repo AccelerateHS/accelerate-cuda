@@ -28,9 +28,9 @@ import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 
+import Foreign.CUDA.Analysis
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
-import Foreign.CUDA.Analysis
 
 
 -- Construct a new array by applying a function to each index. Each thread

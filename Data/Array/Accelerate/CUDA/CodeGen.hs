@@ -16,8 +16,8 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
+import Prelude                                                  hiding ( exp )
 import Data.Loc
-import Data.List
 import Data.Char
 import Data.Symbol
 import Control.Applicative                                      hiding ( Const )
@@ -267,78 +267,110 @@ codegenFun (Body b) = codegenExp b
 -- Embedded scalar computations
 --
 codegenExp :: forall env aenv t. OpenExp env aenv t -> CGM [C.Exp]
-codegenExp (Let _ _)            = INTERNAL_ERROR(error) "codegenExp" "Let: not implemented yet"
-codegenExp (PrimConst c)        = return [codegenPrimConst c]
-codegenExp (PrimApp f arg)      = return . codegenPrim f <$> codegenExp arg
-codegenExp (Const c)            = return $ codegenConst (Sugar.eltType (undefined::t)) c
-codegenExp (Tuple t)            = codegenTup t
-codegenExp p@(Prj idx e)
-  = reverse
-  . take (length $ codegenTupleType (expType p))
-  . drop (prjToInt idx (expType e))
-  . reverse <$> codegenExp e
+codegenExp exp =
+  case exp of
+    -- local binders and variable indices
+    --
+    -- NOTE: recording which variables are used is important, because the CUDA
+    -- compiler will not eliminate variables that are initialised but never
+    -- used. If this is a scalar type mark it as used immediately, otherwise
+    -- wait until tuple projection picks out an individual element.
+    --
+    Let _ _             -> INTERNAL_ERROR(error) "codegenExp" "Let: not implemented yet"
+    Var i               -> return $ map var [n-1, n-2 .. 0]
+      where
+        base    = 'x':show v
+        var x   = [cexp| $id:(base ++ "_a" ++ show x) |]
+        ty      = codegenTupleType (Sugar.eltType (undefined::t))
+        n       = length ty
+        v       = idxToInt i
 
-codegenExp IndexNil             = return []
-codegenExp IndexAny             = return []
-codegenExp (IndexCons ix i)     = (++) <$> codegenExp ix <*> codegenExp i
+    -- Constant values
+    PrimConst c         -> return [codegenPrimConst c]
+    Const c             -> return (codegenConst (Sugar.eltType (undefined::t)) c)
 
-codegenExp (IndexHead sh@(Shape a)) = do
-  [var] <- codegenExp sh
-  return $ if accDim a > 1
-              then [[cexp| $exp:var . $id:("a0") |]]
-              else [var]
+    -- Primitive scalar operations
+    PrimApp f arg       -> do
+      x                 <- codegenExp arg
+      return [codegenPrim f x]
 
-codegenExp (IndexTail sh@(Shape a)) = do
-  [var] <- codegenExp sh
-  return $ let ndim = accDim a
-           in  map (\c -> [cexp| $exp:var . $id:('a':show c) |]) [ndim-1, ndim-2 .. 1]
+    -- Tuples
+    Tuple t             -> codegenTup t
+    Prj idx e           -> do
+      e'                <- codegenExp e
+      return (subset e')
+      where
+        ty      = expType e
+        subset  = reverse
+                . take (length (codegenExpType exp))
+                . drop (prjToInt idx ty)
+                . reverse
 
-codegenExp (IndexHead ix)       = return . last <$> codegenExp ix
-codegenExp (IndexTail ix)       =          init <$> codegenExp ix
+    -- Conditional expression
+    Cond p t e          -> do
+      t'                <- codegenExp t
+      e'                <- codegenExp e
+      p'                <- codegenExp p >>= \ps ->
+        case ps of
+          [x]   -> bind [cty| typename bool |] x
+          _     -> INTERNAL_ERROR(error) "codegenExp" "expected conditional predicate"
+      --
+      return $ zipWith (\a b -> [cexp| $exp:p' ? $exp:a : $exp:b|]) t' e'
 
-codegenExp (Var i)              =
-  let base      = 'x':show (idxToInt i)
-      var x     = [cexp| $id:(base ++ "_a" ++ show (x::Int))|]
-      n         = length $ codegenTupleType (Sugar.eltType (undefined::t))
-  in
-  return $ map var [n-1,n-2 .. 0]
+    -- Array indices and shapes
+    --
+    -- NOTE: when deconstructing shape components, we need to check where the
+    -- shape data comes from. If referencing a free array variable, we instead
+    -- generate struct-indexing code for the appropriate global variable.
+    --
+    IndexNil            -> return []
+    IndexAny            -> return []
+    IndexCons sh sz     -> do
+      sh'               <- codegenExp sh
+      sz'               <- codegenExp sz
+      return (sh' ++ sz')
 
-codegenExp (Cond p t e) = do
-  t'    <- codegenExp t
-  e'    <- codegenExp e
-  p'    <- codegenExp p >>= \ps ->
-    case ps of
-      [x] -> bind [cty|int|] x
-      _   -> INTERNAL_ERROR(error) "codegenExp" "expected unary conditional"
-  --
-  return $ zipWith (\a b -> [cexp| $exp:p' ? $exp:a : $exp:b|]) t' e'
+    IndexHead sh@(Shape a)      -> do
+      [var]                     <- codegenExp sh
+      return $ if accDim a > 1  then [[cexp| $exp:var . $id:("a0") |]]
+                                else [var]
 
-codegenExp (Size a) = do
-  a'    <- codegenExp (Shape a)
-  return $ [ ccall "size" a' ]
+    IndexTail sh@(Shape a)      -> do
+      [var]                     <- codegenExp sh
+      return $ let n = accDim a
+               in  map (\c -> [cexp| $exp:var . $id:('a':show c) |]) [n-1, n-2 .. 1]
+
+    IndexHead ix        -> do
+      ix'               <- codegenExp ix
+      return [last ix']
+
+    IndexTail ix        -> do
+      ix'               <- codegenExp ix
+      return (tail ix')
 
 codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
-codegenExp (Shape a)
-  | OpenAcc (Avar var) <- a = return [ cvar ("sh" ++ show (idxToInt var)) ]
-  | otherwise               = INTERNAL_ERROR(error) "codegenExp" "expected array variable"
+    -- Array shape and element indexing
+    ShapeSize e         -> do
+      sh'               <- codegenExp e
+      return [ ccall "size" sh' ]
 
-codegenExp (IndexScalar a e)
-  | OpenAcc (Avar var) <- a =
-      let var'          = show $ deBruijnToInt var
-          types         = codegenAccTypeTex a
-          n             = length types
-          sh            = cvar ("sh"  ++ var')
-          arr c         = cvar ("arr" ++ var' ++ "_a" ++ show (c::Int))
-          get ix ty c
-            | C.Type (C.DeclSpec _ _ (C.Tnamed (C.Id name _) _) _) _ _ <- ty
-            , "Double" `isSuffixOf` name        = ccall "indexDArray" [arr c, ix]
-            | otherwise                         = ccall "indexArray"  [arr c, ix]
-      in do
-        e'    <- codegenExp e
-        ix    <- bind [cty|int|] (ccall "toIndex" [sh, ccall "shape" e'])
-        return $ zipWith (get ix) types [n-1, n-2 .. 0]
-  --
-  | otherwise               = INTERNAL_ERROR(error) "codegenExp" "expected array variable"
+    Shape arr
+      | OpenAcc (Avar a) <- arr -> return [ cvar ("sh" ++ show (idxToInt a)) ]
+      | otherwise               -> INTERNAL_ERROR(error) "codegenExp" "expected array variable"
+
+    IndexScalar arr ix
+      | OpenAcc (Avar a) <- arr ->
+        let avar        = show (idxToInt a)
+            sh          = cvar ("sh"  ++ avar)
+            array x     = cvar ("arr" ++ avar ++ "_a" ++ show x)
+            elt         = codegenAccTypeTex arr
+            n           = length elt
+        in do
+          ix'           <- codegenExp ix
+          v             <- bind [cty| int |] (ccall "toIndex" [sh, ccall "shape" ix'])
+          return $ zipWith (\t x -> indexArray t (array x) v) elt [n-1, n-2 .. 0]
+
+      | otherwise                -> INTERNAL_ERROR(error) "codegenExp" "expected array variable"
 
 
 -- Tuples are defined as snoc-lists, so generate code right-to-left

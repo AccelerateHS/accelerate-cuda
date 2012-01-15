@@ -16,7 +16,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   typename, cptr, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  setters, setters', getters, getters', shared,
+  setters, setters', getters, getters', shared, indexArray,
 
   -- Mutable operations
   (.=.), locals
@@ -24,6 +24,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 ) where
 
 import Data.Loc
+import Data.List
 import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
@@ -75,6 +76,12 @@ cglobal ty name = [cedecl|static $ty:ty $id:name;|]
 
 cshape :: String -> Int -> Definition
 cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:name;|]
+
+indexArray :: Type -> Exp -> Exp -> Exp
+indexArray ty arr ix
+  | Type (DeclSpec _ _ (Tnamed (Id name _) _) _) _ _ <- ty
+  , "Double" `isSuffixOf` name  = ccall "indexDArray" [arr, ix]
+  | otherwise                   = ccall "indexArray"  [arr, ix]
 
 
 -- Generate a set of variable bindings and declarations to read from an input

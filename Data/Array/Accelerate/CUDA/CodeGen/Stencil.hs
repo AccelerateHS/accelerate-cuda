@@ -172,15 +172,10 @@ stencilAccess base dim stencil elt boundary offsets =
             | otherwise = ccall "shape" (zipWith (\c i -> [cexp| $id:ix . $id:('a':show c) + $int:i |]) [dim-1,dim-2..0] at)
         --
         bounded f       = [cdecl| const int $id:j = toIndex($id:sh, $exp:(ccall f [cvar sh, ix'])); |]
-                        : zipWith3 (\a t i -> [cdecl| const $ty:t $id:(var i) = $exp:(getTex t a) ; |]) varArr elt [v,v-1..]
+                        : zipWith3 (\a t i -> [cdecl| const $ty:t $id:(var i) = $exp:(indexArray t a (cvar j)) ; |]) varArr elt [v,v-1..]
         --
         inRange c       = [cdecl| const int $id:j = inRange($id:sh, $exp:ix'); |]
-                        : zipWith4 (\a t z i -> [cdecl| const $ty:t $id:(var i) = $id:j ? $exp:(getTex t a) : $exp:z; |]) varArr elt c [v,v-1..]
-        --
-        getTex ty a
-          | Type (DeclSpec _ _ (Tnamed (Id name _) _) _) _ _ <- ty
-          , "Double" `isSuffixOf` name          = ccall "indexDArray" [a, cvar j]
-          | otherwise                           = ccall "indexArray"  [a, cvar j]
+                        : zipWith4 (\a t z i -> [cdecl| const $ty:t $id:(var i) = $id:j ? $exp:(indexArray t a (cvar j)) : $exp:z; |]) varArr elt c [v,v-1..]
 
 
 {--
