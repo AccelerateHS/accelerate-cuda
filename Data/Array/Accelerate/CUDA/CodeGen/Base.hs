@@ -24,6 +24,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 ) where
 
 import Data.Loc
+import Data.Char
 import Data.List
 import Data.Symbol
 import Language.C.Syntax
@@ -81,9 +82,8 @@ cshape name n = [cedecl| static __constant__ typename $id:("DIM" ++ show n) $id:
 
 indexArray :: Type -> Exp -> Exp -> Exp
 indexArray ty arr ix
-  | Type (DeclSpec _ _ (Tnamed (Id name _) _) _) _ _ <- ty
-  , "Double" `isSuffixOf` name  = ccall "indexDArray" [arr, ix]
-  | otherwise                   = ccall "indexArray"  [arr, ix]
+  | "double" `isSuffixOf` map toLower (show ty) = ccall "indexDArray" [arr, ix]
+  | otherwise                                   = ccall "indexArray"  [arr, ix]
 
 
 -- Generate a list of variable bindings and declarations to read from the input
