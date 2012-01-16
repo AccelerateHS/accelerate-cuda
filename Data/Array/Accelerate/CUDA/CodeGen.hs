@@ -63,6 +63,8 @@ import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 -- scalar code. We require that the only array form allowed within expressions
 -- are array variables.
 --
+-- TODO: include a measure of how much shared memory a kernel requires.
+--
 codegenAcc :: forall aenv a.
               CUDA.DeviceProperties
            -> OpenAcc aenv a
@@ -188,7 +190,7 @@ codegenAcc dev acc vars =
 
         Stencil f b a     -> do
           f'    <- codegenFun f
-          mkStencil (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccTypeTex a) b0 i0 f'
+          mkStencil (accDim acc) (codegenAccType acc) (codegenAccTypeTex a) b0 i0 f'
           where
             b0  = codegenBoundary a b
             i0  = map Sugar.shapeToList (offsets f a)
@@ -196,8 +198,8 @@ codegenAcc dev acc vars =
         Stencil2 f b1 a1 b0 a0 -> do
           f'    <- codegenFun f
           mkStencil2 (accDim acc) (codegenAccType acc)
-            (codegenAccType a1) (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
-            (codegenAccType a0) (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
+            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
+            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
           where
             (p1, p0)    = offsets2 f a1 a0
             i0          = map Sugar.shapeToList p0
@@ -277,7 +279,10 @@ codegenExp exp =
     -- wait until tuple projection picks out an individual element.
     --
     Let _ _             -> INTERNAL_ERROR(error) "codegenExp" "Let: not implemented yet"
-    Var i               -> return $ map var [n-1, n-2 .. 0]
+    Var i               -> case ty of
+      [t]       -> let x = var 0
+                   in  use v 0 t x >> return [x]
+      _         -> return $ map var [n-1, n-2 .. 0]
       where
         base    = 'x':show v
         var x   = [cexp| $id:(base ++ "_a" ++ show x) |]
@@ -298,13 +303,22 @@ codegenExp exp =
     Tuple t             -> codegenTup t
     Prj idx e           -> do
       e'                <- codegenExp e
-      return (subset e')
+      case subset (zip e' elt) of
+        [(x,t)]         -> uncurry use (unexp x) t x >> return [x]
+        xts             -> return $ fst (unzip xts)
       where
         ty      = expType e
+        elt     = codegenTupleType ty
         subset  = reverse
                 . take (length (codegenExpType exp))
                 . drop (prjToInt idx ty)
                 . reverse
+        --
+        --  this is total hax.
+        unexp x = case show x of
+          ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
+                -> (v', n')
+          _     -> INTERNAL_ERROR(error) "codegenExp" "expected variable name"
 
     -- Conditional expression
     Cond p t e          -> do

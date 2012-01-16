@@ -50,7 +50,8 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 --
 mkFoldAll :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
 mkFoldAll dev elt combine mseed = do
-  env   <- environment
+  env                                   <- environment
+  (argIn0, x0, decl0, getIn0, _)        <- getters 0 elt
   return $ CUTranslSkel name [cunit|
     extern "C"
     __global__ void
@@ -102,19 +103,18 @@ mkFoldAll dev elt combine mseed = do
          */
         if (threadIdx.x == 0)
         {
-            $stms:(maybe inclusive_fold (exclusive_fold env) mseed)
+            $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
         }
     }
   |]
   where
-    name                                = maybe "fold1All" (const "foldAll") mseed
-    (argOut, _,                 setOut) = setters elt
-    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt
-    (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                        = maybe "fold1All" (const "foldAll") mseed
+    (argOut, _, setOut)         = setters elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    inclusive_fold                      = setOut "blockIdx.x" x1
-    exclusive_fold env seed             = [[cstm|
+    inclusive_fold              = setOut "blockIdx.x" x1
+    exclusive_fold x0 env seed  = [[cstm|
       if (len > 0) {
           if (gridDim.x == 1) {
               $stms:(x0 .=. seed)
@@ -146,7 +146,8 @@ mkFoldAll dev elt combine mseed = do
 --
 mkFold :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
 mkFold dev elt combine mseed = do
-  env   <- environment
+  env                                   <- environment
+  (argIn0, x0, decl0, getIn0, getTmp)   <- getters 0 elt
   return $ CUTranslSkel name [cunit|
     extern "C"
     __global__ void
@@ -228,20 +229,19 @@ mkFold dev elt combine mseed = do
              */
             if (threadIdx.x == 0)
             {
-                $stms:(maybe inclusive_fold (exclusive_fold env) mseed)
+                $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
             }
         }
     }
   |]
   where
-    name                                = maybe "fold1" (const "fold") mseed
-    (argOut, _,                 setOut) = setters elt
-    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
-    (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                        = maybe "fold1" (const "fold") mseed
+    (argOut, _, setOut)         = setters elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    inclusive_fold                      = setOut "seg" x1
-    exclusive_fold env seed             = [cstm|
+    inclusive_fold              = setOut "seg" x1
+    exclusive_fold x0 env seed  = [cstm|
       if (interval_size > 0) {
           $stms:(x0 .=. seed)
           $decls:env
@@ -284,7 +284,8 @@ mkFold dev elt combine mseed = do
 --
 mkFoldSeg :: DeviceProperties -> Int -> Type -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
 mkFoldSeg dev dim seg elt combine mseed = do
-  env   <- environment
+  env                                   <- environment
+  (argIn0, x0, decl0, getIn0, getTmp)   <- getters 0 elt
   return $ CUTranslSkel name [cunit|
     $edecl:(cdim "DimOut" dim)
     $edecl:(cdim "DimIn0" dim)
@@ -391,20 +392,19 @@ mkFoldSeg dev dim seg elt combine mseed = do
              */
             if (thread_lane == 0)
             {
-                $stms:(maybe inclusive_fold (exclusive_fold env) mseed)
+                $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
             }
         }
     }
   |]
   where
-    name                                = maybe "fold1Seg" (const "foldSeg") mseed
-    (argOut, _,                 setOut) = setters elt
-    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt
-    (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 (Just $ [cexp| &s_ptrs[vectors_per_block][2] |]) [cexp| blockDim.x |] elt
+    name                        = maybe "fold1Seg" (const "foldSeg") mseed
+    (argOut, _, setOut)         = setters elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 (Just $ [cexp| &s_ptrs[vectors_per_block][2] |]) [cexp| blockDim.x |] elt
     --
-    inclusive_fold                      = setOut "seg" x1
-    exclusive_fold env seed             = [cstm|
+    inclusive_fold              = setOut "seg" x1
+    exclusive_fold x0 env seed  = [cstm|
       if (num_elements > 0) {
           $stms:(x0 .=. seed)
           $decls:env

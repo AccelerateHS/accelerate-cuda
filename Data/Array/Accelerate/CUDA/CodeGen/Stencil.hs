@@ -1,4 +1,4 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE BangPatterns, QuasiQuotes #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -21,6 +21,7 @@ import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 
+import Data.Array.IArray                                ( Array, listArray, (!) )
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
@@ -47,9 +48,10 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 -- To improve performance, the input array(s) are read through the texture
 -- cache.
 --
-mkStencil :: Int -> [Type] -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
-mkStencil dim tyOut tyIn0 stencilIn0 boundary offsets combine = do
-  env   <- environment
+mkStencil :: Int -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
+mkStencil dim tyOut stencilIn0 boundary offsets combine = do
+  env                   <- environment
+  (arrIn0, getIn0)      <- stencilAccess 0 dim stencilIn0 boundary offsets
   return $ CUTranslSkel "stencil" [cunit|
     $edecl:(cdim "Shape" dim)
     $edecls:arrIn0
@@ -78,8 +80,7 @@ mkStencil dim tyOut tyIn0 stencilIn0 boundary offsets combine = do
     }
   |]
   where
-    (argOut, _, setOut)         = setters tyOut
-    (arrIn0,    getIn0)         = stencilAccess 0 dim stencilIn0 tyIn0 boundary offsets
+    (argOut, _, setOut) = setters tyOut
 
 
 
@@ -96,10 +97,12 @@ mkStencil dim tyOut tyIn0 stencilIn0 boundary offsets combine = do
 --          -> Acc (Array ix b)                 -- source array #2
 --          -> Acc (Array ix c)                 -- destination array
 --
-mkStencil2 :: Int -> [Type] -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]]
-                            -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
-mkStencil2 dim tyOut tyIn1 stencilIn1 boundary1 offsets1 tyIn0 stencilIn0 boundary0 offsets0 combine = do
+mkStencil2 :: Int -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]]
+                            -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
+mkStencil2 dim tyOut stencilIn1 boundary1 offsets1 stencilIn0 boundary0 offsets0 combine = do
   env   <- environment
+  (arrIn0, getIn0)      <- stencilAccess 0 dim stencilIn0 boundary0 offsets0
+  (arrIn1, getIn1)      <- stencilAccess 1 dim stencilIn1 boundary1 offsets1
   return $ CUTranslSkel "stencil2" [cunit|
     $edecl:(cdim "Shape" dim)
     $edecls:arrIn0
@@ -132,9 +135,7 @@ mkStencil2 dim tyOut tyIn1 stencilIn1 boundary1 offsets1 tyIn0 stencilIn0 bounda
     }
   |]
   where
-    (argOut, _, setOut)         = setters tyOut
-    (arrIn0,    getIn0)         = stencilAccess 0 dim stencilIn0 tyIn0 boundary0 offsets0
-    (arrIn1,    getIn1)         = stencilAccess 1 dim stencilIn1 tyIn1 boundary1 offsets1
+    (argOut, _, setOut) = setters tyOut
 
 
 --------------------------------------------------------------------------------
@@ -143,39 +144,57 @@ mkStencil2 dim tyOut tyIn1 stencilIn1 boundary1 offsets1 tyIn0 stencilIn0 bounda
 stencilAccess
     :: Int                              -- array de Bruijn index
     -> Int                              -- array dimensionality
-    -> [Type]                           -- stencil array type (texture memory)
-    -> [Type]                           -- stencil element type
+    -> [Type]                           -- array type (texture memory)
     -> Boundary [Exp]                   -- how to handle boundary array access
     -> [[Int]]                          -- all stencil index offsets, top left to bottom right
-    -> ([Definition], String -> [InitGroup])
-stencilAccess base dim stencil elt boundary offsets =
-  ( declArr
-  , \ix -> concat $ zipWith (get ix) offsets varIdx )
+    -> CGM ( [Definition]               -- texture-reference definitions
+           , String -> [InitGroup] )    -- array indexing
+stencilAccess base dim stencil boundary offsets' = do
+  subs          <- subscripts base
+  return ( textures
+         , \ix -> concatMap (get ix) subs )
   where
-    names       = map (\n -> "stencil" ++ shows base "_a" ++ show n) [(0::Int) ..]
-    varArr      = map cvar names
-    declArr     = zipWith cglobal (reverse stencil) names
+    n           = length stencil
+    sh          = "shIn"    ++ show  base
+    arr x       = "stencil" ++ shows base "_a" ++ show (x `mod` n)
+    textures    = zipWith cglobal stencil (map arr [n-1, n-2 .. 0])
     --
-    var i       = 'x':shows base "_a" ++ show i
-    varIdx      = let end  = length offsets * step - 1
-                      step = length elt
-                  in  [end, end - step .. 0]
-    sh          = "shIn" ++ show base
-    get ix at v = case boundary of
+    offsets     :: Array Int [Int]
+    offsets     = let (i,xs)            = rev 0 offsets' []
+                      rev !k []     a   = (k, a)
+                      rev !k (l:ls) a   = rev (k+1) ls (l:a)
+                  in  listArray (0, i-1) xs
+    --
+    get ix (i,t,v) = case boundary of
       Clamp             -> bounded "clamp"
       Mirror            -> bounded "mirror"
       Wrap              -> bounded "wrap"
       Constant c        -> inRange c
       where
-        j               = 'j' : shows base "_a" ++ show v
-        ix' | [i] <- at = [cexp| $id:ix + $int:i |]
-            | otherwise = ccall "shape" (zipWith (\c i -> [cexp| $id:ix . $id:('a':show c) + $int:i |]) [dim-1,dim-2..0] at)
+        j       = 'j':shows base "_a" ++ show i
+        k       = 'k':shows base "_a" ++ show i
         --
-        bounded f       = [cdecl| const int $id:j = toIndex($id:sh, $exp:(ccall f [cvar sh, ix'])); |]
-                        : zipWith3 (\a t i -> [cdecl| const $ty:t $id:(var i) = $exp:(indexArray t a (cvar j)) ; |]) varArr elt [v,v-1..]
+        bounded f
+          = [cdecl| const int $id:j = $exp:ix'; |]
+          : [cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar j)); |]
+          : []
+          where
+            ix'  = case offsets ! div i n of
+              ks | all (== 0) ks        -> [cexp| i |]
+                 | otherwise            ->
+                    let iz = ccall "shape" $ zipWith (\a o -> [cexp| $id:ix . $id:('a':show a) + $int:o |]) [dim-1,dim-2..0] ks
+                    in  [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, iz]) ) |]
         --
-        inRange c       = [cdecl| const int $id:j = inRange($id:sh, $exp:ix'); |]
-                        : zipWith4 (\a t z i -> [cdecl| const $ty:t $id:(var i) = $id:j ? $exp:(indexArray t a (cvar j)) : $exp:z; |]) varArr elt c [v,v-1..]
+        inRange c = case offsets ! div i n of
+          ks | all (== 0) ks    -> [[cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar "i")); |]]
+             | otherwise        -> [cdecl| const typename Shape $id:j = $exp:sh'; |]
+                                 : [cdecl| const typename bool  $id:k = $exp:ok ; |]
+                                 : [cdecl| const $ty:t $id:(show v) = $id:k ? $exp:(indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar j]))
+                                                                            : $exp:(reverse c !! mod i n); |]
+                                 : []
+             where
+               sh' = ccall "shape" $ zipWith (\a o -> [cexp| $id:ix . $id:('a':show a) + $int:o |]) [dim-1,dim-2..0] ks
+               ok  = [cexp| inRange( $id:sh, $id:j ) |]
 
 
 {--

@@ -34,7 +34,8 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 --
 mkMap :: [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkMap tyOut tyIn0 fn = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, _, _, _, getIn0)     <- getters 0 tyIn0
   return $ CUTranslSkel "map" [cunit|
     extern "C"
     __global__ void
@@ -59,8 +60,7 @@ mkMap tyOut tyIn0 fn = do
     }
   |]
   where
-    (argOut, _,       setOut)   = setters tyOut
-    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0
+    (argOut, _, setOut) = setters tyOut
 
 
 -- Apply the given binary function element-wise to the two arrays. The extent of
@@ -76,7 +76,9 @@ mkMap tyOut tyIn0 fn = do
 --
 mkZipWith :: Int -> [Type] -> [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkZipWith dim tyOut tyIn1 tyIn0 fn = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, _, _, _, getIn0)     <- getters 0 tyIn0
+  (argIn1, _, _, _, getIn1)     <- getters 1 tyIn1
   return $ CUTranslSkel "zipWith" [cunit|
     $edecl:(cdim "DimOut" dim)
     $edecl:(cdim "DimIn0" dim)
@@ -112,7 +114,5 @@ mkZipWith dim tyOut tyIn1 tyIn0 fn = do
     }
   |]
   where
-    (argOut, _,       setOut)   = setters tyOut
-    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0
-    (argIn1, _, _, _, getIn1)   = getters 1 tyIn1
+    (argOut, _, setOut) = setters tyOut
 

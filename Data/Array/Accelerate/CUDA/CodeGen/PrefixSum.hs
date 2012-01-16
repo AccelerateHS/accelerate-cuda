@@ -108,7 +108,8 @@ mkScanr = mkScan R
 --
 mkScan :: Direction -> DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
 mkScan dir dev elt combine mseed = do
-  env   <- environment
+  env                                   <- environment
+  (argIn0, x0, decl0, getIn0, _)        <- getters 0 elt
   return $ CUTranslSkel name [cunit|
     extern "C"
     __global__ void
@@ -139,7 +140,7 @@ mkScan dir dev elt combine mseed = do
                 if (blockIdx.x == 0) {
                     $stms:(maybe [] (x0 .=.) mseed)
                 } else {
-                    $stms:(x0 .=. getBlk (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
+                    $stms:(x0 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
                 }
             }
             __syncthreads();
@@ -188,32 +189,44 @@ mkScan dir dev elt combine mseed = do
          */
         if (threadIdx.x == 0 && blockIdx.x == $id:lastBlock)
         {
-            $stms:(setSum "0" x0)
+            $stms:(setSum .=. x0)
             $stms:finalise
         }
     }
   |]
   where
-    name                                = "scan" ++ show dir ++ maybe "1" (const "") mseed
-    (argOut, _,                 setOut) = setters elt
-    (argSum, _,                 setSum) = setters' "d_sum" elt
-    (argBlk, _,  _,     getBlk, _)      = getters' "d_blk" "b0" elt
-    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt
-    (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                        = "scan" ++ show dir ++ maybe "1" (const "") mseed
+    (argOut, _, setOut)         = setters elt
+    setSum                      = totalSum "0"
+    (argSum, totalSum)          = arrays "d_sum" elt
+    (argBlk, blkSum)            = arrays "d_blk" elt
+    (x1,   decl1)               = locals "x1" elt
+    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    exclusive                           = isJust mseed
-    left                                = dir == L
-    firstBlock                          = if     left then "0" else "gridDim.x - 1"
-    lastBlock                           = if not left then "0" else "gridDim.x - 1"
+    exclusive                   = isJust mseed
+    left                        = dir == L
+    firstBlock                  = if     left then "0" else "gridDim.x - 1"
+    lastBlock                   = if not left then "0" else "gridDim.x - 1"
     --
     finalise
-      | Just seed <- mseed              = setOut (if left then "0" else "end - 1") seed
-      | otherwise                       = []
+      | Just seed <- mseed      = setOut (if left then "0" else "end - 1") seed
+      | otherwise               = []
 
 
 --------------------------------------------------------------------------------
 --------------------------------------------------------------------------------
+
+-- Introduce some new array arguments and a way to index them
+--
+arrays :: String -> [Type] -> ([Param], String -> [Exp])
+arrays base elt =
+  ( zipWith (\t a -> [cparam| $ty:(cptr t) $id:a |]) elt arrs
+  , \ix -> map (\a -> [cexp| $id:a [$id:ix] |]) arrs
+  )
+  where
+    n           = length elt
+    arrs        = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
+
 
 -- Scan a block of results in shared memory. We hijack the standard local
 -- variables (x0 and x1) for the combination function. This thread must have

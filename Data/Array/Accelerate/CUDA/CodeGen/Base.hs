@@ -16,7 +16,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   typename, cptr, cvar, ccall, cchar, cintegral, cbool, cdim, cglobal, cshape,
-  setters, setters', getters, getters', shared, indexArray,
+  setters, getters, shared, indexArray,
 
   -- Mutable operations
   (.=.), locals
@@ -29,6 +29,8 @@ import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 import Text.PrettyPrint.Mainland                ( Pretty(..) )
+
+import Data.Array.Accelerate.CUDA.CodeGen.Monad
 
 
 -- Compilation unit
@@ -84,39 +86,35 @@ indexArray ty arr ix
   | otherwise                   = ccall "indexArray"  [arr, ix]
 
 
--- Generate a set of variable bindings and declarations to read from an input
--- array (as function parameter)
+-- Generate a list of variable bindings and declarations to read from the input
+-- arrays.
 --
-getters :: Int                          -- input array number (c.f. de Bruijn index)
-        -> [Type]                       -- the element type
-        -> ( [Param]                    -- function parameters
+-- In the case where the input array is an array of tuples, the function
+-- parameters naturally include all components, but the scalar declarations
+-- include only those indices that are used.
+--
+getters
+    :: Int                              -- base de Bruijn index
+    -> [Type]                           -- the element type
+    -> CGM ( [Param]                    -- function parameters for array(s) input
            , [Exp]                      -- variable names
            , [InitGroup]                -- non-const variable declarations
-           , String -> [Exp]            -- index global input array
-           , String -> [InitGroup])     -- const declaration and initialisation with data at index
-getters base = let b = show base
-               in  getters' ("d_in"++b) ('x':b)
-
-getters' :: String
-         -> String
-         -> [Type]
-         -> ([Param], [Exp], [InitGroup], String -> [Exp], String -> [InitGroup])
-getters' arr_ x_ ts =
-  ( zipWith param ts arrs
-  , map cvar xs
-  , zipWith decls ts xs
-  , \idx -> map (index idx) arrs
-  , \idx -> zipWith3 (get idx) ts arrs xs
-  )
+           , String -> [Exp]            -- index global array
+           , String -> [InitGroup] )    -- const declarations and initialisation from index
+getters base elt = do
+  (is,ts,vars)  <- unzip3 `fmap` subscripts base
+  return
+    ( params
+    , vars
+    , zipWith (\t v -> [cdecl| $ty:t $id:(show v) ; |]) ts vars
+    , \ix -> map (\x -> [cexp| $id:(arr x) [$id:ix] |]) is
+    , \ix -> zipWith3 (\x t v -> [cdecl| const $ty:t $id:(show v) = $id:(arr x) [$id:ix] ; |]) is ts vars
+    )
   where
-    n           = length ts
-    suffixes    = map (\c -> "_a" ++ show c) [n-1, n-2.. 0]
-    arrs        = map (arr_++) suffixes
-    xs          = map (x_  ++) suffixes
-    param t a   = [cparam| const $ty:(cptr t) $id:a |]
-    decls t v   = [cdecl| $ty:t $id:v; |]
-    index i a   = [cexp| $id:a [$id:i] |]
-    get i t a v = [cdecl| const $ty:t $id:v = $id:a [$id:i]; |]
+    arr x       = "d_in" ++ shows base "_a" ++ show x
+    params      =
+      let n = length elt
+      in  zipWith (\t x -> [cparam| const $ty:(cptr t) $id:(arr x) |]) elt [n-1, n-2 .. 0]
 
 
 -- Generate function parameters and corresponding variable names for the
@@ -126,16 +124,13 @@ setters :: [Type]                       -- element type
         -> ( [Param]                    -- function parameter declarations
            , [Exp]                      -- variable name
            , String -> [Exp] -> [Stm])  -- store a value to the given index
-setters = setters' "d_out"
-
-setters' :: String -> [Type] -> ([Param], [Exp], String -> [Exp] -> [Stm])
-setters' base ts =
-  ( zipWith param ts arrs
+setters elt =
+  ( zipWith param elt arrs
   , map cvar arrs
   , \ix e -> zipWith (set ix) arrs e )
   where
-    n           = length ts
-    arrs        = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
+    n           = length elt
+    arrs        = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
     param t x   = [cparam| $ty:(cptr t) $id:x |]
     set ix a x  = [cstm| $id:a [$id:ix] = $exp:x; |]
 

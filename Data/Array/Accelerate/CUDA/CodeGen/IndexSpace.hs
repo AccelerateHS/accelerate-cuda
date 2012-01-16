@@ -92,7 +92,8 @@ mkGenerate dimOut tyOut fn = do
 --
 mkPermute :: DeviceProperties -> Int -> Int -> [Type] -> [Int] -> [Exp] -> [Exp] -> CGM CUTranslSkel
 mkPermute dev dimOut dimIn0 types sizeof combine index = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, _, _, _, getIn0)     <- getters 0 types
   return $ CUTranslSkel "permute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
@@ -132,7 +133,6 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
   |]
   where
     (argOut, arrOut,  setOut)   = setters types
-    (argIn0, _, _, _, getIn0)   = getters 0 types
     (x1, _)                     = locals "x1" types
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
     dst                         = project dimOut "dst" index
@@ -185,7 +185,8 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
 --
 mkBackpermute :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkBackpermute dimOut dimIn0 types index = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, x0, _, _, getIn0)    <- getters 0 types
   return $ CUTranslSkel "backpermute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
@@ -221,10 +222,9 @@ mkBackpermute dimOut dimIn0 types index = do
     }
   |]
   where
-    (argOut, _,        setOut)  = setters types
-    (argIn0, x0, _, _, getIn0)  = getters 0 types
-    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
-    src                         = project dimIn0 "src" index
+    (argOut, _, setOut) = setters types
+    dst                 = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+    src                 = project dimIn0 "src" index
 
 
 -- Index an array with a generalised, multidimensional array index. The result
@@ -238,7 +238,8 @@ mkBackpermute dimOut dimIn0 types index = do
 --
 mkSlice :: Int -> Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkSlice dimSl dimCo dimIn0 types slix = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, x0, _, _, getIn0)    <- getters 0 types
   return $ CUTranslSkel "slice" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "CoSlice"  dimCo)
@@ -276,9 +277,8 @@ mkSlice dimSl dimCo dimIn0 types slix = do
     }
   |]
   where
-    (argOut, _,        setOut)  = setters types
-    (argIn0, x0, _, _, getIn0)  = getters 0 types
-    src                         = project dimIn0 "sl" slix
+    (argOut, _, setOut) = setters types
+    src                 = project dimIn0 "sl" slix
 
 
 -- Replicate an array across one or more dimensions as specified by the
@@ -291,7 +291,8 @@ mkSlice dimSl dimCo dimIn0 types slix = do
 --
 mkReplicate :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
 mkReplicate dimSl dimOut types slix = do
-  env   <- environment
+  env                           <- environment
+  (argIn0, x0, _, _, getIn0)    <- getters 0 types
   return $ CUTranslSkel "replicate" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "SliceDim" dimOut)
@@ -327,9 +328,8 @@ mkReplicate dimSl dimOut types slix = do
     }
   |]
   where
-    (argOut, _,        setOut)  = setters types
-    (argIn0, x0, _, _, getIn0)  = getters 0 types
-    src                         = project dimSl "src" slix
+    (argOut, _, setOut) = setters types
+    src                 = project dimSl "src" slix
 
 
 --------------------------------------------------------------------------------

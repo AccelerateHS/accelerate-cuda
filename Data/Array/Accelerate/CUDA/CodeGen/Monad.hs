@@ -12,7 +12,7 @@
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
   runCGM, CGM, Environment,
-  lam, bind, environment
+  lam, bind, use, environment, subscripts
 
 ) where
 
@@ -26,13 +26,19 @@ import Language.C
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 
+import Data.IntMap                              ( IntMap )
+import Data.Sequence                            ( Seq )
+import qualified Data.IntMap                    as IM
+import qualified Data.Sequence                  as S
+
 
 type CGM                = State Gamma
 type Environment        = [InitGroup]
 data Gamma              = Gamma
   {
     _unique     :: !Int,
-    _bindings   :: Environment
+    _bindings   :: Environment,
+    _variables  :: Seq (IntMap (Type, Exp))
   }
   deriving Show
 
@@ -40,7 +46,7 @@ $(mkLabels [''Gamma])
 
 
 runCGM :: CGM a -> a
-runCGM = flip evalState (Gamma 0 [])
+runCGM = flip evalState (Gamma 0 [] (S.replicate 2 IM.empty))
 
 -- Introduce an expression of a given type and name into the environment. Return
 -- an expression that can be used in place of the thing just bound (i.e. the
@@ -73,4 +79,16 @@ fresh :: CGM String
 fresh = do
   n     <- gets unique <* modify unique (+1)
   return $ 'v':show n
+
+-- Mark a variable at a given base and tuple index as being used.
+--
+use :: Int -> Int -> Type -> Exp -> CGM ()
+use base prj ty var = modify variables (S.adjust (IM.insert prj (ty,var)) base)
+
+-- Return the tuple components of a given variable that are actually used
+--
+subscripts :: Int -> CGM [(Int, Type, Exp)]
+subscripts base = map swizzle . IM.toList . flip S.index base <$> gets variables
+  where
+    swizzle (i, (t,e)) = (i,t,e)
 
