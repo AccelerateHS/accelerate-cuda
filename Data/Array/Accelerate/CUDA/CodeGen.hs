@@ -284,8 +284,8 @@ codegenExp exp =
                    in  use v 0 t x >> return [x]
       _         -> return $ map var [n-1, n-2 .. 0]
       where
-        base    = 'x':show v
-        var x   = [cexp| $id:(base ++ "_a" ++ show x) |]
+        base    = 'x':shows v "_a"
+        var x   = [cexp| $id:(base ++ show x) |]
         ty      = codegenTupleType (Sugar.eltType (undefined::t))
         n       = length ty
         v       = idxToInt i
@@ -360,7 +360,7 @@ codegenExp exp =
 
     IndexTail ix        -> do
       ix'               <- codegenExp ix
-      return (tail ix')
+      return (init ix')
 
 codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
     -- Array shape and element indexing
