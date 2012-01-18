@@ -416,7 +416,7 @@ codegenAccType =  codegenTupleType . accType
 codegenExpType :: OpenExp aenv env t -> [C.Type]
 codegenExpType =  codegenTupleType . expType
 
-codegenAccSegmentsType :: OpenAcc aenv (Sugar.Segments) -> C.Type
+codegenAccSegmentsType :: OpenAcc aenv (Sugar.Segments i) -> C.Type
 codegenAccSegmentsType seg
   | [s] <- codegenAccType seg   = s
   | otherwise                   = INTERNAL_ERROR(error) "codegenAcc" "non-scalar segment type"

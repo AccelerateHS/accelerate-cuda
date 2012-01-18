@@ -387,12 +387,12 @@ foldOp kernel bindings aenv (Array sh0 in0)
       return res
 
 foldSegOp, fold1SegOp
-    :: forall aenv dim e. Shape dim
+    :: forall aenv dim e i. Shape dim
     => AccKernel (Array (dim:.Int) e)
     -> [AccBinding aenv]
     -> Val aenv
     -> Array (dim:.Int) e
-    -> Segments
+    -> Segments i
     -> CIO (Array (dim:.Int) e)
 fold1SegOp kernel bindings aenv in0@(Array (_,sz) _) seg
   = BOUNDS_CHECK(check) "fold1Seg" "empty array" (sz > 0)

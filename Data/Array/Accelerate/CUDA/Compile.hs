@@ -357,10 +357,11 @@ prepareAcc rootAcc = travA rootAcc
 
     -- Auxiliary
     --
-    segments :: OpenAcc aenv Segments -> OpenAcc aenv Segments
-    segments = OpenAcc . Scanl plus (Const ((),0))
+    segments :: forall aenv i. (Elt i, IsIntegral i)
+             => OpenAcc aenv (Segments i) -> OpenAcc aenv (Segments i)
+    segments = OpenAcc . Scanl plus (Const (fromElt (0::i)))
 
-    plus :: PreOpenFun OpenAcc () aenv (Int -> Int -> Int)
+    plus :: (Elt i, IsIntegral i) => PreOpenFun OpenAcc () aenv (i -> i -> i)
     plus = Lam (Lam (Body (PrimAdd numType
                           `PrimApp`
                           Tuple (NilTup `SnocTup` Var (SuccIdx ZeroIdx)
