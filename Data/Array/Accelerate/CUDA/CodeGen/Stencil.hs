@@ -149,7 +149,7 @@ stencilAccess
     -> [[Int]]                          -- all stencil index offsets, top left to bottom right
     -> CGM ( [Definition]               -- texture-reference definitions
            , String -> [InitGroup] )    -- array indexing
-stencilAccess base dim stencil boundary offsets' = do
+stencilAccess base dim stencil boundary shx = do
   subs          <- subscripts base
   return ( textures
          , \ix -> concatMap (get ix) subs )
@@ -160,10 +160,7 @@ stencilAccess base dim stencil boundary offsets' = do
     textures    = zipWith cglobal stencil (map arr [n-1, n-2 .. 0])
     --
     offsets     :: Array Int [Int]
-    offsets     = let (i,xs)            = rev 0 offsets' []
-                      rev !k []     a   = (k, a)
-                      rev !k (l:ls) a   = rev (k+1) ls (l:a)
-                  in  listArray (0, i-1) xs
+    offsets     = listArray (0, length shx-1) shx
     --
     get ix (i,t,v) = case boundary of
       Clamp             -> bounded "clamp"
