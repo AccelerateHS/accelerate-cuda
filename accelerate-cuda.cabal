@@ -86,7 +86,7 @@ Library
                         mainland-pretty         >= 0.1,
                         mtl                     >= 2.0,
                         pretty                  >= 1.0,
-                        process                 >= 1.1,
+                        process                 >= 1.0,
                         srcloc                  >= 0.1,
                         symbol                  >= 0.1,
                         transformers            >= 0.2
