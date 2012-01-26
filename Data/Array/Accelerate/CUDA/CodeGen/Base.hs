@@ -64,7 +64,7 @@ typename name = Type (DeclSpec [] [] (Tnamed (Id name noSrcLoc) noSrcLoc) noSrcL
 cchar :: Char -> Exp
 cchar c = [cexp|$char:c|]
 
-cintegral :: Integral a => a -> Exp
+cintegral :: (Integral a, Show a) => a -> Exp
 cintegral n = [cexp|$int:n|]
 
 cbool :: Bool -> Exp

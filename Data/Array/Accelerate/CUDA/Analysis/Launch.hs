@@ -17,7 +17,6 @@ module Data.Array.Accelerate.CUDA.Analysis.Launch (
 
 -- friends
 import Data.Array.Accelerate.AST
-import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Analysis.Type
 
 -- library

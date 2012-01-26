@@ -16,7 +16,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.Stencil (
 ) where
 
 import Data.Loc
-import Data.List
 import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
