@@ -51,8 +51,9 @@ import System.IO.Unsafe
 import System.Process
 import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderCompact )
 import Data.ByteString.Internal                         ( w2c )
+import qualified Data.HashSet                           as Set
+import qualified Data.HashTable.IO                      as HT
 import qualified Data.ByteString.Lazy                   as L
-import qualified Data.HashTable.IO                      as Hash
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 
@@ -77,315 +78,168 @@ compileAfun1 _                =
 
 
 prepareAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-prepareAcc rootAcc = travA rootAcc
+prepareAcc rootAcc = traverseAcc rootAcc
   where
     -- Traverse an open array expression in depth-first order
     --
-    travA :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-    travA acc@(OpenAcc pacc) =
-      case pacc of
+    -- The applicative combinators are used to gloss over that we are passing
+    -- around the AST nodes together with a set of free variable indices that
+    -- are merged at every step.
+    --
+    traverseAcc :: forall aenv a. OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
+    traverseAcc acc@(OpenAcc pacc) = do
 
+      let exec :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
+          exec (var, eacc) = do
+            kernel      <- build acc var
+            return      $  ExecAcc (FL kernel Nil) var eacc
+
+          node :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
+          node (_, eacc) = return $ ExecAcc noKernel mempty eacc
+
+      case pacc of
+        --
         -- Environment manipulations
         --
-        Avar ix -> return $ node (Avar ix)
+        Avar ix                 -> node $ pure (Avar ix)
 
+        --
         -- Let bindings
         --
-        Alet2 a b -> do
-          a'            <- travA a
-          b'            <- travA b
-          return $ node (Alet2 a' b')
+        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a  <*> traverseAcc b
+        Alet2 a b               -> node . pure =<< Alet2        <$> traverseAcc a  <*> traverseAcc b
+        Apply f a               -> node . pure =<< Apply        <$> compileAfun1 f <*> traverseAcc a
+        PairArrays a b          -> node =<< liftA2 PairArrays   <$> travA a <*> travA b
+        Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
 
-        Alet a b  -> do
-          a'            <- travA a
-          b'            <- travA b
-          return $ node (Alet a' b')
-
-        Apply (Alam (Abody b)) a -> do
-          a'            <- travA a
-          b'            <- travA b
-          return $ node (Apply (Alam (Abody b')) a')
-        Apply _                _ -> error "I made you a cookie, but I eated it"
-
-        PairArrays arr1 arr2 -> do
-          arr1'         <- travA arr1
-          arr2'         <- travA arr2
-          return $ node (PairArrays arr1' arr2')
-
-        Acond c t e -> do
-          (c', _)       <- travE c []
-          t'            <- travA t
-          e'            <- travA e
-          return $ node (Acond c' t' e')
-
+        --
         -- Array injection
         --
-        Use arr@(Array _ _) -> do
-          useArray arr
-          return $ node (Use arr)
+        Use arr@(Array _ _)     -> useArray arr >> node (pure (Use arr))
 
+        --
         -- Computation nodes
         --
-        Reshape sh a -> do
-          (sh', _)      <- travE sh []
-          a'            <- travA a
-          return $ node (Reshape sh' a')
-
-        Unit e  -> do
-          (e', _)       <- travE e []
-          return $ node (Unit e')
-
-        Generate e f -> do
-          (e', _)       <- travE e []
-          (f', var1)    <- travF f []
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Generate e' f')
-
-        Replicate slix e a -> do
-          (e', _)       <- travE e []
-          a'            <- travA a
-          kernel        <- build acc []
-          return $ exec kernel [] (Replicate slix e' a')
-
-        Index slix a e -> do
-          a'            <- travA a
-          (e', _)       <- travE e []
-          kernel        <- build acc []
-          return $ exec kernel [] (Index slix a' e')
-
-        Map f a -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Map f' a')
-
-        ZipWith f a b -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          b'            <- travA b
-          kernel        <- build acc var1
-          return $ exec kernel var1 (ZipWith f' a' b')
-
-        Fold f e a -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          kernel        <- build acc var2
-          return $ exec kernel var2 (Fold f' e' a')
-
-        Fold1 f a -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Fold1 f' a')
-
-        FoldSeg f e a s -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          s'            <- travA (segments s)
-          kernel        <- build acc var2
-          return $ exec kernel var2 (FoldSeg f' e' a' s')
-
-        Fold1Seg f a s -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          s'            <- travA (segments s)
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Fold1Seg f' a' s')
+        Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
+        Unit e                  -> node =<< liftA  Unit                 <$> travE e
+        Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
+        Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
+        Index slix a e          -> exec =<< liftA2 (Index slix)         <$> travA a <*> travE e
+        Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a
+        ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travA a <*> travA b
+        Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travA a
+        Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travA a
+        FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travA a <*> travA (segments s)
+        Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travA a <*> travA (segments s)
+        Permute f a g b         -> exec =<< liftA4 Permute              <$> travF f <*> travA a <*> travF g <*> travA b
+        Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travA a
+        Stencil f b a           -> exec =<< liftA2 (flip Stencil b)     <$> travF f <*> travA a
+        Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
+          where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         Scanl f e a -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var2
-          scan1         <- build (OpenAcc (Scanl1 f a))  var2
-          scan          <- build acc var2
-          return $ ExecAcc (FL add (scan1 :> scan :> Nil)) var2 (Scanl f' e' a')
+          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
+          add           <- build (OpenAcc (Fold1  f mat)) var
+          scan1         <- build (OpenAcc (Scanl1 f a))   var
+          return        $  ExecAcc (FL add (scan1 :> scan :> Nil)) var eacc
 
         Scanl' f e a -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var2
-          scan1         <- build (OpenAcc (Scanl1 f a))  var2
-          scan          <- build acc var2
-          return $ ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var2 (Scanl' f' e' a')
+          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanl' <$> travF f <*> travE e <*> travA a
+          add           <- build (OpenAcc (Fold1  f mat)) var
+          scan1         <- build (OpenAcc (Scanl1 f a))   var
+          return        $  ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var eacc
 
         Scanl1 f a -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var1
-          scan1         <- build acc var1
-          return $ ExecAcc (FL add (scan1 :> Nil)) var1 (Scanl1 f' a')
+          ExecAcc (FL scan1 _) var eacc <- exec =<< liftA2 Scanl1 <$> travF f <*> travA a
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (FL add (scan1 :> Nil)) var eacc
 
         Scanr f e a -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var2
-          scan1         <- build (OpenAcc (Scanr1 f a))  var2
-          scan          <- build acc var2
-          return $ ExecAcc (FL add (scan1 :> scan :> Nil)) var2 (Scanr f' e' a')
+          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanr <$> travF f <*> travE e <*> travA a
+          add           <- build (OpenAcc (Fold1  f mat)) var
+          scan1         <- build (OpenAcc (Scanr1 f a))   var
+          return        $  ExecAcc (FL add (scan1 :> scan :> Nil)) var eacc
 
         Scanr' f e a -> do
-          (f', var1)    <- travF f []
-          (e', var2)    <- travE e var1
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var2
-          scan1         <- build (OpenAcc (Scanr1 f a))  var2
-          scan          <- build acc var2
-          return $ ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var2 (Scanr' f' e' a')
+          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanr' <$> travF f <*> travE e <*> travA a
+          add           <- build (OpenAcc (Fold1  f mat)) var
+          scan1         <- build (OpenAcc (Scanr1 f a))   var
+          return        $  ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var eacc
 
         Scanr1 f a -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var1
-          scan1         <- build acc var1
-          return $ ExecAcc (FL add (scan1 :> Nil)) var1 (Scanr1 f' a')
+          ExecAcc (FL scan1 _) var eacc <- exec =<< liftA2 Scanr1 <$> travF f <*> travA a
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (FL add (scan1 :> Nil)) var eacc
 
-        Permute f a g b -> do
-          (f', var1)    <- travF f []
-          (g', var2)    <- travF g var1
-          a'            <- travA a
-          b'            <- travA b
-          kernel        <- build acc var2
-          return $ exec kernel var2 (Permute f' a' g' b')
+      where
+        travA :: OpenAcc aenv' a' -> CIO (AccBindings aenv', ExecOpenAcc aenv' a')
+        travA a = pure <$> traverseAcc a
 
-        Backpermute e f a -> do
-          (e', _)       <- travE e []
-          (f', var2)    <- travF f []
-          a'            <- travA a
-          kernel        <- build acc var2
-          return $ exec kernel var2 (Backpermute e' f' a')
+        travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF (Body b)  = liftA Body <$> travE b
+        travF (Lam  f)  = liftA Lam  <$> travF f
 
-        Stencil f b a -> do
-          (f', var1)    <- travF f []
-          a'            <- travA a
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Stencil f' b a')
+        segments :: forall i. (Elt i, IsIntegral i)
+                 => OpenAcc aenv (Segments i) -> OpenAcc aenv (Segments i)
+        segments = OpenAcc . Scanl plus (Const (fromElt (0::i)))
 
-        Stencil2 f b1 a1 b2 a2 -> do
-          (f', var1)    <- travF f []
-          a1'           <- travA a1
-          a2'           <- travA a2
-          kernel        <- build acc var1
-          return $ exec kernel var1 (Stencil2 f' b1 a1' b2 a2')
+        plus :: (Elt i, IsIntegral i) => PreOpenFun OpenAcc () aenv (i -> i -> i)
+        plus = Lam (Lam (Body (PrimAdd numType
+                              `PrimApp`
+                              Tuple (NilTup `SnocTup` Var (SuccIdx ZeroIdx)
+                                            `SnocTup` Var ZeroIdx))))
 
+        mat :: Elt e => OpenAcc aenv (Array DIM2 e)
+        mat = OpenAcc $ Use (Array (((),0),0) undefined)
+
+        noKernel :: FullList (AccKernel a)
+        noKernel =  FL (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
 
     -- Traverse a scalar expression
     --
     travE :: OpenExp env aenv e
-          -> [AccBinding aenv]
-          -> CIO (PreOpenExp ExecOpenAcc env aenv e, [AccBinding aenv])
-    travE exp vars =
+          -> CIO (AccBindings aenv, PreOpenExp ExecOpenAcc env aenv e)
+    travE exp =
       case exp of
-        Let a b         -> do
-          (a', var1) <- travE a []
-          (b', var2) <- travE b var1
-          return (Let a' b', var2)
+        Var ix                  -> return $ pure (Var ix)
+        Const c                 -> return $ pure (Const c)
+        PrimConst c             -> return $ pure (PrimConst c)
+        IndexAny                -> return $ pure IndexAny
+        IndexNil                -> return $ pure IndexNil
+        --
+        Let a b                 -> liftA2 Let           <$> travE a <*> travE b
+        IndexCons t h           -> liftA2 IndexCons     <$> travE t <*> travE h
+        IndexHead h             -> liftA  IndexHead     <$> travE h
+        IndexTail t             -> liftA  IndexTail     <$> travE t
+        Tuple t                 -> liftA  Tuple         <$> travT t
+        Prj ix e                -> liftA  (Prj ix)      <$> travE e
+        Cond p t e              -> liftA3 Cond          <$> travE p <*> travE t <*> travE e
+        PrimApp f e             -> liftA  (PrimApp f)   <$> travE e
+        IndexScalar a e         -> liftA2 IndexScalar   <$> travA a <*> travE e
+        Shape a                 -> liftA  Shape         <$> travA a
+        Size a                  -> liftA  Size          <$> travA a
+      where
+        travA :: (Shape sh, Elt e)
+              => OpenAcc aenv (Array sh e) -> CIO (AccBindings aenv, ExecOpenAcc aenv (Array sh e))
+        travA a = do
+          a'    <- traverseAcc a
+          return $ (bind a', a')
 
-        Var ix          -> return (Var ix, vars)
-        Const c         -> return (Const c, vars)
-        PrimConst c     -> return (PrimConst c, vars)
-        IndexAny        -> return (IndexAny, vars)
-        IndexNil        -> return (IndexNil, vars)
-        IndexCons ix i  -> do
-          (ix', var1) <- travE ix vars
-          (i',  var2) <- travE i  var1
-          return (IndexCons ix' i', var2)
+        travT :: Tuple (OpenExp env aenv) t
+              -> CIO (AccBindings aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
+        travT NilTup        = return (pure NilTup)
+        travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
 
-        IndexHead ix    -> do
-          (ix', var1) <- travE ix vars
-          return (IndexHead ix', var1)
-
-        IndexTail ix    -> do
-          (ix', var1) <- travE ix vars
-          return (IndexTail ix', var1)
-
-        Tuple t         -> do
-          (t', var1) <- travT t vars
-          return (Tuple t', var1)
-
-        Prj idx e       -> do
-          (e', var1) <- travE e vars
-          return (Prj idx e', var1)
-
-        Cond p t e      -> do
-          (p', var1) <- travE p vars
-          (t', var2) <- travE t var1
-          (e', var3) <- travE e var2
-          return (Cond p' t' e', var3)
-
-        PrimApp f e     -> do
-          (e', var1) <- travE e vars
-          return (PrimApp f e', var1)
-
-        IndexScalar a e -> do
-          a'         <- travA a
-          (e', var2) <- travE e vars
-          return (IndexScalar a' e', bind a' `cons` var2)
-
-        Shape a         -> do
-          a' <- travA a
-          return (Shape a', bind a' `cons` vars)
-
-        ShapeSize e     -> do
-          (e', var1) <- travE e vars
-          return (ShapeSize e', var1)
+        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> AccBindings aenv
+        bind (ExecAcc _ _ (Avar ix)) = AccBindings ( Set.singleton (ArrayVar ix) )
+        bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
 
 
-    travT :: Tuple (OpenExp env aenv) t
-          -> [AccBinding aenv]
-          -> CIO (Tuple (PreOpenExp ExecOpenAcc env aenv) t, [AccBinding aenv])
-    travT NilTup        vars = return (NilTup, vars)
-    travT (SnocTup t e) vars = do
-      (e', var1) <- travE e vars
-      (t', var2) <- travT t var1
-      return (SnocTup t' e', var2)
-
-    travF :: OpenFun env aenv t
-          -> [AccBinding aenv]
-          -> CIO (PreOpenFun ExecOpenAcc env aenv t, [AccBinding aenv])
-    travF (Body b) vars = do
-      (b', var1) <- travE b vars
-      return (Body b', var1)
-    travF (Lam  f) vars = do
-      (f', var1) <- travF f vars
-      return (Lam f', var1)
-
-
-    -- Auxiliary
-    --
-    segments :: forall aenv i. (Elt i, IsIntegral i)
-             => OpenAcc aenv (Segments i) -> OpenAcc aenv (Segments i)
-    segments = OpenAcc . Scanl plus (Const (fromElt (0::i)))
-
-    plus :: (Elt i, IsIntegral i) => PreOpenFun OpenAcc () aenv (i -> i -> i)
-    plus = Lam (Lam (Body (PrimAdd numType
-                          `PrimApp`
-                          Tuple (NilTup `SnocTup` Var (SuccIdx ZeroIdx)
-                                        `SnocTup` Var ZeroIdx))))
-
-    mat :: Elt a => OpenAcc aenv (Array DIM2 a)
-    mat = OpenAcc $ Use (Array (((),0),0) undefined)
-
-    node :: PreOpenAcc ExecOpenAcc aenv a -> ExecOpenAcc aenv a
-    node = ExecAcc noKernel []
-
-    exec :: AccKernel a -> [AccBinding aenv] -> PreOpenAcc ExecOpenAcc aenv a -> ExecOpenAcc aenv a
-    exec k = ExecAcc (FL k Nil)
-
-    noKernel :: FullList (AccKernel a)
-    noKernel =  FL (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
-
-    cons :: AccBinding aenv -> [AccBinding aenv] -> [AccBinding aenv]
-    cons x xs | x `notElem` xs = x : xs
-              | otherwise      = xs
-
-    bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> AccBinding aenv
-    bind (ExecAcc _ _ (Avar ix)) = ArrayVar ix
-    bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
+-- Applicative
+-- -----------
+--
+liftA4 :: Applicative f => (a -> b -> c -> d -> e) -> f a -> f b -> f c -> f d -> f e
+liftA4 f a b c d = f <$> a <*> b <*> c <*> d
 
 
 -- Compilation
@@ -396,7 +250,7 @@ prepareAcc rootAcc = travA rootAcc
 -- evaluates and blocks on the external compiler only once the compiled object
 -- is truly needed.
 --
-build :: OpenAcc aenv a -> [AccBinding aenv] -> CIO (AccKernel a)
+build :: OpenAcc aenv a -> AccBindings aenv -> CIO (AccKernel a)
 build acc fvar = do
   dev           <- gets deviceProps
   table         <- gets kernelTable
@@ -438,7 +292,7 @@ link :: KernelTable -> KernelKey -> IO CUDA.Module
 link table key =
   let intErr = INTERNAL_ERROR(error) "link" "missing kernel entry"
   in do
-    (KernelEntry cufile stat) <- fromMaybe intErr `fmap` Hash.lookup table key
+    (KernelEntry cufile stat) <- fromMaybe intErr `fmap` HT.lookup table key
     case stat of
       Right mdl -> return mdl
       Left  pid -> do
@@ -458,7 +312,7 @@ link table key =
 
         -- update hash table
         --
-        Hash.insert table key (KernelEntry cufile (Right mdl))
+        HT.insert table key (KernelEntry cufile (Right mdl))
         return mdl
 
 
@@ -467,10 +321,10 @@ link table key =
 compile :: KernelTable
         -> CUDA.DeviceProperties
         -> OpenAcc aenv a
-        -> [AccBinding aenv]
+        -> AccBindings aenv
         -> CIO (String, KernelKey)
 compile table dev acc fvar = do
-  exists        <- isJust `fmap` liftIO (Hash.lookup table key)
+  exists        <- isJust `fmap` liftIO (HT.lookup table key)
   unless exists $ do
     message     $  unlines [ show key, map w2c (L.unpack code) ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
@@ -480,7 +334,7 @@ compile table dev acc fvar = do
       L.hPut hdl code                 `finally`     hClose hdl
       createProcess (proc nvcc flags) `onException` removeFile file
     --
-    liftIO $ Hash.insert table key (KernelEntry file (Left pid))
+    liftIO $ HT.insert table key (KernelEntry file (Left pid))
   --
   return (entry, key)
   where

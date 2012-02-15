@@ -12,7 +12,7 @@
 module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
-  AccKernel(..), AccBinding(..), ExecAcc, ExecAfun, ExecOpenAcc(..),
+  AccKernel(..), AccBindings(..), ArrayVar(..), ExecAcc, ExecAfun, ExecOpenAcc(..),
   List(..), FullList(..), retag
 
 ) where
@@ -26,6 +26,9 @@ import qualified Foreign.CUDA.Analysis                  as CUDA
 
 -- system
 import Text.PrettyPrint
+import Data.Hashable
+import Data.Monoid
+import qualified Data.HashSet                           as Set
 
 
 -- A non-empty list of binary objects will be used to execute a kernel. We keep
@@ -53,13 +56,22 @@ retag (Kernel x m f o l) = Kernel x m f o l
 -- Array computations that were embedded within scalar expressions, and will be
 -- required to execute the kernel; i.e. bound to texture references or similar.
 --
-data AccBinding aenv where
+newtype AccBindings aenv = AccBindings ( Set.HashSet (ArrayVar aenv) )
+
+instance Monoid (AccBindings aenv) where
+  mempty                                = AccBindings ( Set.empty )
+  AccBindings x `mappend` AccBindings y = AccBindings ( Set.union x y )
+
+data ArrayVar aenv where
   ArrayVar :: (Shape sh, Elt e)
            => Idx aenv (Array sh e)
-           -> AccBinding aenv
+           -> ArrayVar aenv
 
-instance Eq (AccBinding aenv) where
+instance Eq (ArrayVar aenv) where
   ArrayVar ix1 == ArrayVar ix2 = idxToInt ix1 == idxToInt ix2
+
+instance Hashable (ArrayVar aenv) where
+  hash (ArrayVar ix) = hash (idxToInt ix)
 
 
 -- Interleave compilation & execution state annotations into an open array
@@ -67,7 +79,7 @@ instance Eq (AccBinding aenv) where
 --
 data ExecOpenAcc aenv a where
   ExecAcc :: FullList (AccKernel a)             -- executable binary objects
-          -> [AccBinding aenv]                  -- auxiliary arrays from the environment the kernel needs access to
+          -> AccBindings aenv                   -- auxiliary arrays from the environment the kernel needs access to
           -> PreOpenAcc ExecOpenAcc aenv a      -- the actual computation
           -> ExecOpenAcc aenv a                 -- the recursive knot
 
@@ -89,9 +101,9 @@ prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
 prettyExecAcc :: PrettyAcc ExecOpenAcc
-prettyExecAcc alvl wrap (ExecAcc _ fv pacc) =
+prettyExecAcc alvl wrap (ExecAcc _ (AccBindings fv) pacc) =
   let base = prettyPreAcc prettyExecAcc alvl wrap pacc
-      ann  = braces (freevars fv)
+      ann  = braces (freevars (Set.toList fv))
   in case pacc of
        Avar _         -> base
        Let  _ _       -> base

@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, CPP, GADTs #-}
+{-# LANGUAGE BangPatterns, CPP, GADTs, PatternGuards #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Table
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell

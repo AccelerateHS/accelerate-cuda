@@ -83,13 +83,14 @@ Library
                         hashable                >= 1.1,
                         hashtables              >= 1.0.1,
                         language-c-quote        >= 0.3,
-                        mainland-pretty         >= 0.1,
+                        mainland-pretty         >= 0.1.1,
                         mtl                     >= 2.0,
                         pretty                  >= 1.0,
                         process                 >= 1.0,
                         srcloc                  >= 0.1,
                         symbol                  >= 0.1,
-                        transformers            >= 0.2
+                        transformers            >= 0.2,
+                        unordered-containers    >= 0.1.4
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
 

@@ -24,6 +24,7 @@ import Control.Applicative                                      hiding ( Const )
 import Text.PrettyPrint.Mainland
 import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
+import qualified Data.HashSet                                   as Set
 import qualified Language.C                                     as C
 import qualified Language.C.Syntax
 import qualified Foreign.Storable                               as F
@@ -68,14 +69,14 @@ import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 codegenAcc :: forall aenv a.
               CUDA.DeviceProperties
            -> OpenAcc aenv a
-           -> [AccBinding aenv]
+           -> AccBindings aenv
            -> CUTranslSkel
-codegenAcc dev acc vars =
-  let fvars                     = concatMap (liftAcc acc) vars
+codegenAcc dev acc (AccBindings vars) =
+  let fvars rest                = Set.foldr (\v vs -> liftAcc acc v ++ vs) rest vars
       extras                    = [cedecl| $esc:("#include <accelerate_cuda_extras.h>") |]
       CUTranslSkel entry code   = runCGM $ codegen acc
   in
-  CUTranslSkel entry (extras : fvars ++ code)
+  CUTranslSkel entry (extras : fvars code)
   where
     codegen :: OpenAcc aenv a -> CGM CUTranslSkel
     codegen (OpenAcc pacc) =
@@ -209,7 +210,7 @@ codegenAcc dev acc vars =
     -- Generate binding points (texture references and shapes) for arrays lifted
     -- from scalar expressions
     --
-    liftAcc :: OpenAcc aenv a -> AccBinding aenv -> [C.Definition]
+    liftAcc :: OpenAcc aenv a -> ArrayVar aenv -> [C.Definition]
     liftAcc _ (ArrayVar idx) =
       let avar    = OpenAcc (Avar idx)
           idx'    = show $ deBruijnToInt idx

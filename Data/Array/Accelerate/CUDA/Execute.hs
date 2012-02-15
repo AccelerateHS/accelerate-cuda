@@ -43,6 +43,7 @@ import Control.Applicative                                      hiding ( Const )
 import Control.Monad
 import Control.Monad.Trans
 import System.IO.Unsafe
+import qualified Data.HashSet					as Set
 
 import Foreign                                                  ( Ptr, Storable )
 import qualified Foreign                                        as F
@@ -239,7 +240,7 @@ unitOp v = newArray Z (const v)
 generateOp
     :: (Shape dim, Elt e)
     => AccKernel (Array dim e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> dim
     -> CIO (Array dim e)
@@ -254,7 +255,7 @@ generateOp kernel bindings aenv sh = do
 replicateOp
     :: forall aenv e dim sl co slix. (Shape dim, Elt slix)
     => AccKernel (Array dim e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
     -> slix
@@ -280,7 +281,7 @@ replicateOp kernel bindings aenv sliceIndex slix (Array sh0 in0) = do
 indexOp
     :: forall sl co slix aenv dim e. (Shape sl, Elt slix)
     => AccKernel (Array sl e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
     -> Array dim e
@@ -314,7 +315,7 @@ indexOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
 mapOp
     :: Elt e
     => AccKernel (Array dim e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array dim e'
     -> CIO (Array dim e)
@@ -329,7 +330,7 @@ mapOp kernel bindings aenv (Array sh0 in0) = do
 zipWithOp
     :: forall aenv dim a b c. Elt c
     => AccKernel (Array dim c)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array dim a
     -> Array dim b
@@ -348,7 +349,7 @@ zipWithOp kernel bindings aenv (Array sh1 in1) (Array sh0 in0) = do
 foldOp, fold1Op
     :: forall dim e aenv. Shape dim
     => AccKernel (Array dim e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array (dim:.Int) e
     -> CIO (Array dim e)
@@ -389,7 +390,7 @@ foldOp kernel bindings aenv (Array sh0 in0)
 foldSegOp, fold1SegOp
     :: forall aenv dim e i. Shape dim
     => AccKernel (Array (dim:.Int) e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array (dim:.Int) e
     -> Segments i
@@ -415,7 +416,7 @@ scanOp
     :: forall aenv e. Elt e
     => ScanDirection
     -> FullList (AccKernel (Vector e))
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
@@ -479,7 +480,7 @@ scanOp _ _ _ _ _ = error "I'll just pretend to hug you until you get here."
 scan'Op
     :: forall aenv e. Elt e
     => FullList (AccKernel (Vector e, Scalar e))
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e, Scalar e)
@@ -525,7 +526,7 @@ scan'Op _ _ _ _ = error "If I promise not to kill you, can I have a hug?"
 scan1Op
     :: forall aenv e. Elt e
     => FullList (AccKernel (Vector e))
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
@@ -570,7 +571,7 @@ scan1Op _ _ _ _ = error "If you get wet, you'll get sick."
 permuteOp
     :: forall aenv dim dim' e. Elt e
     => AccKernel (Array dim' e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array dim' e             -- default values
     -> Array dim e              -- permuted array
@@ -588,7 +589,7 @@ permuteOp kernel bindings aenv in0@(Array sh0 _) (Array sh1 in1) = do
 backpermuteOp
     :: forall aenv dim dim' e. (Shape dim', Elt e)
     => AccKernel (Array dim' e)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> dim'
     -> Array dim e
@@ -605,7 +606,7 @@ backpermuteOp kernel bindings aenv dim' (Array sh0 in0) = do
 stencilOp
     :: forall aenv dim a b. Elt b
     => AccKernel (Array dim b)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array dim a
     -> CIO (Array dim b)
@@ -620,7 +621,7 @@ stencilOp kernel@(Kernel _ mdl _ _ _) bindings aenv in0@(Array sh0 _) = do
 stencil2Op
     :: forall aenv dim a b c. Elt c
     => AccKernel (Array dim c)
-    -> [AccBinding aenv]
+    -> AccBindings aenv
     -> Val aenv
     -> Array dim a
     -> Array dim b
@@ -724,14 +725,14 @@ executeTuple (t `SnocTup` e) env aenv = (,) <$> executeTuple   t env aenv
 -- Array references in scalar code
 -- -------------------------------
 
-bindLifted :: CUDA.Module -> Val aenv -> [AccBinding aenv] -> CIO ()
-bindLifted mdl aenv = mapM_ (bindAcc mdl aenv)
+bindLifted :: CUDA.Module -> Val aenv -> AccBindings aenv -> CIO ()
+bindLifted mdl aenv (AccBindings vars) = mapM_ (bindAcc mdl aenv) (Set.toList vars)
 
 
 bindAcc
     :: CUDA.Module
     -> Val aenv
-    -> AccBinding aenv
+    -> ArrayVar aenv
     -> CIO ()
 bindAcc mdl aenv (ArrayVar idx) =
   let idx'        = show $ deBruijnToInt idx
@@ -827,7 +828,7 @@ configure (Kernel _ !_ !_ !_ !launchConfig) !n = launchConfig n
 --
 execute :: Marshalable args
         => AccKernel a                  -- The binary module implementing this kernel
-        -> [AccBinding aenv]            -- Array variables embedded in scalar expressions
+        -> AccBindings aenv             -- Array variables embedded in scalar expressions
         -> Val aenv
         -> Int
         -> args
