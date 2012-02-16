@@ -137,6 +137,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
+        -- TODO: write helper functions to clean these up
         Scanl f e a -> do
           ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
           add           <- build (OpenAcc (Fold1  f mat)) var
