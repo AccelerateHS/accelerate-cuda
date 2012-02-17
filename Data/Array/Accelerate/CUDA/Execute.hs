@@ -43,7 +43,7 @@ import Control.Applicative                                      hiding ( Const )
 import Control.Monad
 import Control.Monad.Trans
 import System.IO.Unsafe
-import qualified Data.HashSet					as Set
+import qualified Data.HashSet                                   as Set
 
 import Foreign                                                  ( Ptr, Storable )
 import qualified Foreign                                        as F

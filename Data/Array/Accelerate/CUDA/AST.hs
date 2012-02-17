@@ -27,7 +27,7 @@ import qualified Foreign.CUDA.Analysis                  as CUDA
 -- system
 import Text.PrettyPrint
 import Data.Hashable
-import Data.Monoid
+import Data.Monoid                                      ( Monoid(..) )
 import qualified Data.HashSet                           as Set
 
 

@@ -13,13 +13,16 @@
 
 module Data.Array.Accelerate.CUDA (
 
-  -- * Generate and execute CUDA code for an array expression
-  Arrays, run, run1, stream
+  -- * Execute an array expression using CUDA
+  Arrays, run, run1, stream,
+
+  -- * Asynchronous execution
+  Async, run', run1', wait, poll, cancel
 
 ) where
 
 -- standard library
-import Prelude                                          hiding (catch)
+import Prelude                                          hiding ( catch )
 import Control.Exception
 import Control.Applicative
 import Control.Concurrent
@@ -27,8 +30,8 @@ import System.IO.Unsafe
 import Foreign.CUDA.Driver.Error
 
 -- friends
-import Data.Array.Accelerate.AST                        (Arrays(..), ArraysR(..))
-import Data.Array.Accelerate.Smart                      (Acc, convertAcc, convertAccFun1)
+import Data.Array.Accelerate.AST                        ( Arrays(..), ArraysR(..) )
+import Data.Array.Accelerate.Smart                      ( Acc, convertAcc, convertAccFun1 )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Compile
@@ -42,9 +45,13 @@ import Data.Array.Accelerate.CUDA.Execute
 
 -- |Compile and run a complete embedded array program using the CUDA backend
 --
-run :: Arrays a => Acc a -> a
 {-# NOINLINE run #-}
-run a = unsafePerformIO $ async execute >>= wait
+run :: Arrays a => Acc a -> a
+run a = unsafePerformIO $ evaluate (run' a) >>= wait
+
+{-# NOINLINE run' #-}
+run' :: Arrays a => Acc a -> Async a
+run' a = unsafePerformIO $ async execute
   where
     acc     = convertAcc a
     execute = evalCUDA (compileAcc acc >>= executeAcc >>= collect)
@@ -56,9 +63,17 @@ run a = unsafePerformIO $ async execute >>= wait
 -- can be used to improve performance in cases where the array program is
 -- constant between invocations.
 --
-run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 {-# NOINLINE run1 #-}
-run1 f = \a -> unsafePerformIO $ async (execute a) >>= wait
+run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
+run1 f = let go = run1' f
+         in \a -> unsafePerformIO $ wait (go a)
+
+-- TLM: We need to be very careful with run1 and run1' to ensure that the
+--      returned closure shortcuts directly to the execution phase.
+--
+{-# NOINLINE run1' #-}
+run1' :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
+run1' f = \a -> unsafePerformIO $ async (execute a)
   where
     acc       = convertAccFun1 f
     !afun     = unsafePerformIO $ evalCUDA (compileAfun1 acc)
@@ -95,7 +110,7 @@ collect arrs = collectR arrays arrs
 -- errors.
 --
 
-data Async a = Async ThreadId (MVar (Either SomeException a))
+data Async a = Async !ThreadId !(MVar (Either SomeException a))
 
 async :: IO a -> IO (Async a)
 async action = do
@@ -108,6 +123,10 @@ async action = do
 wait :: Async a -> IO a
 wait (Async _ var) = either throwIO return =<< readMVar var
 
--- cancel :: Async a -> IO ()
--- cancel (Async tid _) = throwTo tid ThreadKilled
+poll :: Async a -> IO (Maybe a)
+poll (Async _ var) =
+  maybe (return Nothing) (either throwIO (return . Just)) =<< tryTakeMVar var
+
+cancel :: Async a -> IO ()
+cancel (Async tid _) = throwTo tid ThreadKilled
 
