@@ -19,16 +19,18 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 import Prelude                                          hiding ( lookup )
 import Data.IORef                                       ( IORef, newIORef, readIORef, mkWeakIORef )
 import Data.Maybe                                       ( isJust )
-import Data.Hashable                                    ( Hashable, hash )
+import Data.Hashable                                    ( Hashable(..) )
 import Data.Typeable                                    ( Typeable, gcast )
 import Control.Monad                                    ( unless )
+import Control.Applicative                              ( (<$>), (<*>) )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( Weak, mkWeak, deRefWeak, finalize )
 import System.Mem.StableName                            ( StableName, makeStableName, hashStableName )
+import Foreign.Ptr                                      ( ptrToIntPtr )
 import Foreign.CUDA.Ptr                                 ( DevicePtr )
 
 import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Data.HashTable.IO                      as Hash
+import qualified Data.HashTable.IO                      as HT
 
 import Data.Array.Accelerate.Array.Data                 ( ArrayData )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc )
@@ -49,14 +51,15 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc 
 -- return Nothing. References from 'val' to the key are ignored (see the
 -- semantics of weak pointers in the documentation).
 --
-type HashTable key val = Hash.BasicHashTable key val
+type HashTable key val = HT.BasicHashTable key val
 type MT                = IORef ( HashTable HostArray DeviceArray )
 data MemoryTable       = MemoryTable !MT !(Weak MT)
 
 
 data HostArray where
   HostArray :: Typeable e
-            => StableName (ArrayData e)
+            => CUDA.Context
+            -> StableName (ArrayData e)
             -> HostArray
 
 data DeviceArray where
@@ -65,14 +68,15 @@ data DeviceArray where
               -> DeviceArray
 
 instance Eq HostArray where
-  HostArray a1 == HostArray a2
+  HostArray _ a1 == HostArray _ a2
     = maybe False (== a2) (gcast a1)
 
 instance Hashable HostArray where
-  hash (HostArray sn) = hash sn
+  hash (HostArray (CUDA.Context p) sn) =
+    fromIntegral (ptrToIntPtr p) `hashWithSalt` sn
 
 instance Show HostArray where
-  show (HostArray sn) = "Array #" ++ show (hashStableName sn)
+  show (HostArray _ sn) = "Array #" ++ show (hashStableName sn)
 
 
 -- Referencing arrays
@@ -83,7 +87,7 @@ instance Show HostArray where
 --
 new :: IO MemoryTable
 new = do
-  tbl  <- Hash.new
+  tbl  <- HT.new
   ref  <- newIORef tbl
   weak <- mkWeakIORef ref (table_finalizer tbl)
   return $! MemoryTable ref weak
@@ -94,7 +98,7 @@ new = do
 lookup :: (Typeable a, Typeable b) => MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
 lookup (MemoryTable ref _) !arr = do
   sa <- makeStableArray arr
-  mw <- withIORef ref (`Hash.lookup` sa)
+  mw <- withIORef ref (`HT.lookup` sa)
   case mw of
     Nothing              -> trace ("lookup/not found: " ++ show sa) $ return Nothing
     Just (DeviceArray w) -> do
@@ -115,7 +119,7 @@ insert (MemoryTable ref weak_ref) !arr !ptr = do
   dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ref key ptr)
   tbl  <- readIORef ref
   debug $ "insert: " ++ show key
-  Hash.insert tbl key dev
+  HT.insert tbl key dev
 
 
 -- Removing entries
@@ -131,7 +135,7 @@ reclaim (MemoryTable _ weak_ref) = do
   case mr of
     Nothing  -> return ()
     Just ref -> withIORef ref $ \tbl ->
-      flip Hash.mapM_ tbl $ \(_,DeviceArray w) -> do
+      flip HT.mapM_ tbl $ \(_,DeviceArray w) -> do
         alive <- isJust `fmap` deRefWeak w
         unless alive $ finalize w
 
@@ -142,7 +146,7 @@ finalizer !weak_ref !key !ptr = do
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> trace nom $ return ()
-    Just ref -> trace del $ withIORef ref (`Hash.delete` key)
+    Just ref -> trace del $ withIORef ref (`HT.delete` key)
   --
   where del = "finalise: " ++ show key
         nom = "finalise/dead table: " ++ show key
@@ -151,7 +155,7 @@ finalizer !weak_ref !key !ptr = do
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()
 table_finalizer !tbl
   = trace "table finaliser"
-  $ Hash.mapM_ (\(_,DeviceArray w) -> finalize w) tbl
+  $ HT.mapM_ (\(_,DeviceArray w) -> finalize w) tbl
 
 
 -- Miscellaneous
@@ -159,7 +163,7 @@ table_finalizer !tbl
 
 {-# INLINE makeStableArray #-}
 makeStableArray :: Typeable a => ArrayData a -> IO HostArray
-makeStableArray !arr = HostArray `fmap` makeStableName arr
+makeStableArray !arr = HostArray <$> CUDA.get <*> makeStableName arr
 
 {-# INLINE withIORef #-}
 withIORef :: IORef a -> (a -> IO b) -> IO b
