@@ -14,10 +14,11 @@
 module Data.Array.Accelerate.CUDA (
 
   -- * Execute an array expression using CUDA
-  Arrays, run, run1, stream,
+  Arrays, run, run1, stream, runIn, run1In, streamIn,
 
   -- * Asynchronous execution
-  Async, run', run1', wait, poll, cancel
+  Async, wait, poll, cancel,
+  runAsync, run1Async, runAsyncIn, run1AsyncIn
 
 ) where
 
@@ -27,6 +28,7 @@ import Control.Exception
 import Control.Applicative
 import Control.Concurrent
 import System.IO.Unsafe
+import Foreign.CUDA.Driver                              ( Context )
 import Foreign.CUDA.Driver.Error
 
 -- friends
@@ -45,16 +47,22 @@ import Data.Array.Accelerate.CUDA.Execute
 
 -- |Compile and run a complete embedded array program using the CUDA backend
 --
-{-# NOINLINE run #-}
 run :: Arrays a => Acc a -> a
-run a = unsafePerformIO $ evaluate (run' a) >>= wait
+run = runIn defaultContext
 
-{-# NOINLINE run' #-}
-run' :: Arrays a => Acc a -> Async a
-run' a = unsafePerformIO $ async execute
+runAsync :: Arrays a => Acc a -> Async a
+runAsync = runAsyncIn defaultContext
+
+{-# NOINLINE runIn #-}
+runIn :: Arrays a => Context -> Acc a -> a
+runIn ctx a = unsafePerformIO $ evaluate (runAsyncIn ctx a) >>= wait
+
+{-# NOINLINE runAsyncIn #-}
+runAsyncIn :: Arrays a => Context -> Acc a -> Async a
+runAsyncIn ctx a = unsafePerformIO $ async execute
   where
     acc     = convertAcc a
-    execute = evalCUDA (compileAcc acc >>= executeAcc >>= collect)
+    execute = evalCUDA ctx (compileAcc acc >>= executeAcc >>= collect)
               `catch`
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
@@ -63,21 +71,27 @@ run' a = unsafePerformIO $ async execute
 -- can be used to improve performance in cases where the array program is
 -- constant between invocations.
 --
-{-# NOINLINE run1 #-}
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
-run1 f = let go = run1' f
-         in \a -> unsafePerformIO $ wait (go a)
+run1 = run1In defaultContext
 
--- TLM: We need to be very careful with run1 and run1' to ensure that the
+run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
+run1Async = run1AsyncIn defaultContext
+
+{-# NOINLINE run1In #-}
+run1In :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
+run1In ctx f = let go = run1AsyncIn ctx f
+               in \a -> unsafePerformIO $ wait (go a)
+
+-- TLM: We need to be very careful with run1 and run1Async to ensure that the
 --      returned closure shortcuts directly to the execution phase.
 --
-{-# NOINLINE run1' #-}
-run1' :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
-run1' f = \a -> unsafePerformIO $ async (execute a)
+{-# NOINLINE run1AsyncIn #-}
+run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
+run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
     acc       = convertAccFun1 f
-    !afun     = unsafePerformIO $ evalCUDA (compileAfun1 acc)
-    execute a = evalCUDA (executeAfun1 afun a >>= collect)
+    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun1 acc)
+    execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
                 \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
@@ -86,7 +100,11 @@ run1' f = \a -> unsafePerformIO $ async (execute a)
 -- collecting results as we go
 --
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
-stream f arrs = map (run1 f) arrs
+stream f arrs = streamIn defaultContext f arrs
+
+streamIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
+streamIn ctx f arrs = let go = run1In ctx f
+                      in  map go arrs
 
 
 -- Copy from device to host, and decrement the usage counter. This last step

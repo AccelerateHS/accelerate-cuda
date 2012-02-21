@@ -20,30 +20,29 @@ module Data.Array.Accelerate.CUDA.State (
   CIO, KernelTable, KernelKey, KernelEntry(KernelEntry),
 
   -- Evaluating computations
-  evalCUDA, deviceProps, memoryTable, kernelTable, kernelName,
-  kernelStatus
+  evalCUDA, defaultContext, deviceProps,
+  memoryTable, kernelTable, kernelName, kernelStatus
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose )
-import Data.Array.Accelerate.CUDA.Array.Table
+import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
 import Numeric
 import Data.List
 import Data.Label
-import Data.Tuple
-import Control.Concurrent.MVar
-import Control.Monad
+import Control.Exception
 import Data.ByteString                                  ( ByteString )
-import Control.Monad.State.Strict                       ( StateT(..) )
+import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
 import System.IO.Unsafe
 import Text.PrettyPrint
-import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Data.HashTable.IO                      as Hash
+import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
+import qualified Foreign.CUDA.Driver.Context            as CUDA ( device )
+import qualified Data.HashTable.IO                      as HT
 
 #ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
 import Data.Binary                                      ( encodeFile, decodeFile )
@@ -62,25 +61,23 @@ import Paths_accelerate                                 ( getDataDir )
 -- computation and no more, but we can not do that. Instead, this is keyed to
 -- the generated kernel code.
 --
-type KernelTable = Hash.BasicHashTable KernelKey KernelEntry
+type KernelTable = HT.BasicHashTable KernelKey KernelEntry
 
 type KernelKey   = ByteString
 data KernelEntry = KernelEntry
   {
-    _kernelName   :: FilePath,
-    _kernelStatus :: Either ProcessHandle CUDA.Module
+    _kernelName         :: FilePath,
+    _kernelStatus       :: Either ProcessHandle CUDA.Module
   }
-
 
 -- The state token for accelerated CUDA array operations
 --
-type CIO       = StateT CUDAState IO
-data CUDAState = CUDAState
+type CIO        = StateT CUDAState IO
+data CUDAState  = CUDAState
   {
-    _deviceProps   :: !CUDA.DeviceProperties,
-    _deviceContext :: !CUDA.Context,
-    _kernelTable   :: !KernelTable,
-    _memoryTable   :: !MemoryTable
+    _deviceProps        :: CUDA.DeviceProperties,
+    _kernelTable        :: !KernelTable,
+    _memoryTable        :: !MemoryTable
   }
 
 $(mkLabels [''CUDAState, ''KernelEntry])
@@ -91,31 +88,36 @@ $(mkLabels [''CUDAState, ''KernelEntry])
 
 -- |Evaluate a CUDA array computation
 --
-evalCUDA :: CIO a -> IO a
-evalCUDA acc = modifyMVar onta (liftM swap . runStateT acc)
+evalCUDA :: CUDA.Context -> CIO a -> IO a
+evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
   where
-    -- hic sunt dracones: truly unsafe use of unsafePerformIO
-    {-# NOINLINE onta #-}
-    onta = unsafePerformIO
-         $ do s <- initialise
-              r <- newMVar s
-              addMVarFinalizer r $ CUDA.destroy (getL deviceContext s)
-              return r
+    teardown _  = CUDA.pop
+    setup       = do
+      CUDA.push ctx
+      dev       <- CUDA.device
+      prp       <- CUDA.props dev
+      return $ initialise { _deviceProps = prp }
 
 
 -- Select and initialise the CUDA device, and create a new execution context.
 -- This will be done only once per program execution, as initialising the CUDA
 -- context is relatively expensive.
 --
-initialise :: IO CUDAState
-initialise = do
+{-# NOINLINE initialise #-}
+initialise :: CUDAState
+initialise = unsafePerformIO $ do
+  knl   <- HT.new
+  mem   <- MT.new
+  return $ CUDAState undefined knl mem
+
+{-# NOINLINE defaultContext #-}
+defaultContext :: CUDA.Context
+defaultContext = unsafePerformIO $ do
   CUDA.initialise []
   (dev,prp)     <- selectBestDevice
-  ctx           <- CUDA.create dev [CUDA.SchedAuto]
-  knl           <- Hash.new
-  mem           <- new
+  _             <- CUDA.create dev [CUDA.SchedAuto]
   message verbose $ deviceInfo dev prp
-  return $ CUDAState prp ctx knl mem
+  CUDA.pop
 
 
 -- Debugging
@@ -170,7 +172,7 @@ indexFileName = do
 saveIndexFile :: CUDAState -> IO ()
 saveIndexFile s = do
   ind <- indexFileName
-  encodeFile ind . map (second _kernelName) =<< Hash.toList (_kernelTable s)
+  encodeFile ind . map (second _kernelName) =<< HT.toList (_kernelTable s)
 
 -- Read the kernel index map file (if it exists), loading modules into the
 -- current context
@@ -181,7 +183,7 @@ loadIndexFile = do
   x <- doesFileExist f
   e <- if x then mapM reload =<< decodeFile f
             else return []
-  (,length e) <$> Hash.fromList hashAccKey e
+  (,length e) <$> HT.fromList hashAccKey e
   where
     reload (k,n) = (k,) . KernelEntry n . Right <$> CUDA.loadFile (n `replaceExtension` ".cubin")
 #endif
