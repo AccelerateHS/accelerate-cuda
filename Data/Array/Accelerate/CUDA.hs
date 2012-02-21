@@ -8,13 +8,17 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 --
--- This module implements the CUDA backend for the embedded array language.
+-- This module implements the CUDA backend for the embedded array language
+-- Accelerate. Expressions are on-line compiled into CUDA code, compiled, and
+-- executed in parallel on the GPU.
 --
 
 module Data.Array.Accelerate.CUDA (
 
-  -- * Execute an array expression using CUDA
-  Arrays, run, run1, stream, runIn, run1In, streamIn,
+  Arrays,
+
+  -- * Synchronous execution
+  run, run1, stream, runIn, run1In, streamIn,
 
   -- * Asynchronous execution
   Async, wait, poll, cancel,
@@ -45,7 +49,7 @@ import Data.Array.Accelerate.CUDA.Execute
 -- Accelerate: CUDA
 -- ----------------
 
--- |Compile and run a complete embedded array program using the CUDA backend
+-- | Compile and run a complete embedded array program using the CUDA backend
 --
 run :: Arrays a => Acc a -> a
 run = runIn defaultContext
@@ -53,6 +57,9 @@ run = runIn defaultContext
 runAsync :: Arrays a => Acc a -> Async a
 runAsync = runAsyncIn defaultContext
 
+-- | As 'run', but execute using the specified device context rather than
+-- creating a new context for an automatically selected device
+--
 {-# NOINLINE runIn #-}
 runIn :: Arrays a => Context -> Acc a -> a
 runIn ctx a = unsafePerformIO $ evaluate (runAsyncIn ctx a) >>= wait
