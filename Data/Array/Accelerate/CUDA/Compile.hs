@@ -23,6 +23,7 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 
 import Data.Array.Accelerate.CUDA.AST
+import Data.Array.Accelerate.CUDA.FullList              as FL
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
@@ -53,6 +54,7 @@ import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderC
 import Data.ByteString.Internal                         ( w2c )
 import qualified Data.HashSet                           as Set
 import qualified Data.HashTable.IO                      as HT
+import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Lazy                   as L
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -92,7 +94,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
       let exec :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
           exec (var, eacc) = do
             kernel      <- build acc var
-            return      $  ExecAcc (FL kernel Nil) var eacc
+            return      $  ExecAcc (FL.singleton () kernel) var eacc
 
           node :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
           node (_, eacc) = return $ ExecAcc noKernel mempty eacc
@@ -139,38 +141,38 @@ prepareAcc rootAcc = traverseAcc rootAcc
 
         -- TODO: write helper functions to clean these up
         Scanl f e a -> do
-          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
+          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
           add           <- build (OpenAcc (Fold1  f mat)) var
           scan1         <- build (OpenAcc (Scanl1 f a))   var
-          return        $  ExecAcc (FL add (scan1 :> scan :> Nil)) var eacc
+          return        $  ExecAcc (cons () add $ cons () scan1 $ FL.singleton () scan) var eacc
 
         Scanl' f e a -> do
-          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanl' <$> travF f <*> travE e <*> travA a
+          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl' <$> travF f <*> travE e <*> travA a
           add           <- build (OpenAcc (Fold1  f mat)) var
           scan1         <- build (OpenAcc (Scanl1 f a))   var
-          return        $  ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var eacc
+          return        $  ExecAcc (cons () (retag add) $ cons () (retag scan1) $ FL.singleton () scan) var eacc
 
         Scanl1 f a -> do
-          ExecAcc (FL scan1 _) var eacc <- exec =<< liftA2 Scanl1 <$> travF f <*> travA a
+          ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanl1 <$> travF f <*> travA a
           add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (FL add (scan1 :> Nil)) var eacc
+          return        $  ExecAcc (cons () add $ FL.singleton () scan1) var eacc
 
         Scanr f e a -> do
-          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanr <$> travF f <*> travE e <*> travA a
+          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr <$> travF f <*> travE e <*> travA a
           add           <- build (OpenAcc (Fold1  f mat)) var
           scan1         <- build (OpenAcc (Scanr1 f a))   var
-          return        $  ExecAcc (FL add (scan1 :> scan :> Nil)) var eacc
+          return        $  ExecAcc (cons () add $ cons () scan1 $ FL.singleton () scan) var eacc
 
         Scanr' f e a -> do
-          ExecAcc (FL scan _) var eacc  <- exec =<< liftA3 Scanr' <$> travF f <*> travE e <*> travA a
+          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr' <$> travF f <*> travE e <*> travA a
           add           <- build (OpenAcc (Fold1  f mat)) var
           scan1         <- build (OpenAcc (Scanr1 f a))   var
-          return        $  ExecAcc (FL (retag add) (retag scan1 :> scan :> Nil)) var eacc
+          return        $  ExecAcc (cons () (retag add) $ cons () (retag scan1) $ FL.singleton () scan) var eacc
 
         Scanr1 f a -> do
-          ExecAcc (FL scan1 _) var eacc <- exec =<< liftA2 Scanr1 <$> travF f <*> travA a
+          ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanr1 <$> travF f <*> travA a
           add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (FL add (scan1 :> Nil)) var eacc
+          return        $  ExecAcc (cons () add $ FL.singleton () scan1) var eacc
 
       where
         travA :: OpenAcc aenv' a' -> CIO (AccBindings aenv', ExecOpenAcc aenv' a')
@@ -193,8 +195,8 @@ prepareAcc rootAcc = traverseAcc rootAcc
         mat :: Elt e => OpenAcc aenv (Array DIM2 e)
         mat = OpenAcc $ Use (Array (((),0),0) undefined)
 
-        noKernel :: FullList (AccKernel a)
-        noKernel =  FL (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
+        noKernel :: FullList () (AccKernel a)
+        noKernel =  FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
 
     -- Traverse a scalar expression
     --
@@ -293,14 +295,26 @@ link :: KernelTable -> KernelKey -> IO CUDA.Module
 link table key =
   let intErr = INTERNAL_ERROR(error) "link" "missing kernel entry"
   in do
-    (KernelEntry cufile stat) <- fromMaybe intErr `fmap` HT.lookup table key
+    ctx                         <- CUDA.get
+    (KernelEntry cufile stat)   <- fromMaybe intErr `fmap` HT.lookup table key
     case stat of
-      Right mdl -> return mdl
-      Left  pid -> do
+      Right (KernelObject bin active)
+        | Just mdl <- FL.lookup ctx active      -> return mdl
+        | otherwise                             -> do
+            message "re-linking module for current context"
+            mdl         <- CUDA.loadData bin
+            let obj     =  KernelObject bin (FL.cons ctx mdl active)
+            HT.insert table key (KernelEntry cufile (Right obj))
+            return mdl
+      --
+      Left  pid         -> do
         -- wait for compiler to finish and load binary object
         --
+        message "waiting for nvcc..."
         waitFor pid
-        mdl <- CUDA.loadFile (replaceExtension cufile ".cubin")
+        bin     <- B.readFile (replaceExtension cufile ".cubin")
+        mdl     <- CUDA.loadData bin
+        let obj =  KernelObject bin (FL.singleton ctx mdl)
 
 #ifndef ACCELERATE_CUDA_PERSISTENT_CACHE
         -- remove build products
@@ -313,7 +327,7 @@ link table key =
 
         -- update hash table
         --
-        HT.insert table key (KernelEntry cufile (Right mdl))
+        HT.insert table key (KernelEntry cufile (Right obj))
         return mdl
 
 
@@ -341,7 +355,7 @@ compile table dev acc fvar = do
   where
     cunit       = codegenAcc dev acc fvar
     entry       = show cunit
-    key         = hashlazy code
+    key         = (CUDA.computeCapability dev, hashlazy code)
     code        = toLazyByteString
                 . layout . renderCompact $ ppr cunit
     --

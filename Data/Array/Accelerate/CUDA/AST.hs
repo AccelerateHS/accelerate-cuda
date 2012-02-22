@@ -13,7 +13,7 @@ module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
   AccKernel(..), AccBindings(..), ArrayVar(..), ExecAcc, ExecAfun, ExecOpenAcc(..),
-  List(..), FullList(..), retag
+  retag
 
 ) where
 
@@ -21,6 +21,7 @@ module Data.Array.Accelerate.CUDA.AST (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 
@@ -36,10 +37,6 @@ import qualified Data.HashSet                           as Set
 -- and execution information.
 --
 data AccKernel a = Kernel String CUDA.Module CUDA.Fun CUDA.Occupancy (Int -> (Int,Int,Int))
-
-data FullList a  = FL a !(List a)
-data List a      = a :> !(List a) | Nil
-infixr 5 :>
 
 -- The kernel lists are monomorphic, so sometimes we need to change the phantom
 -- type of the object code.
@@ -78,7 +75,7 @@ instance Hashable (ArrayVar aenv) where
 -- computation AST
 --
 data ExecOpenAcc aenv a where
-  ExecAcc :: FullList (AccKernel a)             -- executable binary objects
+  ExecAcc :: FL.FullList () (AccKernel a)       -- executable binary objects
           -> AccBindings aenv                   -- auxiliary arrays from the environment the kernel needs access to
           -> PreOpenAcc ExecOpenAcc aenv a      -- the actual computation
           -> ExecOpenAcc aenv a                 -- the recursive knot

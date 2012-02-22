@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP, GADTs, PatternGuards, TemplateHaskell #-}
 {-# LANGUAGE TupleSections, TypeFamilies, TypeOperators #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}   -- CUDA.Context
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
@@ -17,7 +18,7 @@
 module Data.Array.Accelerate.CUDA.State (
 
   -- Types
-  CIO, KernelTable, KernelKey, KernelEntry(KernelEntry),
+  CIO, KernelTable, KernelKey, KernelEntry(KernelEntry), KernelObject(KernelObject),
 
   -- Evaluating computations
   evalCUDA, defaultContext, deviceProps,
@@ -26,6 +27,7 @@ module Data.Array.Accelerate.CUDA.State (
 ) where
 
 -- friends
+import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose )
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
@@ -41,7 +43,8 @@ import System.Process                                   ( ProcessHandle )
 import System.IO.Unsafe
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
-import qualified Foreign.CUDA.Driver.Context            as CUDA ( device )
+import qualified Foreign.CUDA.Driver.Context            as CUDA
+import qualified Foreign.CUDA.Analysis                  as CUDA
 import qualified Data.HashTable.IO                      as HT
 
 #ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
@@ -55,6 +58,11 @@ import Paths_accelerate                                 ( getDataDir )
 -- implementation, which is either a reference to the external compiler (nvcc)
 -- or the resulting binary module.
 --
+-- Note that since we now support running in multiple contexts, we also need to
+-- keep track of
+--   a) the compute architecture the code was compiled for
+--   b) which contexts have linked the code
+--
 -- We aren't concerned with true (typed) equality of an OpenAcc expression,
 -- since we largely want to disregard the array environment; we really only want
 -- to assert the type and index of those variables that are accessed by the
@@ -63,11 +71,17 @@ import Paths_accelerate                                 ( getDataDir )
 --
 type KernelTable = HT.BasicHashTable KernelKey KernelEntry
 
-type KernelKey   = ByteString
+type KernelKey   = (CUDA.Compute, ByteString)
 data KernelEntry = KernelEntry
   {
     _kernelName         :: FilePath,
-    _kernelStatus       :: Either ProcessHandle CUDA.Module
+    _kernelStatus       :: Either ProcessHandle KernelObject
+  }
+
+data KernelObject = KernelObject
+  {
+    _binaryData         :: !ByteString,
+    _activeContexts     :: !(FullList CUDA.Context CUDA.Module)
   }
 
 -- The state token for accelerated CUDA array operations
@@ -79,6 +93,9 @@ data CUDAState  = CUDAState
     _kernelTable        :: !KernelTable,
     _memoryTable        :: !MemoryTable
   }
+
+instance Eq CUDA.Context where
+  CUDA.Context p1 == CUDA.Context p2    = p1 == p2
 
 $(mkLabels [''CUDAState, ''KernelEntry])
 

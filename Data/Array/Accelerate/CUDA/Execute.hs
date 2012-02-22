@@ -30,6 +30,7 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar                   hiding
    (dim, size, index, shapeToList, sliceIndex)
@@ -88,7 +89,7 @@ executeAfun1 _ _                   =
 -- Evaluate an open array expression
 --
 executeOpenAcc :: ExecOpenAcc aenv a -> Val aenv -> CIO a
-executeOpenAcc (ExecAcc kernelList@(FL kernel _) bindings acc) aenv =
+executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
   case acc of
     --
     -- (1) Array introduction
@@ -415,12 +416,12 @@ data ScanDirection = L | R
 scanOp
     :: forall aenv e. Elt e
     => ScanDirection
-    -> FullList (AccKernel (Vector e))
+    -> FullList () (AccKernel (Vector e))
     -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
-scanOp dir (FL kfold1' (kscan1' :> kscan :> Nil)) bindings aenv (Array sh0 in0) = do
+scanOp dir (FL _ kfold1' (Cons _ kscan1' (Cons _ kscan Nil))) bindings aenv (Array sh0 in0) = do
   let (_,num_intervals,_)       =  configure kscan num_elements
   a_out@(Array _ out)           <- allocateArray (Z :. num_elements + 1)
   (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
@@ -479,12 +480,12 @@ scanOp _ _ _ _ _ = error "I'll just pretend to hug you until you get here."
 
 scan'Op
     :: forall aenv e. Elt e
-    => FullList (AccKernel (Vector e, Scalar e))
+    => FullList () (AccKernel (Vector e, Scalar e))
     -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e, Scalar e)
-scan'Op (FL kfold1' (kscan1' :> kscan :> Nil)) bindings aenv (Array sh0 in0) = do
+scan'Op (FL _ kfold1' (Cons _ kscan1' (Cons _ kscan Nil))) bindings aenv (Array sh0 in0) = do
   let (_,num_intervals,_)       =  configure kscan num_elements
   (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
   a_out@(Array _ out)           <- allocateArray (Z :. num_elements)
@@ -525,12 +526,12 @@ scan'Op _ _ _ _ = error "If I promise not to kill you, can I have a hug?"
 
 scan1Op
     :: forall aenv e. Elt e
-    => FullList (AccKernel (Vector e))
+    => FullList () (AccKernel (Vector e))
     -> AccBindings aenv
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
-scan1Op (FL kfold1' (kscan1 :> Nil)) bindings aenv (Array sh0 in0) = do
+scan1Op (FL _ kfold1' (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
   let (_,num_intervals,_)       =  configure kscan1 num_elements
   (Array _ sum)                 <- allocateArray Z                      :: CIO (Scalar e)
   (Array _ blk)                 <- allocateArray (Z :. num_intervals)   :: CIO (Vector e)
