@@ -647,7 +647,7 @@ codegenNumScalar (IntegralNumType ty) = codegenIntegralScalar ty
 codegenNumScalar (FloatingNumType ty) = codegenFloatingScalar ty
 
 codegenIntegralScalar :: IntegralType a -> a -> C.Exp
-codegenIntegralScalar ty | IntegralDict <- integralDict ty = cintegral
+codegenIntegralScalar ty x | IntegralDict <- integralDict ty = [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
 
 codegenFloatingScalar :: FloatingType a -> a -> C.Exp
 codegenFloatingScalar (TypeFloat   _) x = C.Const (FloatConst (shows x "f") (toRational x) noSrcLoc) noSrcLoc
