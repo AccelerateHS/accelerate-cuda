@@ -844,7 +844,7 @@ execute kernel@(Kernel _ !mdl !_ !_ !_) !bindings !aenv !n !args = do
 --
 launch :: Marshalable args => AccKernel a -> (Int,Int,Int) -> args -> CIO ()
 launch (Kernel entry _ !fn _ _) !(cta, grid, smem) !a = do
-  message $ entry ++ " <<< " ++ shows cta ", " ++ shows grid ", " ++ shows smem " >>>"
+  message $ entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
   --
   args  <- marshal a
   liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
