@@ -94,7 +94,7 @@ mkFoldAll dev elt combine mseed = do
         $stms:(sdata "threadIdx.x" .=. x1)
         __syncthreads();
 
-        i = min((int) len, blockDim.x);
+        i = min(((int) len) - blockIdx.x * blockDim.x, blockDim.x);
         $stms:(reduceBlock dev elt "i" sdata env combine)
 
         /*
@@ -165,6 +165,9 @@ mkFold dev elt combine mseed = do
         $decls:decl0
         $decls:env
 
+        if (threadIdx.x >= interval_size)
+           return;
+
         /*
          * Threads in a block cooperatively reduce all elements in an interval.
          */
@@ -177,10 +180,12 @@ mkFold dev elt combine mseed = do
              * Ensure aligned access to global memory, and that each thread
              * initialises its local sum
              */
-            int i = start - (start & (warpSize - 1)) + threadIdx.x;
+            int i = start - (start & (warpSize - 1));
 
             if (i == start || interval_size > blockDim.x)
             {
+                i += threadIdx.x;
+
                 if (i >= start)
                 {
                     $stms:(x1 .=. getIn0 "i")
@@ -216,7 +221,7 @@ mkFold dev elt combine mseed = do
 
             /*
              * Each thread puts its local sum into shared memory, and
-             * cooperatively reduces this to a single value
+             * cooperatively reduces this to a single value.
              */
             $stms:(sdata "threadIdx.x" .=. x1)
             __syncthreads();

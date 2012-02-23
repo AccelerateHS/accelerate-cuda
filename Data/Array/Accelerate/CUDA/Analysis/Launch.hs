@@ -18,6 +18,7 @@ module Data.Array.Accelerate.CUDA.Analysis.Launch (
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Analysis.Type
+import Data.Array.Accelerate.Analysis.Shape
 
 -- library
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -72,7 +73,7 @@ determineOccupancy (OpenAcc acc) dev fn maxBlock = do
 -- Determine an optimal thread block size for a given array computation. Fold
 -- requires blocks with a power-of-two number of threads. Scans select the
 -- largest size thread block possible, because if only one thread block is
--- needed we can calculate the scan in a single pass.
+-- needed we can calculate the scan in a single pass, rather than three.
 --
 blockSize
     :: CUDA.DeviceProperties
@@ -101,11 +102,19 @@ blockSize dev acc lim regs smem =
 -- given array expression. This should understand things like #elements per
 -- thread for the various kernels.
 --
--- foldSeg: 'size' is the number of segments, require one warp per segment
+-- The 'size' parameter is typically the number of elements in the array, except
+-- for the following instances:
+--
+--  * foldSeg: the number of segments; require one warp per segment
+--
+--  * fold: for multidimensional reductions, this is the size of the shape tail
+--          for 1D reductions this is the total number of elements
 --
 gridSize :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
 gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
 gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
+gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim accDim acc == 0 then split acc size cta else size
+gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim accDim acc == 0 then split acc size cta else size
 gridSize _ acc                   size cta = split acc size cta
 
 split :: PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
