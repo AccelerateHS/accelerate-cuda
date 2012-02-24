@@ -279,7 +279,7 @@ mkSlice dimSl dimCo dimIn0 types slix = do
   |]
   where
     (argOut, _, setOut) = setters types
-    src                 = project dimIn0 "sl" slix
+    src                 = project dimIn0 "src" slix
 
 
 -- Replicate an array across one or more dimensions as specified by the

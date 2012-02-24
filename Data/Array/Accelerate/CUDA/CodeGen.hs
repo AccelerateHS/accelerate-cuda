@@ -21,6 +21,7 @@ import Prelude                                                  hiding ( exp )
 import Data.Loc
 import Data.Char
 import Data.Symbol
+import Control.Monad
 import Control.Applicative                                      hiding ( Const )
 import Text.PrettyPrint.Mainland
 import Language.C.Syntax                                        ( Const(..) )
@@ -103,25 +104,32 @@ codegenAcc dev acc (AccBindings vars) =
         Replicate sl _ a  ->
           let dimSl  = accDim a
               dimOut = accDim acc
+              elt    = codegenAccType a
+              var i  = [cexp| $id:("x0_a" ++ show i) |]
               --
               extend :: SliceIndex slix sl co dim -> Int -> [C.Exp]
               extend (SliceNil)            _ = []
               extend (SliceAll   sliceIdx) n = mkPrj dimOut "dim" n : extend sliceIdx (n+1)
               extend (SliceFixed sliceIdx) n = extend sliceIdx (n+1)
-          in
-          mkReplicate dimSl dimOut (codegenAccType a) (reverse $ extend sl 0)
+              --
+          in do
+          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
+          mkReplicate dimSl dimOut elt (reverse $ extend sl 0)
 
         Index sl a slix   ->
           let dimCo  = length (codegenExpType slix)
               dimSl  = accDim acc
               dimIn0 = accDim a
+              elt    = codegenAccType a
+              var i  = [cexp| $id:("x0_a" ++ show i) |]
               --
               restrict :: SliceIndex slix sl co dim -> (Int,Int) -> [C.Exp]
               restrict (SliceNil)            _     = []
               restrict (SliceAll   sliceIdx) (m,n) = mkPrj dimSl "sl" n : restrict sliceIdx (m,n+1)
               restrict (SliceFixed sliceIdx) (m,n) = mkPrj dimCo "co" m : restrict sliceIdx (m+1,n)
-          in
-          mkSlice dimSl dimCo dimIn0 (codegenAccType a) (reverse $ restrict sl (0,0))
+          in do
+          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
+          mkSlice dimSl dimCo dimIn0 elt (reverse $ restrict sl (0,0))
 
         Map f a           -> do
           f'    <- codegenFun f
