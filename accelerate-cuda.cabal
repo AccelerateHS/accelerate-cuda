@@ -5,13 +5,13 @@ Tested-with:            GHC >= 6.12.3
 Build-type:             Configure
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
-Description:            This library implements a backend for the Accelerate
-                        language instrumented for parallel execution on
-                        CUDA-capable NVIDIA GPUs.
-                        .
-                        To use this backend you need CUDA version 3.x or later installed.
-                        Note that currently there is no support for 'Char' and
-                        'Bool' arrays.
+Description:
+  This library implements a backend for the Accelerate language instrumented for
+  parallel execution on CUDA-capable NVIDIA GPUs.
+  .
+  To use this backend you need CUDA version 3.x or later installed. Note that
+  currently there is no support for 'Char' and 'Bool' arrays (this is a
+  limitation of the front-end language).
 
 License:                BSD3
 License-file:           LICENSE
@@ -19,9 +19,9 @@ Author:                 Manuel M T Chakravarty,
                         Gabriele Keller,
                         Sean Lee,
                         Trevor L. McDonell
-Maintainer:             Manuel M T Chakravarty <chak@cse.unsw.edu.au>
+Maintainer:             Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
+Bug-reports:            https://github.com/tmcdonell/accelerate-cuda/issues
 Homepage:               http://www.cse.unsw.edu.au/~chak/project/accelerate/
-Bug-reports:            https://github.com/mchakravarty/accelerate/issues
 
 Category:               Compilers/Interpreters, Concurrency, Data
 Stability:              Experimental
@@ -133,9 +133,10 @@ Library
   if flag(internal-checks)
     cpp-options:        -DACCELERATE_INTERNAL_CHECKS
 
-  ghc-options:          -O2 -Wall -fwarn-tabs
+  ghc-options:          -O2
+                        -Wall
+                        -fwarn-tabs
                         -funbox-strict-fields
-                        -threaded
 
   Extensions:           BangPatterns,
                         CPP,
@@ -155,5 +156,5 @@ Library
 
 source-repository head
   type:                 git
-  location:             https://github.com/mchakravarty/accelerate
+  location:             https://github.com/tmcdonell/accelerate-cuda
 

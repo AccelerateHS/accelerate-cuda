@@ -1,16 +1,20 @@
 {-# LANGUAGE BangPatterns, CPP, GADTs #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
--- Copyright   : [2008..2011] Manuel M T Chakravarty, Gabriele Keller, Sean Lee, Trevor L. McDonell
+-- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
+--               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
--- Maintainer  : Manuel M T Chakravarty <chak@cse.unsw.edu.au>
+-- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 --
 -- This module implements the CUDA backend for the embedded array language
--- Accelerate. Expressions are on-line compiled into CUDA code, compiled, and
+-- Accelerate. Expressions are on-line translated into CUDA code, compiled, and
 -- executed in parallel on the GPU.
+--
+-- The accelerate-cuda library is hosted at <https://github.com/tmcdonell/accelerate-cuda>.
+-- Comments, bug reports, and patches are always welcome.
 --
 
 module Data.Array.Accelerate.CUDA (
@@ -49,21 +53,42 @@ import Data.Array.Accelerate.CUDA.Execute
 -- Accelerate: CUDA
 -- ----------------
 
--- | Compile and run a complete embedded array program using the CUDA backend
+-- | Compile and run a complete embedded array program using the CUDA backend.
+-- This will select the fastest device available on which to execute
+-- computations, based on compute capability and estimated maximum GFLOPS.
 --
 run :: Arrays a => Acc a -> a
 run = runIn defaultContext
 
+-- | As 'run', but allow the computation to continue running in a thread and
+-- return immediately without waiting for the result. The status of the
+-- computation can be queried using 'wait', 'poll', and 'cancel'.
+--
 runAsync :: Arrays a => Acc a -> Async a
 runAsync = runAsyncIn defaultContext
 
--- | As 'run', but execute using the specified device context rather than
--- creating a new context for an automatically selected device
+-- | As 'run', but execute using the specified device context rather than using
+-- the default, automatically selected device.
+--
+-- Contexts passed to this function may all refer to the same device, or to
+-- separate devices of differing compute capabilities.
+--
+-- Note that each thread has a stack of current contexts, and calling
+-- 'Foreign.CUDA.Driver.Context.create' pushes the new context on top of the
+-- stack and makes it current with the calling thread. You should call
+-- 'Foreign.CUDA.Driver.Context.pop' to make the context floating before passing
+-- it to 'runIn', which will make it current for the duration of evaluating the
+-- expression. See the CUDA C Programming Guide (G.1) for more information.
 --
 {-# NOINLINE runIn #-}
 runIn :: Arrays a => Context -> Acc a -> a
 runIn ctx a = unsafePerformIO $ evaluate (runAsyncIn ctx a) >>= wait
 
+
+-- | As 'runIn', but execute asynchronously. Be sure not to destroy the context,
+-- or attempt to attach it to a different host thread, before all outstanding
+-- operations have completed.
+--
 {-# NOINLINE runAsyncIn #-}
 runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
@@ -74,23 +99,32 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
 
--- |Prepare and execute an embedded array program of one argument. This function
--- can be used to improve performance in cases where the array program is
--- constant between invocations.
+-- | Prepare and execute an embedded array program of one argument.
+--
+-- This function can be used to improve performance in cases where the array
+-- program is constant between invocations, because it allows us to bypass all
+-- front-end conversion stages and move directly to the execution phase. If you
+-- have a computation applied repeatedly to different input data, use this.
+--
+-- See the Crystal demo, part of the 'accelerate-examples' package, for an
+-- example.
 --
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 run1 = run1In defaultContext
 
+-- | As 'run1', but the computation is executed asynchronously.
+--
 run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
 run1Async = run1AsyncIn defaultContext
 
+-- | As 'run1', but execute in the specified context.
+--
 {-# NOINLINE run1In #-}
 run1In :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
 run1In ctx f = let go = run1AsyncIn ctx f
                in \a -> unsafePerformIO $ wait (go a)
 
--- TLM: We need to be very careful with run1 and run1Async to ensure that the
---      returned closure shortcuts directly to the execution phase.
+-- | As 'run1In', but execute asynchronously.
 --
 {-# NOINLINE run1AsyncIn #-}
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
@@ -102,13 +136,18 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
                 `catch`
                 \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
+-- TLM: We need to be very careful with run1* variants, to ensure that the
+--      returned closure shortcuts directly to the execution phase.
 
--- |Stream a lazily read list of input arrays through the given program,
--- collecting results as we go
+
+-- | Stream a lazily read list of input arrays through the given program,
+-- collecting results as we go.
 --
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
 stream f arrs = streamIn defaultContext f arrs
 
+-- | As 'stream', but execute in the specified context.
+--
 streamIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
 streamIn ctx f arrs = let go = run1In ctx f
                       in  map go arrs
@@ -145,13 +184,21 @@ async action = do
                    \e -> putMVar var (Left e)
    return (Async tid var)
 
+-- | Block the calling thread until the computation completes, then return the
+-- result.
+--
 wait :: Async a -> IO a
 wait (Async _ var) = either throwIO return =<< readMVar var
 
+-- | Test whether the asynchronous computation has already completed. If so,
+-- return the result, else 'Nothing'.
+--
 poll :: Async a -> IO (Maybe a)
 poll (Async _ var) =
   maybe (return Nothing) (either throwIO (return . Just)) =<< tryTakeMVar var
 
+-- | Cancel a running asynchronous computation.
+--
 cancel :: Async a -> IO ()
-cancel (Async tid _) = throwTo tid ThreadKilled
+cancel (Async tid _) = throwTo tid ThreadKilled -- TLM: catch and ignore exceptions?
 
