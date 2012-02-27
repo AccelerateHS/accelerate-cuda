@@ -39,6 +39,7 @@ import Data.List
 import Data.Label
 import Control.Exception
 import Data.ByteString                                  ( ByteString )
+import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
 import System.Mem
@@ -130,13 +131,15 @@ initialise = unsafePerformIO $ do
   return $ CUDAState undefined knl mem
 
 {-# NOINLINE defaultContext #-}
-defaultContext :: CUDA.Context
-defaultContext = unsafePerformIO $ do
-  CUDA.initialise []
-  (dev,prp)     <- selectBestDevice
-  _             <- CUDA.create dev [CUDA.SchedAuto]
-  message verbose $ deviceInfo dev prp
-  CUDA.pop
+defaultContext :: MVar CUDA.Context
+defaultContext
+  = unsafePerformIO
+  $ (=<<) newMVar $ do
+      CUDA.initialise []
+      (dev,prp)     <- selectBestDevice
+      _             <- CUDA.create dev [CUDA.SchedAuto]
+      message verbose $ deviceInfo dev prp
+      CUDA.pop
 
 
 -- Debugging

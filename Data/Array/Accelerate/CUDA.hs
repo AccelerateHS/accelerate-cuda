@@ -58,14 +58,21 @@ import Data.Array.Accelerate.CUDA.Execute
 -- computations, based on compute capability and estimated maximum GFLOPS.
 --
 run :: Arrays a => Acc a -> a
-run = runIn defaultContext
+run a
+  = unsafePerformIO
+  $ withMVar defaultContext $ \ctx -> evaluate (runIn ctx a)
 
 -- | As 'run', but allow the computation to continue running in a thread and
 -- return immediately without waiting for the result. The status of the
 -- computation can be queried using 'wait', 'poll', and 'cancel'.
 --
+-- Note that a CUDA Context can only be active no one host thread at a time. If
+-- you want to execute multiple computations in parallel, use 'runAsyncIn'.
+--
 runAsync :: Arrays a => Acc a -> Async a
-runAsync = runAsyncIn defaultContext
+runAsync a
+  = unsafePerformIO
+  $ withMVar defaultContext $ \ctx -> evaluate (runAsyncIn ctx a)
 
 -- | As 'run', but execute using the specified device context rather than using
 -- the default, automatically selected device.
@@ -80,16 +87,16 @@ runAsync = runAsyncIn defaultContext
 -- it to 'runIn', which will make it current for the duration of evaluating the
 -- expression. See the CUDA C Programming Guide (G.1) for more information.
 --
-{-# NOINLINE runIn #-}
 runIn :: Arrays a => Context -> Acc a -> a
-runIn ctx a = unsafePerformIO $ evaluate (runAsyncIn ctx a) >>= wait
+runIn ctx a
+  = unsafePerformIO
+  $ evaluate (runAsyncIn ctx a) >>= wait
 
 
 -- | As 'runIn', but execute asynchronously. Be sure not to destroy the context,
 -- or attempt to attach it to a different host thread, before all outstanding
 -- operations have completed.
 --
-{-# NOINLINE runAsyncIn #-}
 runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
   where
@@ -110,23 +117,26 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
 -- example.
 --
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
-run1 = run1In defaultContext
+run1 f
+  = unsafePerformIO
+  $ withMVar defaultContext $ \ctx -> evaluate (run1In ctx f)
+
 
 -- | As 'run1', but the computation is executed asynchronously.
 --
 run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
-run1Async = run1AsyncIn defaultContext
+run1Async f
+  = unsafePerformIO
+  $ withMVar defaultContext $ \ctx -> evaluate (run1AsyncIn ctx f)
 
 -- | As 'run1', but execute in the specified context.
 --
-{-# NOINLINE run1In #-}
 run1In :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
 run1In ctx f = let go = run1AsyncIn ctx f
                in \a -> unsafePerformIO $ wait (go a)
 
 -- | As 'run1In', but execute asynchronously.
 --
-{-# NOINLINE run1AsyncIn #-}
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
@@ -144,13 +154,16 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
 -- collecting results as we go.
 --
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
-stream f arrs = streamIn defaultContext f arrs
+stream f arrs
+  = unsafePerformIO
+  $ withMVar defaultContext $ \ctx -> evaluate (streamIn ctx f arrs)
 
 -- | As 'stream', but execute in the specified context.
 --
 streamIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
-streamIn ctx f arrs = let go = run1In ctx f
-                      in  map go arrs
+streamIn ctx f arrs
+  = let go = run1In ctx f
+    in  map go arrs
 
 
 -- Copy from device to host, and decrement the usage counter. This last step
@@ -200,5 +213,7 @@ poll (Async _ var) =
 -- | Cancel a running asynchronous computation.
 --
 cancel :: Async a -> IO ()
-cancel (Async tid _) = throwTo tid ThreadKilled -- TLM: catch and ignore exceptions?
+cancel (Async tid _) = throwTo tid ThreadKilled
+  -- TLM: catch and ignore exceptions?
+  --      silently do nothing if the thread has already finished?
 
