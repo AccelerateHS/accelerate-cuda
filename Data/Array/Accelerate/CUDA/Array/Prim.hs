@@ -41,6 +41,7 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 -- friends
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Table
+import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc )
 
 #include "accelerate.h"
 
@@ -148,20 +149,21 @@ instance TextureData Word where
 -- release any inaccessible arrays and try again.
 --
 mallocArray
-    :: forall e b. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable e, Typeable b, Storable b)
+    :: forall e a. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
     => MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
 mallocArray !mt !ad !n0 = do
   let !n = 1 `max` n0
-  exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr b)))
+  exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
+    message $ "mallocArray: " ++ shows (n * sizeOf (undefined::a)) " bytes"
     ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
       case e of
         ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
         _                    -> throwIO e
-    insert mt ad (ptr :: CUDA.DevicePtr b)
+    insert mt ad (ptr :: CUDA.DevicePtr a)
 
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
@@ -180,6 +182,7 @@ useArray !mt !ad !n0 =
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
+      message $ "useArray/malloc: " ++ shows (n * sizeOf (undefined::a)) " bytes"
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
         case e of
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
@@ -201,6 +204,7 @@ useArrayAsync !mt !ad !n0 !ms =
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
+      message $ "useArrayAsync/malloc: " ++ shows (n * sizeOf (undefined::a)) " bytes"
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
         case e of
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
@@ -350,4 +354,16 @@ advancePtrsOfArrayData
     -> DevicePtrs e
     -> DevicePtrs e
 advancePtrsOfArrayData !n !_ !ptr = CUDA.advanceDevPtr ptr n
+
+
+-- Debug
+-- -----
+
+{-# INLINE trace #-}
+trace :: String -> IO a -> IO a
+trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
+
+{-# INLINE message #-}
+message :: String -> IO ()
+message s = s `trace` return ()
 
