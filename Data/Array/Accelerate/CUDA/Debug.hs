@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, TypeOperators #-}
+{-# LANGUAGE CPP, TemplateHaskell, TypeOperators #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Debug
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -15,20 +15,45 @@
 
 module Data.Array.Accelerate.CUDA.Debug (
 
+  showFFloatSIBase,
+
   message, when, mode,
   verbose, debug,
   dump_gc, dump_cc, dump_exec,
 
 ) where
 
+import Numeric
 import Data.List
 import Data.Label
 import Data.IORef
-import Debug.Trace                              ( putTraceMsg )
 import Control.Monad.IO.Class
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
+
+#if MIN_VERSION_base(4,5,0)
+import Debug.Trace                              ( traceIO )
+#else
+import Debug.Trace                              ( putTraceMsg )
+
+traceIO :: String -> IO ()
+traceIO = putTraceMsg
+#endif
+
+
+-- -----------------------------------------------------------------------------
+-- Pretty-printing
+
+showFFloatSIBase :: RealFloat a => Maybe Int -> a -> a -> ShowS
+showFFloatSIBase p b n
+  = showString
+  . nubBy (\x y -> x == ' ' && y == ' ')
+  $ showFFloat p n' [ ' ', si_unit ]
+  where
+    n'          = n / (b ^^ (pow-4))
+    pow         = max 0 . min 8 . (+) 4 . floor $ logBase b n
+    si_unit     = "pnµm kMGT" !! pow
 
 
 -- -----------------------------------------------------------------------------
@@ -76,7 +101,7 @@ mode f = unsafePerformIO $ get f `fmap` readIORef options
 
 {-# INLINE message #-}
 message :: MonadIO m => (Flags :-> Bool) -> String -> m ()
-message f str = when f (liftIO $ putTraceMsg str)
+message f str = when f (liftIO $ traceIO str)
 
 {-# INLINE when #-}
 when :: MonadIO m => (Flags :-> Bool) -> m () -> m ()

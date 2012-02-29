@@ -29,13 +29,11 @@ module Data.Array.Accelerate.CUDA.State (
 
 -- friends
 import Data.Array.Accelerate.CUDA.FullList              ( FullList )
-import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose )
+import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
-import Numeric
-import Data.List
 import Data.Label
 import Control.Exception
 import Data.ByteString                                  ( ByteString )
@@ -166,17 +164,6 @@ deviceInfo dev prp = render $
     clock       = showFFloatSIBase (Just 2) 1000 (fromIntegral $ CUDA.clockRate prp * 1000 :: Double) "Hz"
     mem         = showFFloatSIBase (Just 0) 1024 (fromIntegral $ CUDA.totalGlobalMem prp   :: Double) "B"
     at          = char '@'
-
-
-showFFloatSIBase :: RealFloat a => Maybe Int -> a -> a -> ShowS
-showFFloatSIBase p b n
-  = showString
-  . nubBy (\x y -> x == ' ' && y == ' ')
-  $ showFFloat p n' [ ' ', si_unit ]
-  where
-    n'          = n / (b ^^ (pow-4))
-    pow         = max 0 . min 8 . (+) 4 . floor $ logBase b n
-    si_unit     = "pnµm kMGT" !! pow
 
 
 -- Persistent caching (deprecated)

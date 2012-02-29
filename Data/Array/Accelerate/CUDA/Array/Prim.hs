@@ -41,7 +41,7 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 -- friends
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Table
-import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc )
+import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 #include "accelerate.h"
 
@@ -158,7 +158,7 @@ mallocArray !mt !ad !n0 = do
   let !n = 1 `max` n0
   exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
-    message $ "mallocArray: " ++ shows (n * sizeOf (undefined::a)) " bytes"
+    message $ "mallocArray: " ++ showBytes (n * sizeOf (undefined::a))
     ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
       case e of
         ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
@@ -182,7 +182,7 @@ useArray !mt !ad !n0 =
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArray/malloc: " ++ shows (n * sizeOf (undefined::a)) " bytes"
+      message $ "useArray/malloc: " ++ showBytes (n * sizeOf (undefined::a))
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
         case e of
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
@@ -204,7 +204,7 @@ useArrayAsync !mt !ad !n0 !ms =
   in do
     exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArrayAsync/malloc: " ++ shows (n * sizeOf (undefined::a)) " bytes"
+      message $ "useArrayAsync/malloc: " ++ showBytes (n * sizeOf (undefined::a))
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
         case e of
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
@@ -358,6 +358,10 @@ advancePtrsOfArrayData !n !_ !ptr = CUDA.advanceDevPtr ptr n
 
 -- Debug
 -- -----
+
+{-# INLINE showBytes #-}
+showBytes :: Int -> String
+showBytes x = D.showFFloatSIBase (Just 0) 1024 (fromIntegral x :: Double) "B"
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
