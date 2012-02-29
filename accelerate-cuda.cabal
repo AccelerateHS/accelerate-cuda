@@ -68,7 +68,7 @@ Flag internal-checks
 Library
   Include-Dirs:         include
 
-  Build-depends:        accelerate              == 0.9.*,
+  Build-depends:        accelerate              == 0.10.*,
                         array                   >= 0.3,
                         base                    == 4.*,
                         binary                  >= 0.5,
