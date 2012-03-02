@@ -23,6 +23,7 @@ import Data.Maybe                                       ( isJust )
 import Data.Hashable                                    ( Hashable(..) )
 import Data.Typeable                                    ( Typeable, gcast )
 import Control.Monad                                    ( unless )
+import Control.Exception                                ( bracket_ )
 import Control.Applicative                              ( (<$>), (<*>) )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( Weak, mkWeak, deRefWeak, finalize )
@@ -119,7 +120,7 @@ insert (MemoryTable ref weak_ref) !arr !ptr = do
   key  <- makeStableArray arr
   dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ref key ptr)
   tbl  <- readIORef ref
-  debug $ "insert: " ++ show key
+  message $ "insert: " ++ show key
   HT.insert tbl key dev
 
 
@@ -141,16 +142,26 @@ reclaim (MemoryTable _ weak_ref) = do
         unless alive $ finalize w
 
 
+-- Because a finaliser might run at any time, we must reinstate the context in
+-- which the array was allocated before attempting to release it.
+--
+-- Note also that finaliser threads will silently terminate if an exception is
+-- raised. If the context, and thereby all allocated memory, was destroyed
+-- externally before the thread had a chance to run, all we need do is update
+-- the hash tables --- but we must do this first before failing to use a dead
+-- context.
+--
 finalizer :: Weak MT -> HostArray -> DevicePtr b -> IO ()
-finalizer !weak_ref !key !ptr = do
-  CUDA.free ptr
+finalizer !weak_ref !key@(HostArray ctx _) !ptr = do
   mr <- deRefWeak weak_ref
   case mr of
-    Nothing  -> trace nom $ return ()
-    Just ref -> trace del $ withIORef ref (`HT.delete` key)
+    Nothing  -> trace ("finalise/dead table: " ++ show key) $ return ()
+    Just ref -> trace ("finalise: "            ++ show key) $ withIORef ref (`HT.delete` key)
   --
-  where del = "finalise: " ++ show key
-        nom = "finalise/dead table: " ++ show key
+  bracket_
+    (CUDA.push ctx)
+    (CUDA.pop)
+    (CUDA.free ptr)
 
 
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()
@@ -178,7 +189,7 @@ withIORef ref f = readIORef ref >>= f
 trace :: String -> IO a -> IO a
 trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
 
-{-# INLINE debug #-}
-debug :: String -> IO ()
-debug s = s `trace` return ()
+{-# INLINE message #-}
+message :: String -> IO ()
+message s = s `trace` return ()
 
