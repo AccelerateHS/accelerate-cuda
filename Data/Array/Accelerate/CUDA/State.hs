@@ -40,7 +40,6 @@ import Data.ByteString                                  ( ByteString )
 import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
-import System.Mem
 import System.IO.Unsafe
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
@@ -109,35 +108,33 @@ $(mkLabels [''CUDAState, ''KernelEntry])
 evalCUDA :: CUDA.Context -> CIO a -> IO a
 evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
   where
-    teardown _  = performGC >> CUDA.pop
+    teardown _  = CUDA.pop
     setup       = do
       CUDA.push ctx
       dev       <- CUDA.device
       prp       <- CUDA.props dev
-      return $ initialise { _deviceProps = prp }
+      return $! CUDAState prp knl mem
+
+    -- one-shot top-level mutable state
+    {-# NOINLINE mem #-}
+    {-# NOINLINE knl #-}
+    mem = unsafePerformIO MT.new
+    knl = unsafePerformIO HT.new
 
 
--- Select and initialise the CUDA device, and create a new execution context.
--- This will be done only once per program execution, as initialising the CUDA
--- context is relatively expensive.
+-- Select and initialise a default CUDA device, and create a new execution
+-- context. The device is selected based on compute capability and estimated
+-- maximum throughput.
 --
-{-# NOINLINE initialise #-}
-initialise :: CUDAState
-initialise = unsafePerformIO $ do
-  knl   <- HT.new
-  mem   <- MT.new
-  return $ CUDAState undefined knl mem
-
 {-# NOINLINE defaultContext #-}
 defaultContext :: MVar CUDA.Context
-defaultContext
-  = unsafePerformIO
-  $ (=<<) newMVar $ do
-      CUDA.initialise []
-      (dev,prp)     <- selectBestDevice
-      _             <- CUDA.create dev [CUDA.SchedAuto]
-      message verbose $ deviceInfo dev prp
-      CUDA.pop
+defaultContext = unsafePerformIO $ do
+  CUDA.initialise []
+  (dev,prp)     <- selectBestDevice
+  ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
+  ref           <- newMVar ctx
+  message verbose $ deviceInfo dev prp
+  return ref
 
 
 -- Debugging

@@ -166,8 +166,7 @@ streamIn ctx f arrs
     in  map go arrs
 
 
--- Copy from device to host, and decrement the usage counter. This last step
--- should result in all transient arrays having been removed from the device.
+-- Copy arrays from device to host.
 --
 collect :: Arrays arrs => arrs -> CIO arrs
 collect arrs = collectR arrays arrs
