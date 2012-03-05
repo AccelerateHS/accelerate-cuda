@@ -115,7 +115,6 @@ Library
                         Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.State
                         Data.Array.Accelerate.Internal.Check
-                        Data.Array.Accelerate.Internal.Trace
                         Paths_accelerate_cuda
 
 --  if flag(pcache)
