@@ -60,6 +60,12 @@ import qualified Data.ByteString.Lazy                   as L
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 
+#ifdef VERSION_unix
+import System.Posix.Process
+#else
+import System.Win32.Process
+#endif
+
 import Paths_accelerate_cuda                            ( getDataDir )
 
 
@@ -409,11 +415,16 @@ openOutputFile template = liftIO $ do
 #ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
   dir <- (</>) <$> getDataDir            <*> pure "cache"
 #else
-  dir <- (</>) <$> getTemporaryDirectory <*> pure "accelerate-cuda"
+  pid <- getProcessID
+  dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
 #endif
   createDirectoryIfMissing True dir
   openTempFile dir template
 
+#ifndef VERSION_unix
+getProcessID :: ProcessHandle -> IO ProcessId
+getProcessID = getProcessId
+#endif
 
 -- Debug
 -- -----

@@ -92,6 +92,11 @@ Library
                         transformers            >= 0.2,
                         unordered-containers    >= 0.1.4
 
+  if os(windows)
+    build-depends:      Win32                   >= 2.2.1
+  else
+    build-depends:      unix                    >= 2.4
+
   Exposed-modules:      Data.Array.Accelerate.CUDA
 
   Other-modules:        Data.Array.Accelerate.CUDA.Analysis.Device
