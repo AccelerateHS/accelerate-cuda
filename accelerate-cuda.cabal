@@ -135,7 +135,6 @@ Library
   ghc-options:          -O2
                         -Wall
                         -fwarn-tabs
-                        -funbox-strict-fields
 
   Extensions:           BangPatterns,
                         CPP,

@@ -74,14 +74,14 @@ type KernelTable = HT.BasicHashTable KernelKey KernelEntry
 type KernelKey   = (CUDA.Compute, ByteString)
 data KernelEntry = KernelEntry
   {
-    _kernelName         :: FilePath,
-    _kernelStatus       :: Either ProcessHandle KernelObject
+    _kernelName         :: !FilePath,
+    _kernelStatus       :: !(Either ProcessHandle KernelObject)
   }
 
 data KernelObject = KernelObject
   {
     _binaryData         :: !ByteString,
-    _activeContexts     :: !(FullList CUDA.Context CUDA.Module)
+    _activeContexts     :: {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
   }
 
 -- The state token for accelerated CUDA array operations
@@ -89,9 +89,9 @@ data KernelObject = KernelObject
 type CIO        = StateT CUDAState IO
 data CUDAState  = CUDAState
   {
-    _deviceProps        :: CUDA.DeviceProperties,
-    _kernelTable        :: !KernelTable,
-    _memoryTable        :: !MemoryTable
+    _deviceProps        :: !CUDA.DeviceProperties,
+    _kernelTable        :: {-# UNPACK #-} !KernelTable,
+    _memoryTable        :: {-# UNPACK #-} !MemoryTable
   }
 
 instance Eq CUDA.Context where

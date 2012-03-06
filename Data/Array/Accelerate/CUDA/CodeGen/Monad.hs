@@ -37,9 +37,9 @@ type CGM                = State Gamma
 type Environment        = [InitGroup]
 data Gamma              = Gamma
   {
-    _unique     :: !Int,
-    _bindings   :: Environment,
-    _variables  :: Seq (IntMap (Type, Exp))
+    _unique     :: {-# UNPACK #-} !Int,
+    _variables  :: !(Seq (IntMap (Type, Exp))),
+    _bindings   :: !Environment
   }
   deriving Show
 
@@ -47,7 +47,7 @@ $(mkLabels [''Gamma])
 
 
 runCGM :: CGM a -> a
-runCGM = flip evalState (Gamma 0 [] (S.replicate 2 IM.empty))
+runCGM = flip evalState (Gamma 0 (S.replicate 2 IM.empty) [])
 
 -- Introduce an expression of a given type and name into the environment. Return
 -- an expression that can be used in place of the thing just bound (i.e. the

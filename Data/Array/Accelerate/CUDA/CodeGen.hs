@@ -314,7 +314,7 @@ codegenExp exp =
     Prj idx e           -> do
       e'                <- codegenExp e
       case subset (zip e' elt) of
-        [(x,t)]         -> uncurry use (unexp x) t x >> return [x]
+        [(x,t)]         -> addVar x t >> return [x]
         xts             -> return $ fst (unzip xts)
       where
         ty      = expType e
@@ -324,11 +324,12 @@ codegenExp exp =
                 . drop (prjToInt idx ty)
                 . reverse
         --
-        --  this is total hax.
-        unexp x = case show x of
+        -- this is total hax, and probably insufficient
+        --
+        addVar x t = case show x of
           ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
-                -> (v', n')
-          _     -> INTERNAL_ERROR(error) "codegenExp" "expected variable name"
+                -> use v' n' t x
+          _     -> return ()
 
     -- Conditional expression
     Cond p t e          -> do

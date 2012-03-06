@@ -55,18 +55,19 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc 
 --
 type HashTable key val = HT.BasicHashTable key val
 type MT                = IORef ( HashTable HostArray DeviceArray )
-data MemoryTable       = MemoryTable !MT !(Weak MT)
+data MemoryTable       = MemoryTable {-# UNPACK #-} !MT
+                                     {-# UNPACK #-} !(Weak MT)
 
 
 data HostArray where
   HostArray :: Typeable e
-            => CUDA.Context
-            -> StableName (ArrayData e)
+            => {-# UNPACK #-} !CUDA.Context
+            -> {-# UNPACK #-} !(StableName (ArrayData e))
             -> HostArray
 
 data DeviceArray where
   DeviceArray :: Typeable e
-              => Weak (DevicePtr e)
+              => {-# UNPACK #-} !(Weak (DevicePtr e))
               -> DeviceArray
 
 instance Eq HostArray where
