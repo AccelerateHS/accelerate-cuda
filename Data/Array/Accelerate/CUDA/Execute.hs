@@ -378,10 +378,10 @@ foldOp kernel bindings aenv (Array sh0 in0)
   | otherwise    = do
       let (sh, sz)              = sh0
           interval_size         = sz
-          num_intervals         = size sh `max` 1
+          num_intervals         = size sh
           num_elements          = size sh0
       res@(Array _ out)         <- allocateArray $ toElt sh
-      execute kernel bindings aenv num_intervals
+      execute kernel bindings aenv (num_intervals `max` 1)
         ((((((), out)
                , in0)
                , convertIx interval_size)

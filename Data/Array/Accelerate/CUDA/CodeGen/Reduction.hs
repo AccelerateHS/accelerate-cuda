@@ -60,7 +60,7 @@ mkFoldAll dev elt combine mseed = do
     (
         $params:argOut,
         $params:argIn0,
-        const typename Ix len
+        const typename Ix num_elements
     )
     {
         const int gridSize = blockDim.x * gridDim.x;
@@ -76,14 +76,14 @@ mkFoldAll dev elt combine mseed = do
          *
          * The loop stride of `gridSize' is used to maintain coalescing.
          */
-        if (i < len)
+        if (i < num_elements)
         {
             $stms:(x1 .=. getIn0 "i")
 
-            for (i += gridSize; i < len; i += gridSize)
+            for (i += gridSize; i < num_elements; i += gridSize)
             {
-                $stms:(x0 .=. getIn0 "i")
                 $decls:env
+                $stms:(x0 .=. getIn0 "i")
                 $stms:(x1 .=. combine)
             }
         }
@@ -95,7 +95,7 @@ mkFoldAll dev elt combine mseed = do
         $stms:(sdata "threadIdx.x" .=. x1)
         __syncthreads();
 
-        i = min(((int) len) - blockIdx.x * blockDim.x, blockDim.x);
+        i = min(((int) num_elements) - blockIdx.x * blockDim.x, blockDim.x);
         $stms:(reduceBlock dev elt "i" sdata env combine)
 
         /*
@@ -116,15 +116,16 @@ mkFoldAll dev elt combine mseed = do
     --
     inclusive_fold              = setOut "blockIdx.x" x1
     exclusive_fold x0 env seed  = [[cstm|
-      if (len > 0) {
+      if (num_elements > 0) {
           if (gridDim.x == 1) {
-              $stms:(x0 .=. seed)
               $decls:env
+              $stms:(x0 .=. seed)
               $stms:(x1 .=. combine)
           }
           $stms:(setOut "blockIdx.x" x1)
       }
       else {
+          $decls:env
           $stms:(setOut "blockIdx.x" seed)
       }
     |]]
@@ -166,6 +167,16 @@ mkFold dev elt combine mseed = do
         $decls:decl0
         $decls:env
 
+        /*
+         * If the intervals of an exclusive fold are empty, use all threads to
+         * map the seed value to the output array and exit.
+         */
+        $stms:(maybe [] (return . mapseed env) mseed)
+
+        /*
+         * Kill threads that will not participate in this segment to avoid
+         * invalid global reads.
+         */
         if (threadIdx.x >= interval_size)
            return;
 
@@ -210,8 +221,8 @@ mkFold dev elt combine mseed = do
                  */
                 for (i += 2 * blockDim.x; i < end; i += blockDim.x)
                 {
-                    $stms:(x0 .=. getIn0 "i")
                     $decls:env
+                    $stms:(x0 .=. getIn0 "i")
                     $stms:(x1 .=. combine)
                 }
             }
@@ -231,11 +242,14 @@ mkFold dev elt combine mseed = do
             $stms:(reduceBlock dev elt "n" sdata env combine)
 
             /*
-             * Finally, the first thread writes the result for this segment
+             * Finally, the first thread writes the result for this segment. For
+             * exclusive reductions, we also combine with the seed element here.
              */
             if (threadIdx.x == 0)
             {
-                $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
+                $decls:(maybe [] (const env) mseed)
+                $stms:( maybe [] (\seed -> concat [x0 .=. seed, x1 .=. combine]) mseed)
+                $stms:(setOut "seg" x1)
             }
         }
     }
@@ -246,17 +260,21 @@ mkFold dev elt combine mseed = do
     (x1,   decl1)               = locals "x1" elt
     (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    inclusive_fold              = setOut "seg" x1
-    exclusive_fold x0 env seed  = [cstm|
-      if (interval_size > 0) {
-          $stms:(x0 .=. seed)
-          $decls:env
-          $stms:(x1 .=. combine)
-      } else {
-          $stms:(x1 .=. seed)
-      }|] :
-      setOut "seg" x1
+    mapseed env seed            = [cstm|
+      if (interval_size == 0)
+      {
+          const int gridSize = __umul24(blockDim.x, gridDim.x);
+                int seg;
 
+          for ( seg = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+              ; seg < num_intervals
+              ; seg += gridSize )
+          {
+              $decls:env
+              $stms:(setOut "seg" seed)
+          }
+          return;
+      }|]
 
 
 -- Segmented reduction along the innermost dimension of an array. Performs one
@@ -376,8 +394,8 @@ mkFoldSeg dev dim seg elt combine mseed = do
                  */
                 for (i += 2 * warpSize; i < end; i += warpSize)
                 {
-                    $stms:(x0 .=. getIn0 "i")
                     $decls:env
+                    $stms:(x0 .=. getIn0 "i")
                     $stms:(x1 .=. combine)
                 }
             }
@@ -412,10 +430,11 @@ mkFoldSeg dev dim seg elt combine mseed = do
     inclusive_fold              = setOut "seg" x1
     exclusive_fold x0 env seed  = [cstm|
       if (num_elements > 0) {
-          $stms:(x0 .=. seed)
           $decls:env
+          $stms:(x0 .=. seed)
           $stms:(x1 .=. combine)
       } else {
+          $decls:env
           $stms:(x1 .=. seed)
       }|] :
       setOut "seg" x1
@@ -446,15 +465,15 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
     --
     reduce 1    = [cstm|
       if ( $id:n > 1 && $id:tid + 1 < $id:n ) {
-          $stms:(x0 .=. sdata "threadIdx.x + 1")
           $decls:env
+          $stms:(x0 .=. sdata "threadIdx.x + 1")
           $stms:(x1 .=. combine)
       }
     |]
     reduce i    = [cstm|
       if ( $id:n > $int:i && $id:tid + $int:i < $id:n ) {
-          $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
           $decls:env
+          $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
           $stms:(x1 .=. combine)
           $stms:(sdata "threadIdx.x" .=. x1)
       }
@@ -488,8 +507,8 @@ reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u,u-1..v]
     reduce i    = [cstm|
       if ( $id:n > $int:i ) {
           if ( threadIdx.x < $int:i && threadIdx.x + $int:i < $id:n ) {
-              $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
               $decls:env
+              $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
               $stms:(x1 .=. combine)
               $stms:(sdata "threadIdx.x" .=. x1)
           }
