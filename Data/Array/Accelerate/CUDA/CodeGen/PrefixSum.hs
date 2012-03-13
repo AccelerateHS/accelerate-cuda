@@ -260,9 +260,9 @@ scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThread
                 $stms:(x0 .=. sdata ix)
                 $decls:env
                 $stms:(x1 .=. combine)
-                __syncthreads();
-                $stms:(sdata "threadIdx.x" .=. x1)
             }
+            __syncthreads();
+            $stms:(sdata "threadIdx.x" .=. x1)
             __syncthreads();
         }
       |]
