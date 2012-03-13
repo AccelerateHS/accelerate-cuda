@@ -40,6 +40,7 @@ import Data.ByteString                                  ( ByteString )
 import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
+import System.Mem                                       ( performGC )
 import System.IO.Unsafe
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
@@ -108,7 +109,7 @@ $(mkLabels [''CUDAState, ''KernelEntry])
 evalCUDA :: CUDA.Context -> CIO a -> IO a
 evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
   where
-    teardown _  = CUDA.pop
+    teardown _  = CUDA.pop >> performGC
     setup       = do
       CUDA.push ctx
       dev       <- CUDA.device
