@@ -174,19 +174,20 @@ mkFold dev elt combine mseed = do
         $stms:(maybe [] (return . mapseed env) mseed)
 
         /*
-         * Kill threads that will not participate in this segment to avoid
-         * invalid global reads.
-         */
-        if (threadIdx.x >= interval_size)
-           return;
-
-        /*
          * Threads in a block cooperatively reduce all elements in an interval.
          */
         for (int seg = blockIdx.x; seg < num_intervals; seg += gridDim.x)
         {
             const int start = seg * interval_size;
             const int end   = min(start + interval_size, num_elements);
+            const int n     = min(end - start, blockDim.x);
+
+            /*
+             * Kill threads that will not participate in this segment to avoid
+             * invalid global reads.
+             */
+            if (threadIdx.x >= n)
+               return;
 
             /*
              * Ensure aligned access to global memory, and that each thread
@@ -238,7 +239,6 @@ mkFold dev elt combine mseed = do
             $stms:(sdata "threadIdx.x" .=. x1)
             __syncthreads();
 
-            const int n = min(interval_size, blockDim.x);
             $stms:(reduceBlock dev elt "n" sdata env combine)
 
             /*
