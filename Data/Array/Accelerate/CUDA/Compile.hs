@@ -149,15 +149,13 @@ prepareAcc rootAcc = traverseAcc rootAcc
         -- TODO: write helper functions to clean these up
         Scanl f e a -> do
           ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1  f mat)) var
-          scan1         <- build (OpenAcc (Scanl1 f a))   var
-          return        $  ExecAcc (cons () add $ cons () scan1 $ FL.singleton () scan) var eacc
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (cons () add $ FL.singleton () scan) var eacc
 
         Scanl' f e a -> do
           ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl' <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1  f mat)) var
-          scan1         <- build (OpenAcc (Scanl1 f a))   var
-          return        $  ExecAcc (cons () (retag add) $ cons () (retag scan1) $ FL.singleton () scan) var eacc
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (cons () (retag add) $ FL.singleton () scan) var eacc
 
         Scanl1 f a -> do
           ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanl1 <$> travF f <*> travA a
@@ -166,15 +164,13 @@ prepareAcc rootAcc = traverseAcc rootAcc
 
         Scanr f e a -> do
           ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1  f mat)) var
-          scan1         <- build (OpenAcc (Scanr1 f a))   var
-          return        $  ExecAcc (cons () add $ cons () scan1 $ FL.singleton () scan) var eacc
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (cons () add $ FL.singleton () scan) var eacc
 
         Scanr' f e a -> do
           ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr' <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1  f mat)) var
-          scan1         <- build (OpenAcc (Scanr1 f a))   var
-          return        $  ExecAcc (cons () (retag add) $ cons () (retag scan1) $ FL.singleton () scan) var eacc
+          add           <- build (OpenAcc (Fold1 f mat)) var
+          return        $  ExecAcc (cons () (retag add) $ FL.singleton () scan) var eacc
 
         Scanr1 f a -> do
           ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanr1 <$> travF f <*> travA a

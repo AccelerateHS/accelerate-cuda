@@ -132,27 +132,25 @@ mkScan dir dev elt combine mseed = do
          * Read in previous result partial sum. We store the carry value in x0
          * and read new values from the input array into x1, since 'scanBlock'
          * will store its results into x1 on completion.
-         *
-         * If we are a single block exclusive scan, apply the seed element instead.
          */
-        int carry_in = blockIdx.x != $id:firstBlock || $exp:(cbool exclusive) && gridDim.x == 1;
-        if (carry_in) {
-            if (threadIdx.x == 0) {
-                if (blockIdx.x == 0) {
-                    $stms:(maybe [] (x0 .=.) mseed)
-                } else {
-                    $stms:(x0 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
-                }
+        int carry_in = 0;
+        if ( threadIdx.x == 0 ) {
+            if ( gridDim.x > 1 ) {
+                $stms:(x0 .=. blkSum "blockIdx.x")
+                carry_in = 1;
             }
-            __syncthreads();
+            else if ( $exp:(cbool exclusive) ) {
+                $stms:(maybe [] (x0 .=.) mseed)
+                carry_in = 1;
+            }
         }
 
         const int start = blockIdx.x * interval_size;
         const int end   = min(start + interval_size, num_elements);
 
-        for (int i = start + threadIdx.x; i < end; i += blockDim.x)
+        for (int i = threadIdx.x; i < end - start; i += blockDim.x)
         {
-            const int j = $id:(if left then "i" else "end - i - 1");
+            const int j = $id:(if left then "start + i" else "end - i - 1");
             $stms:(x1 .=. getIn0 "j")
 
             if (threadIdx.x == 0 && carry_in) {
@@ -188,10 +186,18 @@ mkScan dir dev elt combine mseed = do
         /*
          * set the overall scan result
          */
-        if (threadIdx.x == 0 && blockIdx.x == $id:lastBlock)
+        if ( threadIdx.x == 0 )
         {
-            $stms:(setSum .=. x0)
-            $stms:finalise
+            if ( blockIdx.x == $id:(if left then "gridDim.x - 1" else "0") ) {
+                $stms:(setSum .=. x0)
+            }
+
+            if ( gridDim.x > 1 ) {
+                $stms:(setOut (if left then "0" else "end - 1") (blkSum "blockIdx.x"))
+            }
+            else if ( $exp:(cbool exclusive) ) {
+                $stms:(setOut (if left then "0" else "end - 1") (fromMaybe [] mseed))
+            }
         }
     }
   |]
@@ -206,12 +212,6 @@ mkScan dir dev elt combine mseed = do
     --
     exclusive                   = isJust mseed
     left                        = dir == L
-    firstBlock                  = if     left then "0" else "gridDim.x - 1"
-    lastBlock                   = if not left then "0" else "gridDim.x - 1"
-    --
-    finalise
-      | Just seed <- mseed      = setOut (if left then "0" else "end - 1") seed
-      | otherwise               = []
 
 
 --------------------------------------------------------------------------------
