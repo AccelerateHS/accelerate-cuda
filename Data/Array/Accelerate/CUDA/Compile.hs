@@ -42,6 +42,7 @@ import Control.Monad
 import Control.Monad.Trans
 import Crypto.Hash.MD5                                  ( hashlazy )
 import Data.Label.PureM
+import Data.List
 import Data.Maybe
 import Data.Monoid
 import Foreign.Storable
@@ -286,8 +287,7 @@ build acc fvar = do
       --
       -- make sure kernel/stats are printed together
       --
-      message   $ unlines [msg1, "cc: " ++ msg2]
-
+      message   $ intercalate "\n" [msg1, "cc: " ++ msg2]
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
