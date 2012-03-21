@@ -397,9 +397,8 @@ foldSegOp, fold1SegOp
     -> Array (dim:.Int) e
     -> Segments i
     -> CIO (Array (dim:.Int) e)
-fold1SegOp kernel bindings aenv in0@(Array (_,sz) _) seg
-  = BOUNDS_CHECK(check) "fold1Seg" "empty array" (sz > 0)
-  $ foldSegOp kernel bindings aenv in0 seg
+fold1SegOp kernel bindings aenv in0 seg =
+  foldSegOp kernel bindings aenv in0 seg
 
 foldSegOp kernel bindings aenv (Array sh0 in0) (Array shs seg) = do
   res@(Array sh out) <- allocateArray $ toElt (fst sh0, size shs-1)
