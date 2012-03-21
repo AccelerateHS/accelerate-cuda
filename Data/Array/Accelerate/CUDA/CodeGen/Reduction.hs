@@ -409,7 +409,7 @@ mkFoldSeg dev dim seg elt combine mseed = do
              */
             const int n = min(num_elements, warpSize);
             $stms:(sdata "threadIdx.x" .=. x1)
-            $stms:(reduceWarp dev elt "n" "thread_lane" sdata env combine)
+            $stms:(tail $ reduceWarp dev elt "n" "thread_lane" sdata env combine)
 
             /*
              * Finally, the first thread writes the result for this segment
@@ -463,21 +463,23 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
     (x0, _)     = locals "x0" elt
     (x1, _)     = locals "x1" elt
     --
-    reduce 1    = [cstm|
-      if ( $id:n > 1 && $id:tid + 1 < $id:n ) {
-          $decls:env
-          $stms:(x0 .=. sdata "threadIdx.x + 1")
-          $stms:(x1 .=. combine)
-      }
-    |]
-    reduce i    = [cstm|
-      if ( $id:n > $int:i && $id:tid + $int:i < $id:n ) {
-          $decls:env
-          $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-          $stms:(x1 .=. combine)
-          $stms:(sdata "threadIdx.x" .=. x1)
-      }
-    |]
+    reduce i
+      | i > 1
+      = [cstm| if ( $id:tid + $int:i < $id:n ) {
+                   $decls:env
+                   $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+                   $stms:(x1 .=. combine)
+                   $stms:(sdata "threadIdx.x" .=. x1)
+               }
+             |]
+      --
+      | otherwise
+      = [cstm| if ( $id:tid + $int:i < $id:n ) {
+                   $decls:env
+                   $stms:(x0 .=. sdata "threadIdx.x + 1")
+                   $stms:(x1 .=. combine)
+               }
+             |]
 
 
 -- All threads cooperatively reduce this block's data in shared memory. We
@@ -491,7 +493,7 @@ reduceBlock :: DeviceProperties
             -> Environment              -- local binding environment for the..
             -> [Exp]                    -- ..binary associative function
             -> [Stm]
-reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u,u-1..v]
+reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u-1,u-2..v]
   where
     u           = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
     v           = floor (logBase 2 (fromIntegral $ warpSize dev           :: Double)) :: Int
@@ -499,21 +501,22 @@ reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u,u-1..v]
     (x0, _)     = locals "x0" elt
     (x1, _)     = locals "x1" elt
     --
-    reduce 32   = [cstm|
-      if ( threadIdx.x < $int:(warpSize dev) ) {
-          $stms:(reduceWarp dev elt n "threadIdx.x" sdata env combine)
-      }
-    |]
-    reduce i    = [cstm|
-      if ( $id:n > $int:i ) {
-          if ( threadIdx.x < $int:i && threadIdx.x + $int:i < $id:n ) {
-              $decls:env
-              $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-              $stms:(x1 .=. combine)
-              $stms:(sdata "threadIdx.x" .=. x1)
-          }
-          __syncthreads();
-      }
-    |]
-
+    reduce i
+      | i > warpSize dev
+      = [cstm| if ( $id:n > $int:i ) {
+                   if ( threadIdx.x + $int:i < $id:n ) {
+                       $decls:env
+                       $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+                       $stms:(x1 .=. combine)
+                       $stms:(sdata "threadIdx.x" .=. x1)
+                   }
+                   __syncthreads();
+               }
+             |]
+      --
+      | otherwise
+      = [cstm| if ( threadIdx.x < $int:(warpSize dev) ) {
+                   $stms:(reduceWarp dev elt n "threadIdx.x" sdata env combine)
+               }
+             |]
 
