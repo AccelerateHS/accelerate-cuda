@@ -316,7 +316,7 @@ mkFoldSeg dev dim seg elt combine mseed = do
 
     extern "C"
     __global__ void
-    foldSeg
+    $id:name
     (
         $params:argOut,
         $params:argIn0,
