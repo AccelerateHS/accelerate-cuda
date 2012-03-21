@@ -402,6 +402,9 @@ fold1SegOp kernel bindings aenv in0 seg =
 
 foldSegOp kernel bindings aenv (Array sh0 in0) (Array shs seg) = do
   res@(Array sh out) <- allocateArray $ toElt (fst sh0, size shs-1)
+  --
+  message $ "foldSeg: shOut = (" ++ showShape (toElt sh  :: dim :. Int) ++ ")"
+                ++ ", shIn0 = (" ++ showShape (toElt sh0 :: dim :. Int) ++ ")"
   execute kernel bindings aenv (size sh)
     ((((((), out)
            , in0)
@@ -922,5 +925,4 @@ trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
 {-# INLINE message #-}
 message :: String -> CIO ()
 message s = s `trace` return ()
-
 
