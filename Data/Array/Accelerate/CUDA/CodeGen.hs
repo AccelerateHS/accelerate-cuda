@@ -694,8 +694,19 @@ codegenMaxBound (NonNumBoundedType   ty) | NonNumDict   <- nonNumDict   ty = cod
 -- Methods from Num, Floating, Fractional and RealFrac
 --
 codegenAbs :: NumType a -> C.Exp -> C.Exp
-codegenAbs ty@(IntegralNumType _) x = ccall (ty `postfix` "abs")  [x]
-codegenAbs ty@(FloatingNumType _) x = ccall (ty `postfix` "fabs") [x]
+codegenAbs (FloatingNumType ty) x = ccall (FloatingNumType ty `postfix` "fabs") [x]
+codegenAbs (IntegralNumType ty) x =
+  case ty of
+    TypeWord _          -> x
+    TypeWord8 _         -> x
+    TypeWord16 _        -> x
+    TypeWord32 _        -> x
+    TypeWord64 _        -> x
+    TypeCUShort _       -> x
+    TypeCUInt _         -> x
+    TypeCULong _        -> x
+    TypeCULLong _       -> x
+    _                   -> ccall "abs" [x]
 
 
 codegenSig :: NumType a -> C.Exp -> C.Exp
