@@ -194,9 +194,13 @@ codegenAcc dev acc (AccBindings vars) =
           g'    <- codegenFun g
           mkPermute dev (accDim acc) (accDim a) (codegenAccType a) (sizeOfAccTypes a) f' g'
 
-        Backpermute _ f a -> do
+        Backpermute _ f a ->
+          let elt       = codegenAccType a
+              var i     = [cexp| $id:("x0_a" ++ show i) |]
+          in do
           f'    <- codegenFun f
-          mkBackpermute (accDim acc) (accDim a) (codegenAccType a) f'
+          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
+          mkBackpermute (accDim acc) (accDim a) elt f'
 
         Stencil f b a     -> do
           f'    <- codegenFun f

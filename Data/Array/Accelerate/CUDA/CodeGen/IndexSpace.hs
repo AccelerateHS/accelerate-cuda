@@ -217,7 +217,7 @@ mkBackpermute dimOut dimIn0 types index = do
             {
                 const int jx = toIndex(shIn0, src);
                 $decls:(getIn0 "jx")
-                $stms:(setOut "ix" x0)
+                $stms:(setOut "ix" (reverse x0))
             }
         }
     }
