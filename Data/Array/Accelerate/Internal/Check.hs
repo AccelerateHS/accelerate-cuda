@@ -60,8 +60,8 @@ error file line kind loc msg
   = P.error . unlines $
       (if kind == Internal
          then ([""
-               ,"*** Internal error in package accelerate ***"
-               ,"*** Please submit a bug report at https://github.com/mchakravarty/accelerate/issues"]++)
+               ,"*** Internal error in package accelerate-cuda ***"
+               ,"*** Please submit a bug report at https://github.com/tmcdonell/accelerate-cuda/issues"]++)
          else id)
       [ file ++ ":" ++ show line ++ " (" ++ loc ++ "): " ++ msg ]
 
