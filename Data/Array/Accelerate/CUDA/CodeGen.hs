@@ -42,7 +42,7 @@ import Data.Array.Accelerate.Analysis.Stencil
 import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 
-import Data.Array.Accelerate.CUDA.AST
+import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
@@ -52,6 +52,20 @@ import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 
 #include "accelerate.h"
+
+
+data Val env where
+  Empty ::                       Val ()
+  Push  :: Val env -> [C.Exp] -> Val (env, s)
+
+prj :: Idx env t -> Val env -> [C.Exp]
+prj ZeroIdx      (Push _   v) = v
+prj (SuccIdx ix) (Push val _) = prj ix val
+prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
+
+sizeEnv :: Val env -> Int
+sizeEnv Empty        = 0
+sizeEnv (Push env _) = 1 + sizeEnv env
 
 
 -- Array expressions
@@ -275,15 +289,29 @@ codegenBoundary _ Wrap         = Wrap
 -- are only introduced as arguments to collective operations, so lambdas are
 -- always outermost, and can always be translated into plain C functions.
 --
-codegenFun :: OpenFun env aenv t -> CGM [C.Exp]
-codegenFun (Lam  f) = codegenFun f
-codegenFun (Body b) = codegenExp b
+codegenFun :: Fun aenv t -> CGM [C.Exp]
+codegenFun fun = codegenOpenFun fun Empty
+
+codegenOpenFun :: OpenFun env aenv t -> Val env -> CGM [C.Exp]
+codegenOpenFun fun env =
+  case fun of
+    Body e      -> codegenOpenExp e env
+    Lam (f :: OpenFun (env,a) aenv b)
+                -> codegenOpenFun f (env `Push` vars)
+      where
+        ty      = codegenTupleType (Sugar.eltType (undefined :: a))
+        n       = length ty
+        lvl     = sizeEnv env
+        vars    = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
 
 
 -- Embedded scalar computations
 --
-codegenExp :: forall env aenv t. OpenExp env aenv t -> CGM [C.Exp]
-codegenExp exp =
+codegenExp :: Exp aenv t -> CGM [C.Exp]
+codegenExp exp = codegenOpenExp exp Empty
+
+codegenOpenExp :: forall env aenv t. OpenExp env aenv t -> Val env -> CGM [C.Exp]
+codegenOpenExp exp env =
   case exp of
     -- local binders and variable indices
     --
@@ -292,17 +320,17 @@ codegenExp exp =
     -- used. If this is a scalar type mark it as used immediately, otherwise
     -- wait until tuple projection picks out an individual element.
     --
-    Let _ _             -> INTERNAL_ERROR(error) "codegenExp" "Let: not implemented yet"
-    Var i               -> case ty of
-      [t]       -> let x = var 0
-                   in  use v 0 t x >> return [x]
-      _         -> return $ map var [n-1, n-2 .. 0]
+    Let a b -> do
+      a'        <- codegenOpenExp a env
+      vars      <- zipWithM bind (codegenExpType a) a'
+      codegenOpenExp b (env `Push` vars)
+
+    Var ix
+      | [t] <- ty, [v] <- var   -> use (sizeEnv env - idxToInt ix - 1) 0 t v >> return var
+      | otherwise               -> return var
       where
-        base    = 'x':shows v "_a"
-        var x   = [cexp| $id:(base ++ show x) |]
-        ty      = codegenTupleType (Sugar.eltType (undefined::t))
-        n       = length ty
-        v       = idxToInt i
+        var     = prj ix env
+        ty      = codegenTupleType (Sugar.eltType (undefined :: t))
 
     -- Constant values
     PrimConst c         -> return [codegenPrimConst c]
@@ -310,13 +338,13 @@ codegenExp exp =
 
     -- Primitive scalar operations
     PrimApp f arg       -> do
-      x                 <- codegenExp arg
+      x                 <- codegenOpenExp arg env
       return [codegenPrim f x]
 
     -- Tuples
-    Tuple t             -> codegenTup t
+    Tuple t             -> codegenTup t env
     Prj idx e           -> do
-      e'                <- codegenExp e
+      e'                <- codegenOpenExp e env
       case subset (zip e' elt) of
         [(x,t)]         -> addVar x t >> return [x]
         xts             -> return $ fst (unzip xts)
@@ -337,12 +365,12 @@ codegenExp exp =
 
     -- Conditional expression
     Cond p t e          -> do
-      t'                <- codegenExp t
-      e'                <- codegenExp e
-      p'                <- codegenExp p >>= \ps ->
+      t'                <- codegenOpenExp t env
+      e'                <- codegenOpenExp e env
+      p'                <- codegenOpenExp p env >>= \ps ->
         case ps of
           [x]   -> bind [cty| typename bool |] x
-          _     -> INTERNAL_ERROR(error) "codegenExp" "expected conditional predicate"
+          _     -> INTERNAL_ERROR(error) "codegenOpenExp" "expected conditional predicate"
       --
       return $ zipWith (\a b -> [cexp| $exp:p' ? $exp:a : $exp:b|]) t' e'
 
@@ -355,37 +383,37 @@ codegenExp exp =
     IndexNil            -> return []
     IndexAny            -> return []
     IndexCons sh sz     -> do
-      sh'               <- codegenExp sh
-      sz'               <- codegenExp sz
+      sh'               <- codegenOpenExp sh env
+      sz'               <- codegenOpenExp sz env
       return (sh' ++ sz')
 
     IndexHead sh@(Shape a)      -> do
-      [var]                     <- codegenExp sh
+      [var]                     <- codegenOpenExp sh env
       return $ if accDim a > 1  then [[cexp| $exp:var . $id:("a0") |]]
                                 else [var]
 
     IndexTail sh@(Shape a)      -> do
-      [var]                     <- codegenExp sh
+      [var]                     <- codegenOpenExp sh env
       return $ let n = accDim a
                in  map (\c -> [cexp| $exp:var . $id:('a':show c) |]) [n-1, n-2 .. 1]
 
     IndexHead ix        -> do
-      ix'               <- codegenExp ix
+      ix'               <- codegenOpenExp ix env
       return [last ix']
 
     IndexTail ix        -> do
-      ix'               <- codegenExp ix
+      ix'               <- codegenOpenExp ix env
       return (init ix')
 
 codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
     -- Array shape and element indexing
-    ShapeSize e         -> do
-      sh'               <- codegenExp e
+    ShapeSize sh        -> do
+      sh'               <- codegenOpenExp sh env
       return [ ccall "size" sh' ]
 
     Shape arr
       | OpenAcc (Avar a) <- arr -> return [ cvar ("sh" ++ show (idxToInt a)) ]
-      | otherwise               -> INTERNAL_ERROR(error) "codegenExp" "expected array variable"
+      | otherwise               -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
 
     IndexScalar arr ix
       | OpenAcc (Avar a) <- arr ->
@@ -395,18 +423,19 @@ codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
             elt         = codegenAccTypeTex arr
             n           = length elt
         in do
-          ix'           <- codegenExp ix
+          ix'           <- codegenOpenExp ix env
           v             <- bind [cty| int |] (ccall "toIndex" [sh, ccall "shape" ix'])
           return $ zipWith (\t x -> indexArray t (array x) v) elt [n-1, n-2 .. 0]
 
-      | otherwise                -> INTERNAL_ERROR(error) "codegenExp" "expected array variable"
+      | otherwise                -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
 
 
 -- Tuples are defined as snoc-lists, so generate code right-to-left
 --
-codegenTup :: Tuple (OpenExp env aenv) t -> CGM [C.Exp]
-codegenTup NilTup          = return []
-codegenTup (t `SnocTup` e) = (++) <$> codegenTup t <*> codegenExp e
+codegenTup :: Tuple (OpenExp env aenv) t -> Val env -> CGM [C.Exp]
+codegenTup tup env = case tup of
+  NilTup        -> return []
+  SnocTup t e   -> (++) <$> codegenTup t env <*> codegenOpenExp e env
 
 
 -- Convert a tuple index into the corresponding integer. Since the internal

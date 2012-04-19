@@ -13,7 +13,7 @@
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
   runCGM, CGM, Environment,
-  lam, bind, use, environment, subscripts
+  bind, use, environment, subscripts
 
 ) where
 
@@ -49,23 +49,16 @@ $(mkLabels [''Gamma])
 runCGM :: CGM a -> a
 runCGM = flip evalState (Gamma 0 (S.replicate 2 IM.empty) [])
 
--- Introduce an expression of a given type and name into the environment. Return
--- an expression that can be used in place of the thing just bound (i.e. the
--- variable name)
---
-lam :: String -> Type -> Exp -> CGM Exp
-lam name t e = do
-  modify bindings ( [cdecl| const $ty:t $id:name = $exp:e;|] : )
-  return [cexp|$id:name|]
 
 -- Add an expression of given type to the environment and return the (new,
--- unique) binding name
+-- unique) binding name that can be used in place of the thing just bound.
 --
 bind :: Type -> Exp -> CGM Exp
 bind t e = do
-  v     <- fresh
-  _     <- lam v t e
-  return $ [cexp|$id:v|]
+  name  <- fresh
+  modify bindings ( [cdecl| const $ty:t $id:name = $exp:e;|] : )
+  return [cexp|$id:name|]
+
 
 -- Return the environment (list of initialisation declarations). Since we
 -- introduce new bindings to the front of the list, need to reverse so they
