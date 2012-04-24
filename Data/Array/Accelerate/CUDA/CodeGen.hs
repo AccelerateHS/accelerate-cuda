@@ -322,8 +322,14 @@ codegenOpenExp exp env =
     --
     Let a b -> do
       a'        <- codegenOpenExp a env
-      vars      <- zipWithM bind (codegenExpType a) a'
+      vars      <- zipWithM addVar (codegenExpType a) a'
       codegenOpenExp b (env `Push` vars)
+      where
+        addVar t x = do
+          case show x of
+            ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
+                  -> use v' n' t x >> return x
+            _     -> bind t x
 
     Var ix
       | [t] <- ty, [v] <- var   -> use (sizeEnv env - idxToInt ix - 1) 0 t v >> return var
