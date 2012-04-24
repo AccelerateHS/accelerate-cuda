@@ -240,7 +240,7 @@ codegenAcc dev acc (AccBindings vars) =
     liftAcc :: OpenAcc aenv a -> ArrayVar aenv -> [C.Definition]
     liftAcc _ (ArrayVar idx) =
       let avar    = OpenAcc (Avar idx)
-          idx'    = show $ deBruijnToInt idx
+          idx'    = show $ idxToInt idx
           sh      = cshape ("sh" ++ idx') (accDim avar)
           ty      = codegenAccTypeTex avar
           arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)

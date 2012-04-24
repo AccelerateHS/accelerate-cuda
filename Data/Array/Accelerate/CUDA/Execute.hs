@@ -757,7 +757,7 @@ bindAcc
     -> ArrayVar aenv
     -> CIO ()
 bindAcc mdl aenv (ArrayVar idx) =
-  let idx'        = show $ deBruijnToInt idx
+  let idx'        = show $ idxToInt idx
       Array sh ad = prj idx aenv
       --
       bindDim = liftIO $
