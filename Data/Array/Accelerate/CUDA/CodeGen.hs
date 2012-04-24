@@ -387,16 +387,6 @@ codegenOpenExp exp env =
       sz'               <- codegenOpenExp sz env
       return (sh' ++ sz')
 
-    IndexHead sh@(Shape a)      -> do
-      [var]                     <- codegenOpenExp sh env
-      return $ if accDim a > 1  then [[cexp| $exp:var . $id:("a0") |]]
-                                else [var]
-
-    IndexTail sh@(Shape a)      -> do
-      [var]                     <- codegenOpenExp sh env
-      return $ let n = accDim a
-               in  map (\c -> [cexp| $exp:var . $id:('a':show c) |]) [n-1, n-2 .. 1]
-
     IndexHead ix        -> do
       ix'               <- codegenOpenExp ix env
       return [last ix']
@@ -412,7 +402,13 @@ codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
       return [ ccall "size" sh' ]
 
     Shape arr
-      | OpenAcc (Avar a) <- arr -> return [ cvar ("sh" ++ show (idxToInt a)) ]
+      | OpenAcc (Avar a) <- arr ->
+          let ndim      = accDim arr
+              sh        = cvar ("sh" ++ show (idxToInt a))
+          in return $ if ndim <= 1
+                then [sh]
+                else map (\c -> [cexp| $exp:sh . $id:('a':show c) |] ) [ndim-1, ndim-2 .. 0]
+
       | otherwise               -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
 
     IndexScalar arr ix
