@@ -224,7 +224,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         PrimApp f e             -> liftA  (PrimApp f)   <$> travE e
         IndexScalar a e         -> liftA2 IndexScalar   <$> travA a <*> travE e
         Shape a                 -> liftA  Shape         <$> travA a
-        Size a                  -> liftA  Size          <$> travA a
+        ShapeSize e             -> liftA  ShapeSize     <$> travE e
       where
         travA :: (Shape sh, Elt e)
               => OpenAcc aenv (Array sh e) -> CIO (AccBindings aenv, ExecOpenAcc aenv (Array sh e))

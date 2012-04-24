@@ -104,8 +104,8 @@ prettyExecAcc alvl wrap (ExecAcc _ (AccBindings fv) pacc) =
       ann  = braces (freevars (Set.toList fv))
   in case pacc of
        Avar _         -> base
-       Let  _ _       -> base
-       Let2 _ _       -> base
+       Alet  _ _      -> base
+       Alet2 _ _      -> base
        Apply _ _      -> base
        PairArrays _ _ -> base
        Acond _ _ _    -> base

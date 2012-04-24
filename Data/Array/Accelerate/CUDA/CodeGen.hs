@@ -401,7 +401,6 @@ codegenOpenExp exp env =
       ix'               <- codegenOpenExp ix env
       return (init ix')
 
-codegenExp (ShapeSize e)    = return $ ccall "size" (codegenExp e)
     -- Array shape and element indexing
     ShapeSize sh        -> do
       sh'               <- codegenOpenExp sh env

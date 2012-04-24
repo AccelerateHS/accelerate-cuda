@@ -27,7 +27,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 
 -- libraries
 import Prelude                                          hiding (fst, snd)
-import Data.Record.Label
+import Data.Label.PureM
 import Control.Applicative
 import Control.Monad.Trans
 
@@ -51,7 +51,7 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 -- Garbage collection
 --
 cleanupArrayData :: CIO ()
-cleanupArrayData = liftIO . reclaim =<< getM memoryTable
+cleanupArrayData = liftIO . reclaim =<< gets memoryTable
 
 -- Array tuple extraction
 --
@@ -85,7 +85,7 @@ snd = sndArrayData
 -- |Allocate a new device array to accompany the given host-side array.
 --
 mallocArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-mallocArray (Array sh adata) = doMalloc =<< getM memoryTable
+mallocArray (Array sh adata) = doMalloc =<< gets memoryTable
   where
     doMalloc mt = liftIO $ mallocR arrayElt adata
       where
@@ -101,7 +101,7 @@ mallocArray (Array sh adata) = doMalloc =<< getM memoryTable
 -- |Upload an existing array to the device
 --
 useArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-useArray (Array sh adata) = doUse =<< getM memoryTable
+useArray (Array sh adata) = doUse =<< gets memoryTable
   where
     doUse mt = liftIO $ useR arrayElt adata
       where
@@ -131,7 +131,7 @@ useArrayAsync (Array sh adata) ms = doUse =<< gets memoryTable
 -- synchronous operation.
 --
 indexArray :: (Shape dim, Elt e) => Array dim e -> dim -> CIO e
-indexArray (Array sh adata) ix = doIndex =<< getM memoryTable
+indexArray (Array sh adata) ix = doIndex =<< gets memoryTable
   where
     i          = index sh (fromElt ix)
     doIndex mt = toElt <$> (liftIO $ indexR arrayElt adata)
@@ -152,7 +152,7 @@ indexArray (Array sh adata) ix = doIndex =<< getM memoryTable
 copyArray :: (Shape dim, Elt e) => Array dim e -> Array dim e -> CIO ()
 copyArray (Array sh1 adata1) (Array sh2 adata2)
   = BOUNDS_CHECK(check) "copyArray" "shape mismatch" (sh1 == sh2)
-  $ doCopy =<< getM memoryTable
+  $ doCopy =<< gets memoryTable
   where
     doCopy mt = liftIO $ copyR arrayElt adata1 adata2
       where
@@ -169,7 +169,7 @@ copyArray (Array sh1 adata1) (Array sh2 adata2)
 -- Copy data from the device into the associated Accelerate host-side array
 --
 peekArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-peekArray (Array sh adata) = doPeek =<< getM memoryTable
+peekArray (Array sh adata) = doPeek =<< gets memoryTable
   where
     doPeek mt = liftIO $ peekR arrayElt adata
       where
@@ -182,7 +182,7 @@ peekArray (Array sh adata) = doPeek =<< getM memoryTable
         mkPrimDispatch(peekPrim,Prim.peekArray)
 
 peekArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> CIO ()
-peekArrayAsync (Array sh adata) ms = doPeek =<< getM memoryTable
+peekArrayAsync (Array sh adata) ms = doPeek =<< gets memoryTable
   where
     doPeek mt = liftIO $ peekR arrayElt adata
       where
@@ -198,7 +198,7 @@ peekArrayAsync (Array sh adata) ms = doPeek =<< getM memoryTable
 -- Copy data from an Accelerate array into the associated device array
 --
 pokeArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-pokeArray (Array sh adata) = doPoke =<< getM memoryTable
+pokeArray (Array sh adata) = doPoke =<< gets memoryTable
   where
     doPoke mt = liftIO $ pokeR arrayElt adata
       where
@@ -211,7 +211,7 @@ pokeArray (Array sh adata) = doPoke =<< getM memoryTable
         mkPrimDispatch(pokePrim,Prim.pokeArray)
 
 pokeArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> CIO ()
-pokeArrayAsync (Array sh adata) ms = doPoke =<< getM memoryTable
+pokeArrayAsync (Array sh adata) ms = doPoke =<< gets memoryTable
   where
     doPoke mt = liftIO $ pokeR arrayElt adata
       where
@@ -244,7 +244,7 @@ marshalDevicePtrs adata = marshalR arrayElt adata
 -- that can be passed to a kernel upon invocation.
 --
 marshalArrayData :: ArrayElt e => ArrayData e -> CIO [CUDA.FunParam]
-marshalArrayData adata = doMarshal =<< getM memoryTable
+marshalArrayData adata = doMarshal =<< gets memoryTable
   where
     doMarshal mt = liftIO $ marshalR arrayElt adata
       where
@@ -263,7 +263,7 @@ marshalArrayData adata = doMarshal =<< getM memoryTable
 -- consumed, in projection index order --- i.e. right-to-left
 --
 marshalTextureData :: ArrayElt e => ArrayData e -> Int -> [CUDA.Texture] -> CIO ()
-marshalTextureData adata n texs = doMarshal =<< getM memoryTable
+marshalTextureData adata n texs = doMarshal =<< gets memoryTable
   where
     doMarshal mt = liftIO $ marshalR arrayElt adata texs >> return ()
       where
