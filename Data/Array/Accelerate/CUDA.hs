@@ -180,14 +180,22 @@ collect arrs = collectR arrays arrs
 
 -- Running asynchronously
 -- ----------------------
---
+
 -- We need to execute the main thread asynchronously to give finalisers a chance
 -- to run. Make sure to catch exceptions to avoid "blocked indefinitely on MVar"
 -- errors.
 --
-
 data Async a = Async !ThreadId !(MVar (Either SomeException a))
 
+-- Fork an action to execute asynchronously.
+--
+-- TLM:
+--   CUDA contexts are specific to the processor on which they were created. It
+--   may be necessary to take this into account when forking accelerate
+--   computations (forkOn rather than forkIO), either by always requiring a
+--   specific CPU, and/or having the driver API store the processor ordinal when
+--   creating contexts.
+--
 async :: IO a -> IO (Async a)
 async action = do
    var <- newEmptyMVar
