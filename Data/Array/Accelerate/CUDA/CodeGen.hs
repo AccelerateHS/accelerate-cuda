@@ -404,7 +404,7 @@ codegenOpenExp exp env =
     -- Array shape and element indexing
     ShapeSize sh        -> do
       sh'               <- codegenOpenExp sh env
-      return [ ccall "size" sh' ]
+      return [ ccall "size" [ccall "shape" sh'] ]
 
     Shape arr
       | OpenAcc (Avar a) <- arr ->
