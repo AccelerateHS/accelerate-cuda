@@ -76,6 +76,9 @@ fresh = do
 
 -- Mark a variable at a given base and tuple index as being used.
 --
+-- TLM: actually, this can only be trusted if there is a single scalar function,
+--   otherwise we get collisions (e.g. permute)
+--
 use :: Int -> Int -> Type -> Exp -> CGM ()
 use base prj ty var = modify variables (S.adjust (IM.insert prj (ty,var)) base)
 

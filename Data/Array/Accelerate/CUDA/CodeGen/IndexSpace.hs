@@ -139,7 +139,7 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     dst                         = project dimOut "dst" index
     sm                          = computeCapability dev
     unsafe                      = setOut "jx" combine
-    (temps,write)               = unzip $ zipWith6 apply unsafe combine types arrOut x1 sizeof
+    (temps, write)              = unzip $ zipWith6 apply unsafe combine types arrOut x1 sizeof
     --
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
@@ -155,23 +155,23 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     -- as a whole is not stored atomically.
     --
     apply set f t a z s
-      | Just (t',cast) <- reinterpret s =
-          let z'        = [cexp| $id:('_':show z) |]
-              get       = [cexp| $exp:a [ $id:("jx") ] |]
-          in
-          ( [cdecl| $ty:t' $id:(show z), $id:(show z') = $exp:cast ( $exp:get ); |]
-          , [cstm| do { $exp:z  = $exp:z';
-                        $exp:z' = atomicCAS ( ( $ty:(cptr t') ) & $exp:a [ $id:("jx") ], $exp:z, $exp:cast ( $exp:f ) );
-                      } while ( $exp:z != $exp:z' ); |]
-          )
-      | otherwise                       =
-          ( [cdecl| const $ty:t $id:(show z) = $exp:a [ $id:("jx") ]; |]
-          , set
-          )
+      | Just atomicCAS <- reinterpret s
+      = let z'        = [cexp| $id:('_':show z) |]
+        in
+        ( [cdecl| $ty:t $id:(show z), $id:(show z') = $exp:a [ $id:("jx") ]; |]
+        , [cstm| do { $exp:z  = $exp:z';
+                      $exp:z' = $exp:atomicCAS ( & $exp:a [ $id:("jx") ], $exp:z, $exp:f );
+                    } while ( $exp:z != $exp:z' ); |]
+        )
+
+      | otherwise
+      = ( [cdecl| const $ty:t $id:(show z) = $exp:a [ $id:("jx") ]; |]
+        , set
+        )
     --
-    reinterpret :: Int -> Maybe (Type, Exp)
-    reinterpret 4 | sm >= 1.1   = Just (typename "uint32_t", [cexp| $id:("reinterpret32") |])
-    reinterpret 8 | sm >= 1.2   = Just (typename "uint64_t", [cexp| $id:("reinterpret64") |])
+    reinterpret :: Int -> Maybe Exp
+    reinterpret 4 | sm >= 1.1   = Just [cexp| $id:("atomicCAS32") |]
+    reinterpret 8 | sm >= 1.2   = Just [cexp| $id:("atomicCAS64") |]
     reinterpret _               = Nothing
 
 

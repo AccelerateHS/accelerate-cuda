@@ -95,6 +95,28 @@ static __inline__ __device__ uint64_t reinterpret64(const double x)
 #endif
 
 
+/*
+ * Atomic compare-and-swap, with type coercion
+ */
+template <typename T>
+static __inline__ __device__ T atomicCAS32(T* address, T compare, T val)
+{
+    union { T a; uint32_t b; } u;
+
+    u.b = atomicCAS((uint32_t*) address, reinterpret32<T>(compare), reinterpret32<T>(val));
+    return u.a;
+}
+
+template <typename T>
+static __inline__ __device__ T atomicCAS64(T* address, T compare, T val)
+{
+    union { T a; uint64_t b; } u;
+
+    u.b = atomicCAS((uint64_t*) address, reinterpret64<T>(compare), reinterpret64<T>(val));
+    return u.a;
+}
+
+
 #if 0
 /* -----------------------------------------------------------------------------
  * Additional helper functions

@@ -103,13 +103,13 @@ getters
            , String -> [Exp]            -- index global array
            , String -> [InitGroup] )    -- const declarations and initialisation from index
 getters base elt = do
-  (is,ts,vars)  <- unzip3 `fmap` subscripts base
+  (is,_,vars)   <- unzip3 `fmap` subscripts base
   return
     ( params
     , vars
-    , zipWith (\t v -> [cdecl| $ty:t $id:(show v) ; |]) ts vars
+    , zipWith (\i v -> [cdecl| $ty:(elt !! i) $id:(show v) ; |]) is vars
     , \ix -> map (\x -> [cexp| $id:(arr x) [$id:ix] |]) is
-    , \ix -> zipWith3 (\x t v -> [cdecl| const $ty:t $id:(show v) = $id:(arr x) [$id:ix] ; |]) is ts vars
+    , \ix -> zipWith (\i v -> [cdecl| const $ty:(elt !! i) $id:(show v) = $id:(arr i) [$id:ix] ; |]) is vars
     )
   where
     arr x       = "d_in" ++ shows base "_a" ++ show x
