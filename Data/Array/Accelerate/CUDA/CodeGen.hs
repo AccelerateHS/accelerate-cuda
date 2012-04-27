@@ -223,13 +223,13 @@ codegenAcc dev acc (AccBindings vars) =
             b0  = codegenBoundary a b
             i0  = map Sugar.shapeToList (offsets f a)
 
-        Stencil2 f b1 a1 b0 a0 -> do
+        Stencil2 f b0 a0 b1 a1 -> do
           f'    <- codegenFun f
           mkStencil2 (accDim acc) (codegenAccType acc)
-            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
-            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
+            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0
+            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1 f'
           where
-            (p1, p0)    = offsets2 f a1 a0
+            (p1, p0)    = offsets2 f a0 a1
             i0          = map Sugar.shapeToList p0
             i1          = map Sugar.shapeToList p1
 
@@ -295,9 +295,13 @@ codegenFun fun = codegenOpenFun fun Empty
 codegenOpenFun :: OpenFun env aenv t -> Val env -> CGM [C.Exp]
 codegenOpenFun fun env =
   case fun of
-    Body e      -> codegenOpenExp e env
+    Body e -> do
+      e' <- codegenOpenExp e env
+      zipWithM_ addVar (codegenExpType e) e'
+      return e'
+    --
     Lam (f :: OpenFun (env,a) aenv b)
-                -> codegenOpenFun f (env `Push` vars)
+      -> codegenOpenFun f (env `Push` vars)
       where
         ty      = codegenTupleType (Sugar.eltType (undefined :: a))
         n       = length ty
@@ -322,14 +326,17 @@ codegenOpenExp exp env =
     --
     Let a b -> do
       a'        <- codegenOpenExp a env
-      vars      <- zipWithM addVar (codegenExpType a) a'
+      vars      <- zipWithM bindVars (codegenExpType a) a'
       codegenOpenExp b (env `Push` vars)
       where
-        addVar t x = do
-          case show x of
-            ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
-                  -> use v' n' t x >> return x
-            _     -> bind t x
+        -- FIXME: if we are let-binding an input argument (read from global
+        --   array) mark that as used and return the variable name directly,
+        --   otherwise create a fresh binding point.
+        --
+        bindVars t x = do
+          p     <- addVar t x
+          if p then return x
+               else bind t x
 
     Var ix
       | [t] <- ty, [v] <- var   -> use (sizeEnv env - idxToInt ix - 1) 0 t v >> return var
@@ -339,20 +346,23 @@ codegenOpenExp exp env =
         ty      = codegenTupleType (Sugar.eltType (undefined :: t))
 
     -- Constant values
+    --
     PrimConst c         -> return [codegenPrimConst c]
     Const c             -> return (codegenConst (Sugar.eltType (undefined::t)) c)
 
     -- Primitive scalar operations
+    --
     PrimApp f arg       -> do
       x                 <- codegenOpenExp arg env
       return [codegenPrim f x]
 
     -- Tuples
+    --
     Tuple t             -> codegenTup t env
     Prj idx e           -> do
       e'                <- codegenOpenExp e env
       case subset (zip e' elt) of
-        [(x,t)]         -> addVar x t >> return [x]
+        [(x,t)]         -> addVar t x >> return [x]
         xts             -> return $ fst (unzip xts)
       where
         ty      = expType e
@@ -361,15 +371,9 @@ codegenOpenExp exp env =
                 . take (length (codegenExpType exp))
                 . drop (prjToInt idx ty)
                 . reverse
-        --
-        -- this is total hax, and probably insufficient
-        --
-        addVar x t = case show x of
-          ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
-                -> use v' n' t x
-          _     -> return ()
 
     -- Conditional expression
+    --
     Cond p t e          -> do
       t'                <- codegenOpenExp t env
       e'                <- codegenOpenExp e env
@@ -382,10 +386,6 @@ codegenOpenExp exp env =
 
     -- Array indices and shapes
     --
-    -- NOTE: when deconstructing shape components, we need to check where the
-    -- shape data comes from. If referencing a free array variable, we instead
-    -- generate struct-indexing code for the appropriate global variable.
-    --
     IndexNil            -> return []
     IndexAny            -> return []
     IndexCons sh sz     -> do
@@ -394,14 +394,16 @@ codegenOpenExp exp env =
       return (sh' ++ sz')
 
     IndexHead ix        -> do
-      ix'               <- codegenOpenExp ix env
-      return [last ix']
+      ix'               <- last <$> codegenOpenExp ix env
+      _                 <- addVar (last (codegenExpType ix)) ix'
+      return [ix']
 
     IndexTail ix        -> do
       ix'               <- codegenOpenExp ix env
       return (init ix')
 
     -- Array shape and element indexing
+    --
     ShapeSize sh        -> do
       sh'               <- codegenOpenExp sh env
       return [ ccall "size" [ccall "shape" sh'] ]
@@ -448,6 +450,20 @@ prjToInt ZeroTupIdx     _                 = 0
 prjToInt (SuccTupIdx i) (b `PairTuple` a) = length (codegenTupleType a) + prjToInt i b
 prjToInt _ _ =
   INTERNAL_ERROR(error) "prjToInt" "inconsistent valuation"
+
+
+-- Recording which variables of a computation are actually used is important,
+-- particularly for stencils and arrays of tuples, because the CUDA compiler
+-- will not eliminate variables that are initialised but never used.
+--
+-- FIXME: This dubious hack is used to inspect the expression and mark as used
+--   if it refers to an array input.
+--
+addVar :: C.Type -> C.Exp -> CGM Bool
+addVar ty exp = case show exp of
+  ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
+        -> use v' n' ty exp >> return True
+  _     ->                     return False
 
 
 -- Types

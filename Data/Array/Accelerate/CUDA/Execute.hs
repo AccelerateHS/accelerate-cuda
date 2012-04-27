@@ -648,7 +648,7 @@ stencil2Op
     -> Array dim a
     -> Array dim b
     -> CIO (Array dim c)
-stencil2Op kernel@(Kernel _ mdl _ _ _) bindings aenv in1@(Array sh1 _) in0@(Array sh0 _) = do
+stencil2Op kernel@(Kernel _ mdl _ _ _) bindings aenv in0@(Array sh0 _) in1@(Array sh1 _) = do
   res@(Array sh out)    <- allocateArray $ toElt (sh1 `intersect` sh0)
   bindStencil 1 mdl in1
   bindStencil 0 mdl in0
