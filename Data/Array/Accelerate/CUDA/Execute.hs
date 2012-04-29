@@ -78,9 +78,9 @@ executeAcc acc = executeOpenAcc acc Empty
 
 -- Evaluate an expression with free array variables
 --
-executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
+executeAfun1 :: forall a b. (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
 executeAfun1 (Alam (Abody f)) arrs = do
-  applyArraysR useArray arrays arrs
+  applyArraysR useArray (arrays (undefined::a)) (fromArr arrs)
   executeOpenAcc f (Empty `Push` arrs)
 
 executeAfun1 _ _                   =
@@ -95,7 +95,7 @@ executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
     --
     -- (1) Array introduction
     --
-    Use arr -> return arr
+    Use arr -> return (toArr arr)
 
     --
     -- (2) Environment manipulation
@@ -106,13 +106,11 @@ executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
       a0 <- executeOpenAcc a aenv
       executeOpenAcc b (aenv `Push` a0)
 
-    Alet2 a b -> do
-      (a1, a0) <- executeOpenAcc a aenv
-      executeOpenAcc b (aenv `Push` a1 `Push` a0)
+    Atuple tup  -> toTuple <$> executeAtuple tup aenv
 
-    PairArrays a b ->
-      (,) <$> executeOpenAcc a aenv
-          <*> executeOpenAcc b aenv
+    Aprj ix tup -> do
+      arrs   <- executeOpenAcc tup aenv
+      return $! executeAprj ix (fromTuple arrs)
 
     Apply (Alam (Abody f)) a -> do
       a0 <- executeOpenAcc a aenv
@@ -217,6 +215,17 @@ executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
       a1 <- executeOpenAcc a aenv
       a0 <- executeOpenAcc b aenv
       stencil2Op kernel bindings aenv a1 a0
+
+-- Tuples evaluation
+--
+executeAtuple :: Atuple (ExecOpenAcc aenv) t -> Val aenv -> CIO t
+executeAtuple NilAtup        _    = return ()
+executeAtuple (SnocAtup t a) aenv = (,) <$> executeAtuple  t aenv
+                                        <*> executeOpenAcc a aenv
+
+executeAprj :: TupleIdx arrs a -> arrs -> a
+executeAprj ZeroTupIdx      (_, a) = a
+executeAprj (SuccTupIdx ix) (t, _) = executeAprj ix t
 
 
 -- Implementation of primitive array operations

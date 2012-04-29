@@ -117,15 +117,24 @@ prepareAcc rootAcc = traverseAcc rootAcc
         -- Let bindings
         --
         Alet a b                -> node . pure =<< Alet         <$> traverseAcc a  <*> traverseAcc b
-        Alet2 a b               -> node . pure =<< Alet2        <$> traverseAcc a  <*> traverseAcc b
         Apply f a               -> node . pure =<< Apply        <$> compileAfun1 f <*> traverseAcc a
-        PairArrays a b          -> node =<< liftA2 PairArrays   <$> travA a <*> travA b
         Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
+
+        --
+        -- Tuples
+        --
+        Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
+        Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
         --
         -- Array injection
         --
-        Use arr@(Array _ _)     -> useArray arr >> node (pure (Use arr))
+        Use arrs                -> use (arrays (undefined::a)) arrs >> node (pure $ Use arrs)
+          where
+            use :: ArraysR a' -> a' -> CIO ()
+            use ArraysRunit         ()       = return ()
+            use ArraysRarray        arr      = useArray arr
+            use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
 
         --
         -- Computation nodes
@@ -182,6 +191,10 @@ prepareAcc rootAcc = traverseAcc rootAcc
         travA :: OpenAcc aenv' a' -> CIO (AccBindings aenv', ExecOpenAcc aenv' a')
         travA a = pure <$> traverseAcc a
 
+        travAtup :: Atuple (OpenAcc aenv') a' -> CIO (AccBindings aenv', Atuple (ExecOpenAcc aenv') a')
+        travAtup NilAtup        = return (pure NilAtup)
+        travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
+
         travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
@@ -197,7 +210,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
                                             `SnocTup` Var ZeroIdx))))
 
         mat :: Elt e => OpenAcc aenv (Array DIM2 e)
-        mat = OpenAcc $ Use (Array (((),0),0) undefined)
+        mat = OpenAcc $ Use ((), Array (((),0),0) undefined)
 
         noKernel :: FullList () (AccKernel a)
         noKernel =  FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil

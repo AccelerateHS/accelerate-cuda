@@ -100,17 +100,16 @@ prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
 prettyExecAcc :: PrettyAcc ExecOpenAcc
 prettyExecAcc alvl wrap (ExecAcc _ (AccBindings fv) pacc) =
-  let base = prettyPreAcc prettyExecAcc alvl wrap pacc
-      ann  = braces (freevars (Set.toList fv))
+  let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
+      ann       = braces (freevars (Set.toList fv))
+      freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
+                                  . map (\(ArrayVar ix) -> char 'a' <> int (idxToInt ix))
   in case pacc of
        Avar _         -> base
        Alet  _ _      -> base
-       Alet2 _ _      -> base
        Apply _ _      -> base
-       PairArrays _ _ -> base
        Acond _ _ _    -> base
+       Atuple _       -> base
+       Aprj _ _       -> base
        _              -> ann <+> base
-  where
-    freevars = (text "fv=" <>) . brackets . hcat . punctuate comma
-                               . map (\(ArrayVar ix) -> char 'a' <> int (idxToInt ix))
 

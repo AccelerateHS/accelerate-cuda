@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, CPP, GADTs #-}
+{-# LANGUAGE BangPatterns, CPP, GADTs, ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -40,8 +40,8 @@ import Foreign.CUDA.Driver                              ( Context )
 import Foreign.CUDA.Driver.Error
 
 -- friends
-import Data.Array.Accelerate.AST                        ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.Smart                      ( Acc, convertAcc, convertAccFun1 )
+import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Compile
@@ -168,10 +168,10 @@ streamIn ctx f arrs
 
 -- Copy arrays from device to host.
 --
-collect :: Arrays arrs => arrs -> CIO arrs
-collect arrs = collectR arrays arrs
+collect :: forall arrs. Arrays arrs => arrs -> CIO arrs
+collect arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
   where
-    collectR :: ArraysR arrs -> arrs -> CIO arrs
+    collectR :: ArraysR a -> a -> CIO a
     collectR ArraysRunit         ()             = return ()
     collectR ArraysRarray        arr            = peekArray arr >> return arr
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1

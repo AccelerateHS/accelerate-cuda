@@ -132,16 +132,15 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 --
 sharedMem :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int
 -- non-computation forms
-sharedMem _ (Alet _ _)     _ = INTERNAL_ERROR(error) "sharedMem" "Let"
-sharedMem _ (Alet2 _ _)    _ = INTERNAL_ERROR(error) "sharedMem" "Let2"
-sharedMem _ (PairArrays _ _) _
-                             = INTERNAL_ERROR(error) "sharedMem" "PairArrays"
-sharedMem _ (Avar _)      _  = INTERNAL_ERROR(error) "sharedMem" "Avar"
-sharedMem _ (Apply _ _)   _  = INTERNAL_ERROR(error) "sharedMem" "Apply"
-sharedMem _ (Acond _ _ _) _  = INTERNAL_ERROR(error) "sharedMem" "Acond"
-sharedMem _ (Use _)       _  = INTERNAL_ERROR(error) "sharedMem" "Use"
-sharedMem _ (Unit _)      _  = INTERNAL_ERROR(error) "sharedMem" "Unit"
-sharedMem _ (Reshape _ _) _  = INTERNAL_ERROR(error) "sharedMem" "Reshape"
+sharedMem _ (Alet _ _)    _ = INTERNAL_ERROR(error) "sharedMem" "Let"
+sharedMem _ (Avar _)      _ = INTERNAL_ERROR(error) "sharedMem" "Avar"
+sharedMem _ (Apply _ _)   _ = INTERNAL_ERROR(error) "sharedMem" "Apply"
+sharedMem _ (Acond _ _ _) _ = INTERNAL_ERROR(error) "sharedMem" "Acond"
+sharedMem _ (Atuple _)    _ = INTERNAL_ERROR(error) "sharedMem" "Atuple"
+sharedMem _ (Aprj _ _)    _ = INTERNAL_ERROR(error) "sharedMem" "Aprj"
+sharedMem _ (Use _)       _ = INTERNAL_ERROR(error) "sharedMem" "Use"
+sharedMem _ (Unit _)      _ = INTERNAL_ERROR(error) "sharedMem" "Unit"
+sharedMem _ (Reshape _ _) _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
 
 -- skeleton nodes
 sharedMem _ (Generate _ _)       _        = 0

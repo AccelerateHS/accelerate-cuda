@@ -100,11 +100,11 @@ codegenAcc dev acc (AccBindings vars) =
         -- non-computation forms
         --
         Alet _ _          -> internalError
-        Alet2 _ _         -> internalError
         Avar _            -> internalError
         Apply _ _         -> internalError
         Acond _ _ _       -> internalError
-        PairArrays _ _    -> internalError
+        Atuple _          -> internalError
+        Aprj _ _          -> internalError
         Use _             -> internalError
         Unit _            -> internalError
         Reshape _ _       -> internalError
