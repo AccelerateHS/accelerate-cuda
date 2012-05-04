@@ -61,10 +61,6 @@ prj ZeroIdx      (Push _   v) = v
 prj (SuccIdx ix) (Push val _) = prj ix val
 prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
 
-sizeEnv :: Val env -> Int
-sizeEnv Empty        = 0
-sizeEnv (Push env _) = 1 + sizeEnv env
-
 
 -- Array expressions
 -- -----------------
@@ -342,7 +338,7 @@ codegenOpenExp exp env =
                else bind t x
 
     Var ix
-      | [t] <- ty, [v] <- var   -> use (sizeEnv env - idxToInt ix - 1) 0 t v >> return var
+      | [t] <- ty, [v] <- var   -> addVar t v >> return var
       | otherwise               -> return var
       where
         var     = prj ix env
