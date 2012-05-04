@@ -143,13 +143,13 @@ codegenAcc dev acc (AccBindings vars) =
           zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
           mkSlice dimSl dimCo dimIn0 elt (reverse $ restrict sl (0,0))
 
-        Map f a           -> do
+        Map f a0          -> do
           f'    <- codegenFun f
-          mkMap (codegenAccType acc) (codegenAccType a) f'
+          mkMap (codegenAccType acc) (codegenAccType a0) f'
 
-        ZipWith f a b     -> do
+        ZipWith f a1 a0     -> do
           f'    <- codegenFun f
-          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a) (codegenAccType b) f'
+          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a1) (codegenAccType a0) f'
 
         Fold f e _        -> do
           e'    <- codegenExp e
@@ -201,33 +201,34 @@ codegenAcc dev acc (AccBindings vars) =
           f'    <- codegenFun f
           mkScanr dev (codegenAccType acc) f' Nothing
 
-        Permute f _ g a   -> do
+        Permute f _ g a0  -> do
           f'    <- codegenFun f
           g'    <- codegenFun g
-          mkPermute dev (accDim acc) (accDim a) (codegenAccType a) (sizeOfAccTypes a) f' g'
+          mkPermute dev (accDim acc) (accDim a0) (codegenAccType a0) (sizeOfAccTypes a0) f' g'
 
-        Backpermute _ f a ->
-          let elt       = codegenAccType a
+        Backpermute _ f a0 ->
+          let elt       = codegenAccType a0
               var i     = [cexp| $id:("x0_a" ++ show i) |]
           in do
           f'    <- codegenFun f
           zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
-          mkBackpermute (accDim acc) (accDim a) elt f'
+          mkBackpermute (accDim acc) (accDim a0) elt f'
 
-        Stencil f b a     -> do
+        Stencil f b0 a0    -> do
           f'    <- codegenFun f
-          mkStencil (accDim acc) (codegenAccType acc) (codegenAccTypeTex a) b0 i0 f'
+          mkStencil (accDim acc) (codegenAccType acc)
+            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
           where
-            b0  = codegenBoundary a b
-            i0  = map Sugar.shapeToList (offsets f a)
+            p0  = offsets f a0
+            i0  = map Sugar.shapeToList p0
 
-        Stencil2 f b0 a0 b1 a1 -> do
+        Stencil2 f b1 a1 b0 a0 -> do
           f'    <- codegenFun f
           mkStencil2 (accDim acc) (codegenAccType acc)
-            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0
-            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1 f'
+            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
+            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
           where
-            (p1, p0)    = offsets2 f a0 a1
+            (p1, p0)    = offsets2 f a1 a0
             i0          = map Sugar.shapeToList p0
             i1          = map Sugar.shapeToList p1
 
@@ -291,20 +292,24 @@ codegenFun :: Fun aenv t -> CGM [C.Exp]
 codegenFun fun = codegenOpenFun fun Empty
 
 codegenOpenFun :: OpenFun env aenv t -> Val env -> CGM [C.Exp]
-codegenOpenFun fun env =
-  case fun of
-    Body e -> do
+codegenOpenFun fun = codegen (arity fun) fun
+  where
+    arity :: OpenFun env aenv t -> Int
+    arity (Body _) = -1
+    arity (Lam f)  =  1 + arity f
+
+    codegen :: Int -> OpenFun env' aenv' t' -> Val env' -> CGM [C.Exp]
+    codegen _ (Body e) env = do
       e' <- codegenOpenExp e env
       zipWithM_ addVar (codegenExpType e) e'
       return e'
     --
-    Lam (f :: OpenFun (env,a) aenv b)
-      -> codegenOpenFun f (env `Push` vars)
-      where
-        ty      = codegenTupleType (Sugar.eltType (undefined :: a))
-        n       = length ty
-        lvl     = sizeEnv env
-        vars    = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
+    codegen lvl (Lam (f :: OpenFun (env,a) aenv b)) env =
+      let ty    = codegenTupleType (Sugar.eltType (undefined :: a))
+          n     = length ty
+          vars  = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
+      in
+      codegen (lvl-1) f (env `Push` vars)
 
 
 -- Embedded scalar computations

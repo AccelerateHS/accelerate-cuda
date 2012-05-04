@@ -99,7 +99,7 @@ mkStencil dim tyOut stencilIn0 boundary offsets combine = do
 --
 mkStencil2 :: Int -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]]
                             -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
-mkStencil2 dim tyOut stencilIn0 boundary0 offsets0 stencilIn1 boundary1 offsets1 combine = do
+mkStencil2 dim tyOut stencilIn1 boundary1 offsets1 stencilIn0 boundary0 offsets0 combine = do
   env                   <- environment
   (arrIn0, getIn0)      <- stencilAccess 0 dim stencilIn0 boundary0 offsets0
   (arrIn1, getIn1)      <- stencilAccess 1 dim stencilIn1 boundary1 offsets1
