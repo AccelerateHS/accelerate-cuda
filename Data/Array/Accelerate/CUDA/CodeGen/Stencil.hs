@@ -178,18 +178,16 @@ stencilAccess base dim stencil boundary shx = do
           where
             ix'  = case offsets ! div i n of
               ks | all (== 0) ks        -> [cexp| i |]
-                 | otherwise            ->
-                    let iz = ccall "shape" $ zipWith (\a o -> [cexp| $id:ix . $id:('a':show a) + $int:o |]) [dim-1,dim-2..0] ks
-                    in  [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, iz]) ) |]
+                 | otherwise            -> [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, cursor ks]) ) |]
         --
         inRange c = case offsets ! div i n of
           ks | all (== 0) ks    -> [[cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar "i")); |]]
-             | otherwise        -> [cdecl| const typename Shape $id:j = $exp:sh'; |]
-                                 : [cdecl| const typename bool  $id:k = $exp:ok ; |]
+             | otherwise        -> [cdecl| const typename Shape $id:j = $exp:(cursor ks); |]
+                                 : [cdecl| const typename bool  $id:k = inRange( $id:sh, $id:j ); |]
                                  : [cdecl| const $ty:t $id:(show v) = $id:k ? $exp:(indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar j]))
                                                                             : $exp:(reverse c !! mod i n); |]
                                  : []
-             where
-               sh' = ccall "shape" $ zipWith (\a o -> [cexp| $id:ix . $id:('a':show a) + $int:o |]) [dim-1,dim-2..0] ks
-               ok  = [cexp| inRange( $id:sh, $id:j ) |]
+        --
+        cursor [c] = [cexp| $id:ix + $int:c |]
+        cursor cs  = ccall "shape" $ zipWith (\a c -> [cexp| $id:ix . $id:('a':show a) + $int:c |]) [dim-1,dim-2..0] cs
 
