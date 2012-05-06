@@ -177,11 +177,12 @@ stencilAccess base dim stencil boundary shx = do
           : []
           where
             ix'  = case offsets ! div i n of
-              ks | all (== 0) ks        -> [cexp| i |]
+              ks | all (== 0) ks        -> [cexp| toIndex( $id:sh, ix ) |]
                  | otherwise            -> [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, cursor ks]) ) |]
         --
         inRange c = case offsets ! div i n of
-          ks | all (== 0) ks    -> [[cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar "i")); |]]
+          ks | all (== 0) ks    -> let f = indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar "ix"])
+                                   in  [[cdecl| const $ty:t $id:(show v) = $exp:f; |]]
              | otherwise        -> [cdecl| const typename Shape $id:j = $exp:(cursor ks); |]
                                  : [cdecl| const typename bool  $id:k = inRange( $id:sh, $id:j ); |]
                                  : [cdecl| const $ty:t $id:(show v) = $id:k ? $exp:(indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar j]))
