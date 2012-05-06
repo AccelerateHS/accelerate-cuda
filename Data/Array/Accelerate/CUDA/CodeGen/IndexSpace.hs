@@ -94,7 +94,8 @@ mkGenerate dimOut tyOut fn = do
 mkPermute :: DeviceProperties -> Int -> Int -> [Type] -> [Int] -> [Exp] -> [Exp] -> CGM CUTranslSkel
 mkPermute dev dimOut dimIn0 types sizeof combine index = do
   env                           <- environment
-  (argIn0, _, _, _, getIn0)     <- getters 0 types
+  (argIn0, _, _, getIn0, _)     <- getters 0 types
+  (_, x1, decl1, _, _)          <- getters 1 types
   return $ CUTranslSkel "permute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
@@ -125,8 +126,9 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
             if (!ignore(dst))
             {
                 const int jx = toIndex(shOut, dst);
-                $decls:(getIn0 "ix")
+                $decls:decl1
                 $decls:temps
+                $stms:(x1 .=. getIn0 "ix")
                 $stms:write
             }
         }
@@ -134,12 +136,12 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
   |]
   where
     (argOut, arrOut,  setOut)   = setters types
-    (x1, _)                     = locals "x1" types
+    (x0, _)                     = locals "x0" types
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
     dst                         = project dimOut "dst" index
     sm                          = computeCapability dev
     unsafe                      = setOut "jx" combine
-    (temps, write)              = unzip $ zipWith6 apply unsafe combine types arrOut x1 sizeof
+    (temps, write)              = unzip $ zipWith6 apply unsafe combine types arrOut x0 sizeof
     --
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
