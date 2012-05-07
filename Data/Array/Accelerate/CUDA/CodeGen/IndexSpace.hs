@@ -23,9 +23,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
 
 ) where
 
-import Data.Loc
 import Data.List
-import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 

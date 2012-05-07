@@ -27,7 +27,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 import Data.Loc
 import Data.Char
 import Data.List
-import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 import Text.PrettyPrint.Mainland                ( Pretty(..) )

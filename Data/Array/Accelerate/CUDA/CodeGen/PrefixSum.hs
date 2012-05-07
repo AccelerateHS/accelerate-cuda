@@ -24,8 +24,6 @@ import Language.C.Syntax
 import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis
 import Data.Maybe
-import qualified Data.Loc
-import qualified Data.Symbol
 
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Monad

@@ -16,8 +16,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.Mapping (
 
 ) where
 
-import Data.Loc
-import Data.Symbol
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 

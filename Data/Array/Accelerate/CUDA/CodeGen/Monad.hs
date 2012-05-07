@@ -17,14 +17,11 @@ module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
 ) where
 
-import Data.Loc
-import Data.Symbol
 import Data.Label                               ( mkLabels )
 import Data.Label.PureM
 import Control.Applicative
 import Control.Monad.State                      ( State, evalState )
 import Language.C
-import Language.C.Syntax
 import Language.C.Quote.CUDA
 
 import Data.IntMap                              ( IntMap )
