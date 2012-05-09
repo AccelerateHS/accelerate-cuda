@@ -50,7 +50,7 @@ Extra-source-files:     configure
 --   Default:              False
 
 Flag debug
-  Description:          Spew debugging output to stderr
+  Description:          Enable tracing message flags
   Default:              False
 
 Flag bounds-checks

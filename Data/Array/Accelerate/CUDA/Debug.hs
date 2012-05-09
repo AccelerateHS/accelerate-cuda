@@ -1,4 +1,6 @@
 {-# LANGUAGE CPP, TemplateHaskell, TypeOperators #-}
+{-# OPTIONS -fno-warn-unused-imports #-}
+{-# OPTIONS -fno-warn-unused-binds   #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Debug
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -17,7 +19,7 @@ module Data.Array.Accelerate.CUDA.Debug (
 
   showFFloatSIBase,
 
-  message, when, mode,
+  message, event, when, mode,
   verbose, debug,
   dump_gc, dump_cc, dump_exec,
 
@@ -33,12 +35,15 @@ import System.Environment
 import System.Console.GetOpt
 
 #if MIN_VERSION_base(4,5,0)
-import Debug.Trace                              ( traceIO )
+import Debug.Trace                              ( traceIO, traceEventIO )
 #else
 import Debug.Trace                              ( putTraceMsg )
 
 traceIO :: String -> IO ()
 traceIO = putTraceMsg
+
+traceEventIO :: String -> IO ()
+traceEventIO = traceIO
 #endif
 
 
@@ -91,21 +96,43 @@ initialise = parse `fmap` getArgs
                       [Option _ _ (NoArg go) _] -> go opts
                       _                         -> opts         -- not specified, or ambiguous
 
+#ifdef ACCELERATE_DEBUG
 {-# NOINLINE options #-}
 options :: IORef Flags
 options = unsafePerformIO $ newIORef =<< initialise
+#endif
 
 {-# INLINE mode #-}
 mode :: (Flags :-> Bool) -> Bool
+#ifdef ACCELERATE_DEBUG
 mode f = unsafePerformIO $ get f `fmap` readIORef options
+#else
+mode _ = False
+#endif
 
 {-# INLINE message #-}
 message :: MonadIO m => (Flags :-> Bool) -> String -> m ()
+#ifdef ACCELERATE_DEBUG
 message f str = when f (liftIO $ traceIO str)
+#else
+message _ _   = return ()
+#endif
+
+{-# INLINE event #-}
+event :: MonadIO m => (Flags :-> Bool) -> String -> m ()
+#ifdef ACCELERATE_DEBUG
+event f str = when f (liftIO $ traceEventIO str)
+#else
+event _ _   = return ()
+#endif
 
 {-# INLINE when #-}
 when :: MonadIO m => (Flags :-> Bool) -> m () -> m ()
+#ifdef ACCELERATE_DEBUG
 when f action
   | mode f      = action
   | otherwise   = return ()
+#else
+when _ _        = return ()
+#endif
 
