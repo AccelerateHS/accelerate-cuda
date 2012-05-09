@@ -29,7 +29,7 @@ module Data.Array.Accelerate.CUDA.State (
 
 -- friends
 import Data.Array.Accelerate.CUDA.FullList              ( FullList )
-import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, showFFloatSIBase )
+import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
@@ -37,7 +37,7 @@ import Data.Array.Accelerate.CUDA.Analysis.Device
 import Data.Label
 import Control.Exception
 import Data.ByteString                                  ( ByteString )
-import Control.Concurrent.MVar                          ( MVar, newMVar )
+import Control.Concurrent.MVar                          ( MVar, newMVar, addMVarFinalizer )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
 import System.Mem                                       ( performGC )
@@ -85,7 +85,7 @@ data KernelObject = KernelObject
     _activeContexts     :: {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
   }
 
--- The state token for accelerated CUDA array operations
+-- The state token for CUDA accelerated array operations
 --
 type CIO        = StateT CUDAState IO
 data CUDAState  = CUDAState
@@ -134,6 +134,11 @@ defaultContext = unsafePerformIO $ do
   (dev,prp)     <- selectBestDevice
   ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
   ref           <- newMVar ctx
+  addMVarFinalizer ref $ do
+    CUDA.destroy ctx
+    message dump_gc $ "gc: finalise context"
+  --
+  message dump_gc $ "gc: initialise context"
   message verbose $ deviceInfo dev prp
   return ref
 
