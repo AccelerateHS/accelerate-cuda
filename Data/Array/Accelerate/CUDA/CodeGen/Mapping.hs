@@ -1,4 +1,7 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -16,11 +19,10 @@ module Data.Array.Accelerate.CUDA.CodeGen.Mapping (
 
 ) where
 
-import Language.C.Syntax
 import Language.C.Quote.CUDA
-
+import Data.Array.Accelerate.Array.Sugar                ( Elt )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 
 -- Apply the given unary function to each element of an array. Each thread
@@ -31,11 +33,9 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 --     -> Acc (Array sh a)
 --     -> Acc (Array sh b)
 --
-mkMap :: [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkMap tyOut tyIn0 fn = do
-  env                           <- environment
-  (argIn0, _, _, _, getIn0)     <- getters 0 tyIn0
-  return $ CUTranslSkel "map" [cunit|
+mkMap :: forall a b. Elt b => CUFun (a -> b) -> CUTranslSkel
+mkMap (CULam use0 (CUBody (CUExp env fn))) =
+  CUTranslSkel "map" [cunit|
     extern "C"
     __global__ void
     map
@@ -59,7 +59,10 @@ mkMap tyOut tyIn0 fn = do
     }
   |]
   where
-    (argOut, _, setOut) = setters tyOut
+    tyIn0                       = eltType (undefined :: a)
+    tyOut                       = eltType (undefined :: b)
+    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0 use0
+    (argOut, _, setOut)         = setters tyOut
 
 
 -- Apply the given binary function element-wise to the two arrays. The extent of
@@ -73,12 +76,9 @@ mkMap tyOut tyIn0 fn = do
 --         -> Acc (Array ix b)
 --         -> Acc (Array ix c)
 --
-mkZipWith :: Int -> [Type] -> [Type] -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkZipWith dim tyOut tyIn1 tyIn0 fn = do
-  env                           <- environment
-  (argIn0, _, _, _, getIn0)     <- getters 0 tyIn0
-  (argIn1, _, _, _, getIn1)     <- getters 1 tyIn1
-  return $ CUTranslSkel "zipWith" [cunit|
+mkZipWith :: forall a b c. Elt c => Int -> CUFun (a -> b -> c) -> CUTranslSkel
+mkZipWith dim (CULam use1 (CULam use0 (CUBody (CUExp env fn)))) =
+  CUTranslSkel "zipWith" [cunit|
     $edecl:(cdim "DimOut" dim)
     $edecl:(cdim "DimIn0" dim)
     $edecl:(cdim "DimIn1" dim)
@@ -113,5 +113,10 @@ mkZipWith dim tyOut tyIn1 tyIn0 fn = do
     }
   |]
   where
-    (argOut, _, setOut) = setters tyOut
+    tyIn1                       = eltType (undefined :: a)
+    tyIn0                       = eltType (undefined :: b)
+    tyOut                       = eltType (undefined :: c)
+    (argIn1, _, _, _, getIn1)   = getters 1 tyIn1 use1
+    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0 use0
+    (argOut, _, setOut)         = setters tyOut
 

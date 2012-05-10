@@ -1,4 +1,7 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -26,10 +29,11 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
 import Data.List
 import Language.C.Syntax
 import Language.C.Quote.CUDA
-
 import Foreign.CUDA.Analysis
+
+import Data.Array.Accelerate.Array.Sugar                ( Array, Elt )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 
 -- Construct a new array by applying a function to each index. Each thread
@@ -40,10 +44,9 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 --          -> (Exp ix -> Exp a)
 --          -> Acc (Array ix a)
 --
-mkGenerate :: Int -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkGenerate dimOut tyOut fn = do
-  env   <- environment
-  return $ CUTranslSkel "generate" [cunit|
+mkGenerate :: forall sh e. Elt e => Int -> CUFun (sh -> e) -> CUTranslSkel
+mkGenerate dimOut (CULam _ (CUBody (CUExp env fn))) =
+  CUTranslSkel "generate" [cunit|
     $edecl:(cdim "DimOut" dimOut)
 
     extern "C"
@@ -70,6 +73,7 @@ mkGenerate dimOut tyOut fn = do
   |]
   where
     (args, _, set)      = setters tyOut
+    tyOut               = eltType (undefined :: e)
     shape               = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
 
 
@@ -89,12 +93,15 @@ mkGenerate dimOut tyOut fn = do
 --         -> Acc (Array ix  a)                 -- permuted array
 --         -> Acc (Array ix' a)
 --
-mkPermute :: DeviceProperties -> Int -> Int -> [Type] -> [Int] -> [Exp] -> [Exp] -> CGM CUTranslSkel
-mkPermute dev dimOut dimIn0 types sizeof combine index = do
-  env                           <- environment
-  (argIn0, _, _, getIn0, _)     <- getters 0 types
-  (_, x1, decl1, _, _)          <- getters 1 types
-  return $ CUTranslSkel "permute" [cunit|
+mkPermute :: forall a ix ix'.
+             DeviceProperties
+          -> Int                                -- dimensionality ix'
+          -> Int                                -- dimensionality ix
+          -> CUFun (a -> a -> a)
+          -> CUFun (ix -> ix')
+          -> CUTranslSkel
+mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine)))) (CULam _ (CUBody (CUExp envIx prj))) =
+  CUTranslSkel "permute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
 
@@ -118,7 +125,7 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
         {
             typename DimOut dst;
             $decls:src
-            $decls:env
+            $decls:envIx
             $stms:dst
 
             if (!ignore(dst))
@@ -126,6 +133,7 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
                 const int jx = toIndex(shOut, dst);
                 $decls:decl1
                 $decls:temps
+                $decls:env
                 $stms:(x1 .=. getIn0 "ix")
                 $stms:write
             }
@@ -133,13 +141,17 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
     }
   |]
   where
-    (argOut, arrOut,  setOut)   = setters types
-    (x0, _)                     = locals "x0" types
+    elt                         = eltType   (undefined :: a)
+    sizeof                      = eltSizeOf (undefined :: a)
+    (argIn0, _, _, getIn0, _)   = getters 0 elt useFn
+    (_, x1, decl1, _, _)        = getters 1 elt useFn
+    (argOut, arrOut,  setOut)   = setters elt
+    (x0, _)                     = locals "x0" elt
     src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
-    dst                         = project dimOut "dst" index
+    dst                         = project dimOut "dst" prj
     sm                          = computeCapability dev
     unsafe                      = setOut "jx" combine
-    (temps, write)              = unzip $ zipWith6 apply unsafe combine types arrOut x0 sizeof
+    (temps, write)              = unzip $ zipWith6 apply unsafe combine elt arrOut x0 sizeof
     --
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
@@ -184,11 +196,14 @@ mkPermute dev dimOut dimIn0 types sizeof combine index = do
 --             -> Acc (Array ix  a)             -- permuted array
 --             -> Acc (Array ix' a)
 --
-mkBackpermute :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkBackpermute dimOut dimIn0 types index = do
-  env                           <- environment
-  (argIn0, x0, _, _, getIn0)    <- getters 0 types
-  return $ CUTranslSkel "backpermute" [cunit|
+mkBackpermute :: forall ix ix' a. Elt a
+              => Int                            -- dimensionality ix'
+              -> Int                            -- dimensionality ix
+              -> CUFun (ix' -> ix)
+              -> Array ix' a                    -- dummy to fix type variables
+              -> CUTranslSkel
+mkBackpermute dimOut dimIn0 (CULam _ (CUBody (CUExp env prj))) _ =
+  CUTranslSkel "backpermute" [cunit|
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn0" dimIn0)
 
@@ -223,9 +238,11 @@ mkBackpermute dimOut dimIn0 types index = do
     }
   |]
   where
-    (argOut, _, setOut) = setters types
-    dst                 = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
-    src                 = project dimIn0 "src" index
+    elt                         = eltType (undefined :: a)
+    (argOut, _, setOut)         = setters elt
+    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
+    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+    src                         = project dimIn0 "src" prj
 
 
 -- Index an array with a generalised, multidimensional array index. The result
@@ -237,11 +254,15 @@ mkBackpermute dimOut dimIn0 types index = do
 --       -> Exp slix
 --       -> Acc (Array (SliceShape slix) e)
 --
-mkSlice :: Int -> Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkSlice dimSl dimCo dimIn0 types slix = do
-  env                           <- environment
-  (argIn0, x0, _, _, getIn0)    <- getters 0 types
-  return $ CUTranslSkel "slice" [cunit|
+mkSlice :: forall sl slix e. Elt e
+        => Int                  -- dimensionality sl
+        -> Int                  -- dimensionality co
+        -> Int                  -- dimensionality sh
+        -> CUExp slix
+        -> Array sl e           -- dummy
+        -> CUTranslSkel
+mkSlice dimSl dimCo dimIn0 (CUExp [] slix) _ =
+  CUTranslSkel "slice" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "CoSlice"  dimCo)
     $edecl:(cdim "SliceDim" dimIn0)
@@ -267,7 +288,6 @@ mkSlice dimSl dimCo dimIn0 types slix = do
         {
             typename Slice    sl  = fromIndex(slice, ix);
             typename SliceDim src;
-            $decls:env
             $stms:src
             {
                 const int jx = toIndex(sliceDim, src);
@@ -278,8 +298,10 @@ mkSlice dimSl dimCo dimIn0 types slix = do
     }
   |]
   where
-    (argOut, _, setOut) = setters types
-    src                 = project dimIn0 "src" slix
+    elt                         = eltType (undefined :: e)
+    (argOut, _, setOut)         = setters elt
+    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
+    src                         = project dimIn0 "src" slix
 
 
 -- Replicate an array across one or more dimensions as specified by the
@@ -290,11 +312,14 @@ mkSlice dimSl dimCo dimIn0 types slix = do
 --           -> Acc (Array (SliceShape slix) e)
 --           -> Acc (Array (FullShape  slix) e)
 --
-mkReplicate :: Int -> Int -> [Type] -> [Exp] -> CGM CUTranslSkel
-mkReplicate dimSl dimOut types slix = do
-  env                           <- environment
-  (argIn0, x0, _, _, getIn0)    <- getters 0 types
-  return $ CUTranslSkel "replicate" [cunit|
+mkReplicate :: forall sh slix e. Elt e
+            => Int              -- dimensionality sl
+            -> Int              -- dimensionality sh
+            -> CUExp slix
+            -> Array sh e       -- dummy
+            -> CUTranslSkel
+mkReplicate dimSl dimOut (CUExp _ slix) _ =
+  CUTranslSkel "replicate" [cunit|
     $edecl:(cdim "Slice"    dimSl)
     $edecl:(cdim "SliceDim" dimOut)
 
@@ -318,7 +343,6 @@ mkReplicate dimSl dimOut types slix = do
         {
             typename SliceDim dim = fromIndex(sliceDim, ix);
             typename Slice    src;
-            $decls:env
             $stms:src
             {
                 const int jx = toIndex(slice, src);
@@ -329,8 +353,11 @@ mkReplicate dimSl dimOut types slix = do
     }
   |]
   where
-    (argOut, _, setOut) = setters types
-    src                 = project dimSl "src" slix
+    elt                         = eltType (undefined :: e)
+    (argOut, _, setOut)         = setters elt
+    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
+    src                         = project dimSl "src" slix
+
 
 
 --------------------------------------------------------------------------------
@@ -354,4 +381,14 @@ project :: Int -> String -> [Exp] -> [Stm]
 project n sh idx
   | [e] <- idx  = [[cstm| $id:sh = $exp:e; |]]
   | otherwise   = zipWith (\i c -> [cstm| $id:sh . $id:('a':show c) = $exp:i; |]) idx [n-1,n-2..0]
+
+
+-- tell the getters function that we will use all the scalar components
+--
+useAll :: Int -> [Type] -> [(Int, Type, Exp)]
+useAll base elt =
+  let n   = length elt
+      x i = 'x' : shows base "_a" ++ show i
+  in
+  zipWith (\i t -> (i,t, cvar (x i))) [n-1, n-2 .. 0] elt
 

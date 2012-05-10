@@ -1,4 +1,7 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Reduction
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -25,7 +28,7 @@ import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis
 
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 
 -- Reduction of an array of arbitrary rank to a single scalar value. The first
@@ -47,11 +50,12 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 -- cost of the algorithm while keeping the work complexity O(n) and the step
 -- complexity O(log n). c.f. Brent's Theorem optimisation.
 --
-mkFoldAll :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
-mkFoldAll dev elt combine mseed = do
-  env                                   <- environment
-  (argIn0, x0, decl0, getIn0, _)        <- getters 0 elt
-  return $ CUTranslSkel name [cunit|
+mkFoldAll :: forall a.
+             DeviceProperties
+          -> CUFun (a -> a -> a)
+          -> Maybe (CUExp a) -> CUTranslSkel
+mkFoldAll dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
+  CUTranslSkel name [cunit|
     extern "C"
     __global__ void
     $id:name
@@ -102,28 +106,30 @@ mkFoldAll dev elt combine mseed = do
          */
         if (threadIdx.x == 0)
         {
-            $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
+            $stms:(maybe inclusive_finish exclusive_finish mseed)
         }
     }
   |]
   where
-    name                        = maybe "fold1All" (const "foldAll") mseed
-    (argOut, _, setOut)         = setters elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                                = maybe "fold1All" (const "foldAll") mseed
+    elt                                 = eltType (undefined :: a)
+    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt use0
+    (argOut, _, setOut)                 = setters elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    inclusive_fold              = setOut "blockIdx.x" x1
-    exclusive_fold x0 env seed  = [[cstm|
+    inclusive_finish                    = setOut "blockIdx.x" x1
+    exclusive_finish (CUExp env' seed)  = [[cstm|
       if (num_elements > 0) {
           if (gridDim.x == 1) {
-              $decls:env
+              $decls:env'
               $stms:(x0 .=. seed)
               $stms:(x1 .=. combine)
           }
           $stms:(setOut "blockIdx.x" x1)
       }
       else {
-          $decls:env
+          $decls:env'
           $stms:(setOut "blockIdx.x" seed)
       }
     |]]
@@ -144,11 +150,13 @@ mkFoldAll dev elt combine mseed = do
 --       -> Acc (Array (ix :. Int) a)
 --       -> Acc (Array ix a)
 --
-mkFold :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
-mkFold dev elt combine mseed = do
-  env                                   <- environment
-  (argIn0, x0, decl0, getIn0, getTmp)   <- getters 0 elt
-  return $ CUTranslSkel name [cunit|
+mkFold :: forall a.
+          DeviceProperties
+       -> CUFun (a -> a -> a)
+       -> Maybe (CUExp a)
+       -> CUTranslSkel
+mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
+  CUTranslSkel name [cunit|
     extern "C"
     __global__ void
     $id:name
@@ -169,7 +177,7 @@ mkFold dev elt combine mseed = do
          * If the intervals of an exclusive fold are empty, use all threads to
          * map the seed value to the output array and exit.
          */
-        $stms:(maybe [] (return . mapseed env) mseed)
+        $stms:(maybe [] (return . mapseed) mseed)
 
         /*
          * Threads in a block cooperatively reduce all elements in an interval.
@@ -245,20 +253,27 @@ mkFold dev elt combine mseed = do
              */
             if (threadIdx.x == 0)
             {
-                $decls:(maybe [] (const env) mseed)
-                $stms:( maybe [] (\seed -> concat [x0 .=. seed, x1 .=. combine]) mseed)
+                $decls:final_decls
+                $stms:final_stms
                 $stms:(setOut "seg" x1)
             }
         }
     }
   |]
   where
-    name                        = maybe "fold1" (const "fold") mseed
-    (argOut, _, setOut)         = setters elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                                = maybe "fold1" (const "fold") mseed
+    elt                                 = eltType (undefined :: a)
+    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt use0
+    (argOut, _, setOut)                 = setters elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    mapseed env seed            = [cstm|
+    (final_decls, final_stms) =
+      case mseed of
+        Nothing                -> ([], [])
+        Just (CUExp env' seed) -> (env', concat [x0 .=. seed, x1 .=. combine])
+    --
+    mapseed (CUExp env' seed)           = [cstm|
       if (interval_size == 0)
       {
           const int gridSize = __umul24(blockDim.x, gridDim.x);
@@ -268,7 +283,7 @@ mkFold dev elt combine mseed = do
               ; seg < num_intervals
               ; seg += gridSize )
           {
-              $decls:env
+              $decls:env'
               $stms:(setOut "seg" seed)
           }
           return;
@@ -304,11 +319,15 @@ mkFold dev elt combine mseed = do
 -- array. The i-th warp reduces values in the input array at indices
 -- [d_offset[i], d_offset[i+1]).
 --
-mkFoldSeg :: DeviceProperties -> Int -> Type -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
-mkFoldSeg dev dim seg elt combine mseed = do
-  env                                   <- environment
-  (argIn0, x0, decl0, getIn0, getTmp)   <- getters 0 elt
-  return $ CUTranslSkel name [cunit|
+mkFoldSeg :: forall a.
+             DeviceProperties
+          -> Int
+          -> Type               -- of the segments array
+          -> CUFun (a -> a -> a)
+          -> Maybe (CUExp a)
+          -> CUTranslSkel
+mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
+  CUTranslSkel name [cunit|
     $edecl:(cdim "DimOut" dim)
     $edecl:(cdim "DimIn0" dim)
 
@@ -318,20 +337,20 @@ mkFoldSeg dev dim seg elt combine mseed = do
     (
         $params:argOut,
         $params:argIn0,
-        const $ty:(cptr seg)    d_offset,
+        const $ty:(cptr tySeg)  d_offset,
         const typename DimOut   shOut,
         const typename DimIn0   shIn0
     )
     {
-        const int vectors_per_block = blockDim.x / warpSize;
-        const int num_vectors       = vectors_per_block * gridDim.x;
-        const int thread_id         = blockDim.x * blockIdx.x + threadIdx.x;
-        const int vector_id         = thread_id / warpSize;
-        const int thread_lane       = threadIdx.x & (warpSize - 1);
-        const int vector_lane       = threadIdx.x / warpSize;
+        const int vectors_per_block     = blockDim.x / warpSize;
+        const int num_vectors           = vectors_per_block * gridDim.x;
+        const int thread_id             = blockDim.x * blockIdx.x + threadIdx.x;
+        const int vector_id             = thread_id / warpSize;
+        const int thread_lane           = threadIdx.x & (warpSize - 1);
+        const int vector_lane           = threadIdx.x / warpSize;
 
-        const int num_segments      = indexHead(shOut);
-        const int total_segments    = size(shOut);
+        const int num_segments          = indexHead(shOut);
+        const int total_segments        = size(shOut);
 
         extern volatile __shared__ int s_ptrs[][2];
 
@@ -352,9 +371,9 @@ mkFoldSeg dev dim seg elt combine mseed = do
             if (thread_lane < 2)
                 s_ptrs[vector_lane][thread_lane] = (int) d_offset[s + thread_lane];
 
-            const int   start        = base + s_ptrs[vector_lane][0];
-            const int   end          = base + s_ptrs[vector_lane][1];
-            const int   num_elements = end  - start;
+            const int start             = base + s_ptrs[vector_lane][0];
+            const int end               = base + s_ptrs[vector_lane][1];
+            const int num_elements      = end  - start;
 
             /*
              * Each thread reads in values of this segment, accumulating a local sum
@@ -414,28 +433,31 @@ mkFoldSeg dev dim seg elt combine mseed = do
              */
             if (thread_lane == 0)
             {
-                $stms:(maybe inclusive_fold (exclusive_fold x0 env) mseed)
+                $stms:(maybe inclusive_finish exclusive_finish mseed)
             }
         }
     }
   |]
   where
-    name                        = maybe "fold1Seg" (const "foldSeg") mseed
-    (argOut, _, setOut)         = setters elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 (Just $ [cexp| &s_ptrs[vectors_per_block][2] |]) [cexp| blockDim.x |] elt
+    name                                = maybe "fold1Seg" (const "foldSeg") mseed
+    elt                                 = eltType (undefined :: a)
+    (argIn0, x0, decl0, getIn0, getTmp) = getters 0 elt use0
+    (argOut, _, setOut)                 = setters elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 (Just $ [cexp| &s_ptrs[vectors_per_block][2] |]) [cexp| blockDim.x |] elt
     --
-    inclusive_fold              = setOut "seg" x1
-    exclusive_fold x0 env seed  = [cstm|
+    inclusive_finish                    = setOut "seg" x1
+    exclusive_finish (CUExp env' seed)  = [cstm|
       if (num_elements > 0) {
-          $decls:env
+          $decls:env'
           $stms:(x0 .=. seed)
           $stms:(x1 .=. combine)
       } else {
-          $decls:env
+          $decls:env'
           $stms:(x1 .=. seed)
       }|] :
       setOut "seg" x1
+
 
 
 --------------------------------------------------------------------------------
@@ -451,7 +473,7 @@ reduceWarp :: DeviceProperties
            -> String                    -- number of elements
            -> String                    -- thread identifier: usually the lane or thread id
            -> (String -> [Exp])         -- index shared memory
-           -> Environment               -- local binding environment for the..
+           -> [InitGroup]               -- local binding environment for the..
            -> [Exp]                     -- ..binary associative combination function
            -> [Stm]
 reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
@@ -488,7 +510,7 @@ reduceBlock :: DeviceProperties
             -> [Type]
             -> String                   -- number of elements
             -> (String -> [Exp])        -- index shared memory
-            -> Environment              -- local binding environment for the..
+            -> [InitGroup]              -- local binding environment for the..
             -> [Exp]                    -- ..binary associative function
             -> [Stm]
 reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u-1,u-2..v]

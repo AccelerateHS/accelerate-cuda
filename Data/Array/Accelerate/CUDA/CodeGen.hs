@@ -27,21 +27,20 @@ import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
 import qualified Data.HashSet                                   as Set
 import qualified Language.C                                     as C
-import qualified Foreign.Storable                               as F
 import qualified Foreign.CUDA.Analysis                          as CUDA
 
 -- friends
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Pretty                             ()
-import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Analysis.Stencil
 import Data.Array.Accelerate.Array.Representation
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
+import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
@@ -81,177 +80,91 @@ codegenAcc :: forall aenv a.
            -> OpenAcc aenv a
            -> AccBindings aenv
            -> CUTranslSkel
-codegenAcc dev acc (AccBindings vars) =
-  let fvars rest                = Set.foldr (\v vs -> liftAcc acc v ++ vs) rest vars
-      extras                    = [cedecl| $esc:("#include <accelerate_cuda_extras.h>") |]
-      CUTranslSkel entry code   = runCGM $ codegen acc
-  in
-  CUTranslSkel entry (extras : fvars code)
+codegenAcc dev acc (AccBindings vars) = CUTranslSkel entry (extras : fvars code)
   where
-    codegen :: OpenAcc aenv a -> CGM CUTranslSkel
-    codegen (OpenAcc pacc) =
-      case pacc of
-        -- non-computation forms
-        --
-        Alet _ _          -> internalError
-        Avar _            -> internalError
-        Apply _ _         -> internalError
-        Acond _ _ _       -> internalError
-        Atuple _          -> internalError
-        Aprj _ _          -> internalError
-        Use _             -> internalError
-        Unit _            -> internalError
-        Reshape _ _       -> internalError
+    fvars rest                  = Set.foldr (\v vs -> liftAcc acc v ++ vs) rest vars
+    extras                      = [cedecl| $esc:("#include <accelerate_cuda_extras.h>") |]
+    CUTranslSkel entry code     = codegen acc
 
-        -- computation nodes
-        --
-        Generate _ f      -> do
-          f'    <- codegenFun f
-          mkGenerate (accDim acc) (codegenAccType acc) f'
+    codegen :: OpenAcc aenv a -> CUTranslSkel
+    codegen (OpenAcc pacc) = case pacc of
+      --
+      -- Non-computation forms
+      --
+      Alet _ _          -> internalError
+      Avar _            -> internalError
+      Apply _ _         -> internalError
+      Acond _ _ _       -> internalError
+      Atuple _          -> internalError
+      Aprj _ _          -> internalError
+      Use _             -> internalError
+      Unit _            -> internalError
+      Reshape _ _       -> internalError
 
-        Replicate sl _ a  ->
-          let dimSl  = accDim a
-              dimOut = accDim acc
-              elt    = codegenAccType a
-              var i  = [cexp| $id:("x0_a" ++ show i) |]
-              --
-              extend :: SliceIndex slix sl co dim -> Int -> [C.Exp]
-              extend (SliceNil)            _ = []
-              extend (SliceAll   sliceIdx) n = mkPrj dimOut "dim" n : extend sliceIdx (n+1)
-              extend (SliceFixed sliceIdx) n = extend sliceIdx (n+1)
-              --
-          in do
-          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
-          mkReplicate dimSl dimOut elt (reverse $ extend sl 0)
+      --
+      -- Skeleton nodes
+      --
+      Generate _ f      -> mkGenerate (accDim acc) (codegenFun f)
 
-        Index sl a slix   ->
-          let dimCo  = length (codegenExpType slix)
-              dimSl  = accDim acc
-              dimIn0 = accDim a
-              elt    = codegenAccType a
-              var i  = [cexp| $id:("x0_a" ++ show i) |]
-              --
-              restrict :: SliceIndex slix sl co dim -> (Int,Int) -> [C.Exp]
-              restrict (SliceNil)            _     = []
-              restrict (SliceAll   sliceIdx) (m,n) = mkPrj dimSl "sl" n : restrict sliceIdx (m,n+1)
-              restrict (SliceFixed sliceIdx) (m,n) = mkPrj dimCo "co" m : restrict sliceIdx (m+1,n)
-          in do
-          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
-          mkSlice dimSl dimCo dimIn0 elt (reverse $ restrict sl (0,0))
+      Replicate sl _ a  -> mkReplicate dimSl dimOut (extend sl) (undefined :: a)
+        where
+          dimSl  = accDim a
+          dimOut = accDim acc
+          --
+          extend :: SliceIndex slix sl co dim -> CUExp dim
+          extend = CUExp [] . reverse . extend' 0
 
-        Map f a0          -> do
-          f'    <- codegenFun f
-          mkMap (codegenAccType acc) (codegenAccType a0) f'
+          extend' :: Int -> SliceIndex slix sl co dim -> [C.Exp]
+          extend' _ (SliceNil)            = []
+          extend' n (SliceAll   sliceIdx) = mkPrj dimOut "dim" n : extend' (n+1) sliceIdx
+          extend' n (SliceFixed sliceIdx) =                        extend' (n+1) sliceIdx
 
-        ZipWith f a1 a0     -> do
-          f'    <- codegenFun f
-          mkZipWith (accDim acc) (codegenAccType acc) (codegenAccType a1) (codegenAccType a0) f'
+      Index sl a slix   -> mkSlice dimSl dimCo dimIn0 (restrict sl) (undefined :: a)
+        where
+          dimCo  = length (expType slix)
+          dimSl  = accDim acc
+          dimIn0 = accDim a
+          --
+          restrict :: SliceIndex slix sl co dim -> CUExp slix
+          restrict = CUExp [] . reverse . restrict' (0,0)
 
-        Fold f e _        -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          case accDim acc of
-            0   -> mkFoldAll dev (codegenAccType acc) f' (Just e')
-            _   -> mkFold    dev (codegenAccType acc) f' (Just e')
+          restrict' :: (Int,Int) -> SliceIndex slix sl co dim -> [C.Exp]
+          restrict' _     (SliceNil)            = []
+          restrict' (m,n) (SliceAll   sliceIdx) = mkPrj dimSl "sl" n : restrict' (m,n+1) sliceIdx
+          restrict' (m,n) (SliceFixed sliceIdx) = mkPrj dimCo "co" m : restrict' (m+1,n) sliceIdx
 
-        Fold1 f _         -> do
-          f'    <- codegenFun f
-          case accDim acc of
-            0   -> mkFoldAll dev (codegenAccType acc) f' Nothing
-            _   -> mkFold    dev (codegenAccType acc) f' Nothing
+      Map f _           -> mkMap (codegenFun f)
+      ZipWith f _ _     -> mkZipWith (accDim acc) (codegenFun f)
 
-        FoldSeg f e _ s   -> do
-          f'    <- codegenFun f
-          e'    <- codegenExp e
-          mkFoldSeg dev (accDim acc) (codegenAccSegmentsType s) (codegenAccType acc) f' (Just e')
+      Fold f e _        ->
+        if accDim acc == 0
+           then mkFoldAll dev (codegenFun f) (Just (codegenExp e))
+           else mkFold    dev (codegenFun f) (Just (codegenExp e))
 
-        Fold1Seg f _ s    -> do
-          f'    <- codegenFun f
-          mkFoldSeg dev (accDim acc) (codegenAccSegmentsType s) (codegenAccType acc) f' Nothing
+      Fold1 f _         ->
+        if accDim acc == 0
+           then mkFoldAll dev (codegenFun f) Nothing
+           else mkFold    dev (codegenFun f) Nothing
 
-        Scanl f e _       -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          mkScanl dev (codegenExpType e) f' (Just e')
+      FoldSeg f e _ s   -> mkFoldSeg dev (accDim acc) (segmentsType s) (codegenFun f) (Just (codegenExp e))
+      Fold1Seg f _ s    -> mkFoldSeg dev (accDim acc) (segmentsType s) (codegenFun f) Nothing
 
-        Scanl' f e _      -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          mkScanl dev (codegenExpType e) f' (Just e')
+      Scanl f e _       -> mkScanl dev (codegenFun f) (Just (codegenExp e))
+      Scanl' f e _      -> mkScanl dev (codegenFun f) (Just (codegenExp e))
+      Scanl1 f _        -> mkScanl dev (codegenFun f) Nothing
 
-        Scanl1 f _        -> do
-          f'    <- codegenFun f
-          mkScanl dev (codegenAccType acc) f' Nothing
+      Scanr f e _       -> mkScanr dev (codegenFun f) (Just (codegenExp e))
+      Scanr' f e _      -> mkScanr dev (codegenFun f) (Just (codegenExp e))
+      Scanr1 f _        -> mkScanr dev (codegenFun f) Nothing
 
-        Scanr f e _       -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          mkScanr dev (codegenExpType e) f' (Just e')
+      Permute f _ ix a  -> mkPermute dev (accDim acc) (accDim a) (codegenFun f) (codegenFun ix)
+      Backpermute _ f a -> mkBackpermute (accDim acc) (accDim a) (codegenFun f) (undefined :: a)
 
-        Scanr' f e _      -> do
-          e'    <- codegenExp e
-          f'    <- codegenFun f
-          mkScanr dev (codegenExpType e) f' (Just e')
+      Stencil  f b0 a0  -> mkStencil  (accDim acc) (codegenFun f) (codegenBoundary a0 b0) (undefined :: a)
+      Stencil2 f b1 a1 b0 a0
+                        -> mkStencil2 (accDim acc) (codegenFun f) (codegenBoundary a1 b1) (codegenBoundary a0 b0) (undefined :: a)
 
-        Scanr1 f _        -> do
-          f'    <- codegenFun f
-          mkScanr dev (codegenAccType acc) f' Nothing
-
-        Permute f _ g a0  -> do
-          f'    <- codegenFun f
-          g'    <- codegenFun g
-          mkPermute dev (accDim acc) (accDim a0) (codegenAccType a0) (sizeOfAccTypes a0) f' g'
-
-        Backpermute _ f a0 ->
-          let elt       = codegenAccType a0
-              var i     = [cexp| $id:("x0_a" ++ show i) |]
-          in do
-          f'    <- codegenFun f
-          zipWithM_ (\ty i -> use 0 i ty (var i)) (reverse elt) [0..]
-          mkBackpermute (accDim acc) (accDim a0) elt f'
-
-        Stencil f b0 a0    -> do
-          f'    <- codegenFun f
-          mkStencil (accDim acc) (codegenAccType acc)
-            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
-          where
-            p0  = offsets f a0
-            i0  = map Sugar.shapeToList p0
-
-        Stencil2 f b1 a1 b0 a0 -> do
-          f'    <- codegenFun f
-          mkStencil2 (accDim acc) (codegenAccType acc)
-            (codegenAccTypeTex a1) (codegenBoundary a1 b1) i1
-            (codegenAccTypeTex a0) (codegenBoundary a0 b0) i0 f'
-          where
-            (p1, p0)    = offsets2 f a1 a0
-            i0          = map Sugar.shapeToList p0
-            i1          = map Sugar.shapeToList p1
-
-
-    -- Generate binding points (texture references and shapes) for arrays lifted
-    -- from scalar expressions
     --
-    liftAcc :: OpenAcc aenv a -> ArrayVar aenv -> [C.Definition]
-    liftAcc _ (ArrayVar idx) =
-      let avar    = OpenAcc (Avar idx)
-          idx'    = show $ idxToInt idx
-          sh      = cshape ("sh" ++ idx') (accDim avar)
-          ty      = codegenAccTypeTex avar
-          arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
-      in
-      sh : zipWith (\t n -> cglobal t (arr n)) (reverse ty) [0..]
-
-    -- Shapes are still represented as C structs, so we need to generate field
-    -- indexing code for shapes
-    --
-    mkPrj :: Int -> String -> Int -> C.Exp
-    mkPrj ndim var c
-      | ndim <= 1   = cvar var
-      | otherwise   = [cexp| $exp:v . $id:field |]
-                        where v     = cvar var
-                              field = 'a' : show c
-
     -- caffeine and misery
     --
     internalError =
@@ -262,16 +175,41 @@ codegenAcc dev acc (AccBindings vars) =
       in
       INTERNAL_ERROR(error) "codegenAcc" msg
 
--- code generation for stencil boundary conditions
---
-codegenBoundary :: forall aenv dim e. Sugar.Elt e
-                => OpenAcc aenv (Sugar.Array dim e) {- dummy -}
-                -> Boundary (Sugar.EltRepr e)
-                -> Boundary [C.Exp]
-codegenBoundary _ (Constant c) = Constant $ codegenConst (Sugar.eltType (undefined::e)) c
-codegenBoundary _ Clamp        = Clamp
-codegenBoundary _ Mirror       = Mirror
-codegenBoundary _ Wrap         = Wrap
+    -- Generate binding points (texture references and shapes) for arrays lifted
+    -- from scalar expressions
+    --
+    liftAcc :: OpenAcc aenv a -> ArrayVar aenv -> [C.Definition]
+    liftAcc _ (ArrayVar idx) =
+      let avar    = OpenAcc (Avar idx)
+          idx'    = show $ idxToInt idx
+          sh      = cshape ("sh" ++ idx') (accDim avar)
+          ty      = accTypeTex avar
+          arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
+      in
+      sh : zipWith (\t n -> cglobal t (arr n)) (reverse ty) [0..]
+
+    -- Shapes are still represented as C structs, so we need to generate field
+    -- indexing code for shapes
+    --
+    mkPrj :: Int -> String -> Int -> C.Exp
+    mkPrj ndim var c
+      | ndim <= 1   = cvar var
+      | otherwise   = [cexp| $exp:(cvar var) . $id:('a':show c) |]
+
+
+    -- code generation for stencil boundary conditions
+    --
+    codegenBoundary :: forall dim e. Sugar.Elt e
+                    => OpenAcc aenv (Sugar.Array dim e)         {- dummy -}
+                    -> Boundary (Sugar.EltRepr e)
+                    -> Boundary (CUExp e)
+    codegenBoundary _ Clamp        = Clamp
+    codegenBoundary _ Mirror       = Mirror
+    codegenBoundary _ Wrap         = Wrap
+    codegenBoundary _ (Constant c)
+      = Constant . CUExp []
+      $ codegenConst (Sugar.eltType (undefined::e)) c
+
 
 
 -- Scalar Expressions
@@ -284,34 +222,38 @@ codegenBoundary _ Wrap         = Wrap
 -- are only introduced as arguments to collective operations, so lambdas are
 -- always outermost, and can always be translated into plain C functions.
 --
-codegenFun :: Fun aenv t -> CGM [C.Exp]
-codegenFun fun = codegenOpenFun fun Empty
-
-codegenOpenFun :: OpenFun env aenv t -> Val env -> CGM [C.Exp]
-codegenOpenFun fun = codegen (arity fun) fun
+codegenFun :: Fun aenv t -> CUFun t
+codegenFun fun = runCGM $ codegenOpenFun (arity fun) fun Empty
   where
     arity :: OpenFun env aenv t -> Int
     arity (Body _) = -1
     arity (Lam f)  =  1 + arity f
 
-    codegen :: Int -> OpenFun env' aenv' t' -> Val env' -> CGM [C.Exp]
-    codegen _ (Body e) env = do
-      e' <- codegenOpenExp e env
-      zipWithM_ addVar (codegenExpType e) e'
-      return e'
-    --
-    codegen lvl (Lam (f :: OpenFun (env,a) aenv b)) env =
-      let ty    = codegenTupleType (Sugar.eltType (undefined :: a))
-          n     = length ty
-          vars  = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
-      in
-      codegen (lvl-1) f (env `Push` vars)
+codegenOpenFun :: Int -> OpenFun env aenv t -> Val env -> CGM (CUFun t)
+codegenOpenFun _lvl (Body e) env = do
+  e'    <- codegenOpenExp e env
+  env'  <- environment
+  zipWithM_ addVar (expType e) e'
+  return $ CUBody (CUExp env' e')
+
+codegenOpenFun lvl (Lam (f :: OpenFun (env,a) aenv b)) env = do
+  let ty    = eltType (undefined::a)
+      n     = length ty
+      vars  = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
+  weaken
+  f'    <- codegenOpenFun (lvl-1) f (env `Push` vars)
+  vars' <- subscripts lvl
+  return $ CULam vars' f'
 
 
 -- Embedded scalar computations
 --
-codegenExp :: Exp aenv t -> CGM [C.Exp]
-codegenExp exp = codegenOpenExp exp Empty
+codegenExp :: Exp aenv t -> CUExp t
+codegenExp exp = runCGM $ do
+  e'    <- codegenOpenExp exp Empty
+  env'  <- environment
+  return $ CUExp env' e'
+
 
 codegenOpenExp :: forall env aenv t. OpenExp env aenv t -> Val env -> CGM [C.Exp]
 codegenOpenExp exp env =
@@ -325,7 +267,7 @@ codegenOpenExp exp env =
     --
     Let a b -> do
       a'        <- codegenOpenExp a env
-      vars      <- zipWithM bindVars (codegenExpType a) a'
+      vars      <- zipWithM bindVars (expType a) a'
       codegenOpenExp b (env `Push` vars)
       where
         -- FIXME: if we are let-binding an input argument (read from global
@@ -342,7 +284,7 @@ codegenOpenExp exp env =
       | otherwise               -> return var
       where
         var     = prj ix env
-        ty      = codegenTupleType (Sugar.eltType (undefined :: t))
+        ty      = eltType (undefined :: t)
 
     -- Constant values
     --
@@ -364,11 +306,10 @@ codegenOpenExp exp env =
         [(x,t)]         -> addVar t x >> return [x]
         xts             -> return $ fst (unzip xts)
       where
-        ty      = expType e
-        elt     = codegenTupleType ty
+        elt     = expType e
         subset  = reverse
-                . take (length (codegenExpType exp))
-                . drop (prjToInt idx ty)
+                . take (length (expType exp))
+                . drop (prjToInt idx (Sugar.expType e))
                 . reverse
 
     -- Conditional expression
@@ -394,7 +335,7 @@ codegenOpenExp exp env =
 
     IndexHead ix        -> do
       ix'               <- last <$> codegenOpenExp ix env
-      _                 <- addVar (last (codegenExpType ix)) ix'
+      _                 <- addVar (last (expType ix)) ix'
       return [ix']
 
     IndexTail ix        -> do
@@ -422,7 +363,7 @@ codegenOpenExp exp env =
         let avar        = show (idxToInt a)
             sh          = cvar ("sh"  ++ avar)
             array x     = cvar ("arr" ++ avar ++ "_a" ++ show x)
-            elt         = codegenAccTypeTex arr
+            elt         = accTypeTex arr
             n           = length elt
         in do
           ix'           <- codegenOpenExp ix env
@@ -446,9 +387,14 @@ codegenTup tup env = case tup of
 --
 prjToInt :: TupleIdx t e -> TupleType a -> Int
 prjToInt ZeroTupIdx     _                 = 0
-prjToInt (SuccTupIdx i) (b `PairTuple` a) = length (codegenTupleType a) + prjToInt i b
+prjToInt (SuccTupIdx i) (b `PairTuple` a) = sizeTupleType a + prjToInt i b
 prjToInt _ _ =
   INTERNAL_ERROR(error) "prjToInt" "inconsistent valuation"
+
+sizeTupleType :: TupleType a -> Int
+sizeTupleType UnitTuple         = 0
+sizeTupleType (SingleTuple _)   = 1
+sizeTupleType (PairTuple a b)   = sizeTupleType a + sizeTupleType b
 
 
 -- Recording which variables of a computation are actually used is important,
@@ -463,159 +409,6 @@ addVar ty exp = case show exp of
   ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
         -> use v' n' ty exp >> return True
   _     ->                     return False
-
-
--- Types
--- -----
-
--- Generate types for the reified elements of an array computation
---
-codegenAccType :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-codegenAccType =  codegenTupleType . accType
-
-codegenExpType :: OpenExp aenv env t -> [C.Type]
-codegenExpType =  codegenTupleType . expType
-
-codegenAccSegmentsType :: OpenAcc aenv (Sugar.Segments i) -> C.Type
-codegenAccSegmentsType seg
-  | [s] <- codegenAccType seg   = s
-  | otherwise                   = INTERNAL_ERROR(error) "codegenAcc" "non-scalar segment type"
-
-sizeOfAccTypes :: OpenAcc aenv (Sugar.Array dim e) -> [Int]
-sizeOfAccTypes = sizeOf' . accType
-  where
-    sizeOf' :: TupleType a -> [Int]
-    sizeOf' UnitTuple           = []
-    sizeOf' x@(SingleTuple _)   = [sizeOf x]
-    sizeOf' (PairTuple a b)     = sizeOf' a ++ sizeOf' b
-
-
--- Implementation
---
-codegenTupleType :: TupleType a -> [C.Type]
-codegenTupleType UnitTuple         = []
-codegenTupleType (SingleTuple  ty) = [codegenScalarType ty]
-codegenTupleType (PairTuple t1 t0) = codegenTupleType t1 ++ codegenTupleType t0
-
-codegenScalarType :: ScalarType a -> C.Type
-codegenScalarType (NumScalarType    ty) = codegenNumType ty
-codegenScalarType (NonNumScalarType ty) = codegenNonNumType ty
-
-codegenNumType :: NumType a -> C.Type
-codegenNumType (IntegralNumType ty) = codegenIntegralType ty
-codegenNumType (FloatingNumType ty) = codegenFloatingType ty
-
-codegenIntegralType :: IntegralType a -> C.Type
-codegenIntegralType (TypeInt8    _) = typename "int8_t"
-codegenIntegralType (TypeInt16   _) = typename "int16_t"
-codegenIntegralType (TypeInt32   _) = typename "int32_t"
-codegenIntegralType (TypeInt64   _) = typename "int64_t"
-codegenIntegralType (TypeWord8   _) = typename "uint8_t"
-codegenIntegralType (TypeWord16  _) = typename "uint16_t"
-codegenIntegralType (TypeWord32  _) = typename "uint32_t"
-codegenIntegralType (TypeWord64  _) = typename "uint64_t"
-codegenIntegralType (TypeCShort  _) = [cty|short|]
-codegenIntegralType (TypeCUShort _) = [cty|unsigned short|]
-codegenIntegralType (TypeCInt    _) = [cty|int|]
-codegenIntegralType (TypeCUInt   _) = [cty|unsigned int|]
-codegenIntegralType (TypeCLong   _) = [cty|long int|]
-codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
-codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
-codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
-
-codegenIntegralType (TypeInt     _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "int32_t"
-       8 -> typename "int64_t"
-       _ -> error "we can never get here"
-
-codegenIntegralType (TypeWord    _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "uint32_t"
-       8 -> typename "uint64_t"
-       _ -> error "we can never get here"
-
-
-codegenFloatingType :: FloatingType a -> C.Type
-codegenFloatingType (TypeFloat   _) = [cty|float|]
-codegenFloatingType (TypeCFloat  _) = [cty|float|]
-codegenFloatingType (TypeDouble  _) = [cty|double|]
-codegenFloatingType (TypeCDouble _) = [cty|double|]
-
-codegenNonNumType :: NonNumType a -> C.Type
-codegenNonNumType (TypeBool   _) = error "codegenNonNum :: Bool"
-codegenNonNumType (TypeChar   _) = error "codegenNonNum :: Char"
-codegenNonNumType (TypeCChar  _) = [cty|char|]
-codegenNonNumType (TypeCSChar _) = [cty|signed char|]
-codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
-
-
--- Texture types
---
-codegenAccTypeTex :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-codegenAccTypeTex = codegenTupleTex . accType
-
-codegenTupleTex :: TupleType a -> [C.Type]
-codegenTupleTex UnitTuple         = []
-codegenTupleTex (SingleTuple t)   = [codegenScalarTex t]
-codegenTupleTex (PairTuple t1 t0) = codegenTupleTex t1 ++ codegenTupleTex t0
-
-codegenScalarTex :: ScalarType a -> C.Type
-codegenScalarTex (NumScalarType    ty) = codegenNumTex ty
-codegenScalarTex (NonNumScalarType ty) = codegenNonNumTex ty;
-
-codegenNumTex :: NumType a -> C.Type
-codegenNumTex (IntegralNumType ty) = codegenIntegralTex ty
-codegenNumTex (FloatingNumType ty) = codegenFloatingTex ty
-
-codegenIntegralTex :: IntegralType a -> C.Type
-codegenIntegralTex (TypeInt8    _) = typename "TexInt8"
-codegenIntegralTex (TypeInt16   _) = typename "TexInt16"
-codegenIntegralTex (TypeInt32   _) = typename "TexInt32"
-codegenIntegralTex (TypeInt64   _) = typename "TexInt64"
-codegenIntegralTex (TypeWord8   _) = typename "TexWord8"
-codegenIntegralTex (TypeWord16  _) = typename "TexWord16"
-codegenIntegralTex (TypeWord32  _) = typename "TexWord32"
-codegenIntegralTex (TypeWord64  _) = typename "TexWord64"
-codegenIntegralTex (TypeCShort  _) = typename "TexCShort"
-codegenIntegralTex (TypeCUShort _) = typename "TexCUShort"
-codegenIntegralTex (TypeCInt    _) = typename "TexCInt"
-codegenIntegralTex (TypeCUInt   _) = typename "TexCUInt"
-codegenIntegralTex (TypeCLong   _) = typename "TexCLong"
-codegenIntegralTex (TypeCULong  _) = typename "TexCULong"
-codegenIntegralTex (TypeCLLong  _) = typename "TexCLLong"
-codegenIntegralTex (TypeCULLong _) = typename "TexCULLong"
-
-codegenIntegralTex (TypeInt     _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "TexInt32"
-       8 -> typename "TexInt64"
-       _ -> error "we can never get here"
-
-codegenIntegralTex (TypeWord    _) =
-  case F.sizeOf (undefined::Word) of
-       4 -> typename "TexWord32"
-       8 -> typename "TexWord64"
-       _ -> error "we can never get here"
-
-
-codegenFloatingTex :: FloatingType a -> C.Type
-codegenFloatingTex (TypeFloat   _) = typename "TexFloat"
-codegenFloatingTex (TypeCFloat  _) = typename "TexCFloat"
-codegenFloatingTex (TypeDouble  _) = typename "TexDouble"
-codegenFloatingTex (TypeCDouble _) = typename "TexCDouble"
-
-
--- TLM 2010-06-29:
---   Bool and Char can be implemented once the array types in
---   Data.Array.Accelerate.[CUDA.]Array.Data are made concrete.
---
-codegenNonNumTex :: NonNumType a -> C.Type
-codegenNonNumTex (TypeBool   _) = error "codegenNonNumTex :: Bool"
-codegenNonNumTex (TypeChar   _) = error "codegenNonNumTex :: Char"
-codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
-codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
-codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"
 
 
 -- Scalar Primitives

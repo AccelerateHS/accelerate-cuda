@@ -12,8 +12,8 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
-  runCGM, CGM, Environment,
-  bind, use, environment, subscripts
+  runCGM, CGM,
+  bind, use, weaken, environment, subscripts
 
 ) where
 
@@ -25,18 +25,17 @@ import Language.C
 import Language.C.Quote.CUDA
 
 import Data.IntMap                              ( IntMap )
-import Data.Sequence                            ( Seq )
+import Data.Sequence                            ( Seq, (|>) )
 import qualified Data.IntMap                    as IM
 import qualified Data.Sequence                  as S
 
 
 type CGM                = State Gamma
-type Environment        = [InitGroup]
 data Gamma              = Gamma
   {
     _unique     :: {-# UNPACK #-} !Int,
     _variables  :: !(Seq (IntMap (Type, Exp))),
-    _bindings   :: !Environment
+    _bindings   :: ![InitGroup]
   }
   deriving Show
 
@@ -44,8 +43,13 @@ $(mkLabels [''Gamma])
 
 
 runCGM :: CGM a -> a
-runCGM = flip evalState (Gamma 0 (S.replicate 2 IM.empty) [])
+runCGM = flip evalState (Gamma 0 S.empty [])
 
+
+-- Add space for another variable
+--
+weaken :: CGM ()
+weaken = modify variables (|> IM.empty)
 
 -- Add an expression of given type to the environment and return the (new,
 -- unique) binding name that can be used in place of the thing just bound.
@@ -56,12 +60,11 @@ bind t e = do
   modify bindings ( [cdecl| const $ty:t $id:name = $exp:e;|] : )
   return [cexp|$id:name|]
 
-
 -- Return the environment (list of initialisation declarations). Since we
 -- introduce new bindings to the front of the list, need to reverse so they
 -- appear in usage order.
 --
-environment :: CGM Environment
+environment :: CGM [InitGroup]
 environment = reverse `fmap` gets bindings
 
 -- Generate a fresh variable name
@@ -72,9 +75,6 @@ fresh = do
   return $ 'v':show n
 
 -- Mark a variable at a given base and tuple index as being used.
---
--- TLM: actually, this can only be trusted if there is a single scalar function,
---   otherwise we get collisions (e.g. permute)
 --
 use :: Int -> Int -> Type -> Exp -> CGM ()
 use base prj ty var = modify variables (S.adjust (IM.insert prj (ty,var)) base)

@@ -113,6 +113,7 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
                         Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil
+                        Data.Array.Accelerate.CUDA.CodeGen.Type
                         Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Debug

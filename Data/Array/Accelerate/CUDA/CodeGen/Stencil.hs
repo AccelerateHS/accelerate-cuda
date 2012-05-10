@@ -1,4 +1,8 @@
-{-# LANGUAGE BangPatterns, QuasiQuotes #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -19,10 +23,14 @@ module Data.Array.Accelerate.CUDA.CodeGen.Stencil (
 import Language.C.Syntax
 import Language.C.Quote.CUDA
 
-import Data.Array.IArray                                ( Array, listArray, (!) )
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.AST                        ( OpenAcc, Fun, Stencil )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Elt, shapeToList )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Type
+
+import qualified Data.Array.Accelerate.Analysis.Stencil as Stencil
+import qualified Data.Array.IArray                      as IArray
 
 
 -- Map a stencil over an array.  In contrast to 'map', the domain of a stencil
@@ -46,11 +54,14 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 -- To improve performance, the input array(s) are read through the texture
 -- cache.
 --
-mkStencil :: Int -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
-mkStencil dim tyOut stencilIn0 boundary offsets combine = do
-  env                   <- environment
-  (arrIn0, getIn0)      <- stencilAccess 0 dim stencilIn0 boundary offsets
-  return $ CUTranslSkel "stencil" [cunit|
+mkStencil :: forall sh stencil a b. (Stencil sh a stencil, Elt b)
+          => Int
+          -> CUFun (stencil -> b)
+          -> Boundary (CUExp a)
+          -> Array sh b                 {- dummy -}
+          -> CUTranslSkel
+mkStencil dim (CULam use0 (CUBody (CUExp env stencil))) boundary _ =
+  CUTranslSkel "stencil" [cunit|
     $edecl:(cdim "Shape" dim)
     $edecls:arrIn0
 
@@ -73,13 +84,19 @@ mkStencil dim tyOut stencilIn0 boundary offsets combine = do
             const typename Shape ix = fromIndex(shIn0, i);
             $decls:(getIn0 "ix")
             $decls:env
-            $stms:(setOut "i" combine)
+            $stms:(setOut "i" stencil)
         }
     }
   |]
   where
+    tyOut               = eltType    (undefined :: b)
+    stencilIn0          = eltTypeTex (undefined :: a)
     (argOut, _, setOut) = setters tyOut
-
+    (arrIn0, getIn0)    = stencilAccess 0 dim stencilIn0 use0 boundary offsets
+    --
+    offsets             = map shapeToList p0
+    p0                  = Stencil.offsets (undefined :: Fun aenv (stencil -> b))
+                                          (undefined :: OpenAcc aenv (Array sh a))
 
 
 -- Map a binary stencil of an array.  The extent of the resulting array is the
@@ -95,13 +112,16 @@ mkStencil dim tyOut stencilIn0 boundary offsets combine = do
 --          -> Acc (Array ix b)                 -- source array #2
 --          -> Acc (Array ix c)                 -- destination array
 --
-mkStencil2 :: Int -> [Type] -> [Type] -> Boundary [Exp] -> [[Int]]
-                            -> [Type] -> Boundary [Exp] -> [[Int]] -> [Exp] -> CGM CUTranslSkel
-mkStencil2 dim tyOut stencilIn1 boundary1 offsets1 stencilIn0 boundary0 offsets0 combine = do
-  env                   <- environment
-  (arrIn0, getIn0)      <- stencilAccess 0 dim stencilIn0 boundary0 offsets0
-  (arrIn1, getIn1)      <- stencilAccess 1 dim stencilIn1 boundary1 offsets1
-  return $ CUTranslSkel "stencil2" [cunit|
+mkStencil2 :: forall sh stencil1 stencil0 a b c.
+              (Stencil sh a stencil1, Stencil sh b stencil0, Elt c)
+           => Int
+           -> CUFun (stencil1 -> stencil0 -> c)
+           -> Boundary (CUExp a)
+           -> Boundary (CUExp b)
+           -> Array sh c                        {- dummy -}
+           -> CUTranslSkel
+mkStencil2 dim (CULam use1 (CULam use0 (CUBody (CUExp env stencil)))) boundary1 boundary0 _ =
+  CUTranslSkel "stencil2" [cunit|
     $edecl:(cdim "Shape" dim)
     $edecls:arrIn0
     $edecls:arrIn1
@@ -128,12 +148,23 @@ mkStencil2 dim tyOut stencilIn1 boundary1 offsets1 stencilIn0 boundary0 offsets0
             $decls:(getIn0 "ix")
             $decls:(getIn1 "ix")
             $decls:env
-            $stms:(setOut "i" combine)
+            $stms:(setOut "i" stencil)
         }
     }
   |]
   where
+    tyOut               = eltType    (undefined :: c)
+    stencilIn0          = eltTypeTex (undefined :: b)
+    stencilIn1          = eltTypeTex (undefined :: a)
     (argOut, _, setOut) = setters tyOut
+    (arrIn0, getIn0)    = stencilAccess 0 dim stencilIn0 use0 boundary0 offsets0
+    (arrIn1, getIn1)    = stencilAccess 1 dim stencilIn1 use1 boundary1 offsets1
+    --
+    offsets0            = map shapeToList p0
+    offsets1            = map shapeToList p1
+    (p1, p0)            = Stencil.offsets2 (undefined :: Fun aenv (stencil1 -> stencil0 -> c))
+                                           (undefined :: OpenAcc aenv (Array sh a))
+                                           (undefined :: OpenAcc aenv (Array sh b))
 
 
 --------------------------------------------------------------------------------
@@ -143,28 +174,28 @@ stencilAccess
     :: Int                              -- array de Bruijn index
     -> Int                              -- array dimensionality
     -> [Type]                           -- array type (texture memory)
-    -> Boundary [Exp]                   -- how to handle boundary array access
+    -> [(Int, Type, Exp)]               -- the variables used in the scalar expression
+    -> Boundary (CUExp a)               -- how to handle boundary array access
     -> [[Int]]                          -- all stencil index offsets, top left to bottom right
-    -> CGM ( [Definition]               -- texture-reference definitions
-           , String -> [InitGroup] )    -- array indexing
-stencilAccess base dim stencil boundary shx = do
-  subs          <- subscripts base
-  return ( textures
-         , \ix -> concatMap (get ix) subs )
+    -> ( [Definition]                   -- texture-reference definitions
+       , String -> [InitGroup] )        -- array indexing
+stencilAccess base dim stencil subs boundary shx =
+  ( textures
+  , \ix -> concatMap (get ix) subs )
   where
     n           = length stencil
     sh          = "shIn"    ++ show  base
     arr x       = "stencil" ++ shows base "_a" ++ show (x `mod` n)
     textures    = zipWith cglobal stencil (map arr [n-1, n-2 .. 0])
     --
-    offsets     :: Array Int [Int]
-    offsets     = listArray (0, length shx-1) shx
+    offsets     :: IArray.Array Int [Int]
+    offsets     =  IArray.listArray (0, length shx-1) shx
     --
     get ix (i,t,v) = case boundary of
-      Clamp             -> bounded "clamp"
-      Mirror            -> bounded "mirror"
-      Wrap              -> bounded "wrap"
-      Constant c        -> inRange c
+      Clamp                -> bounded "clamp"
+      Mirror               -> bounded "mirror"
+      Wrap                 -> bounded "wrap"
+      Constant (CUExp _ c) -> inRange c
       where
         j       = 'j':shows base "_a" ++ show i
         k       = 'k':shows base "_a" ++ show i
@@ -174,11 +205,11 @@ stencilAccess base dim stencil boundary shx = do
           : [cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar j)); |]
           : []
           where
-            ix'  = case offsets ! div i n of
+            ix'  = case offsets IArray.! div i n of
               ks | all (== 0) ks        -> [cexp| toIndex( $id:sh, ix ) |]
                  | otherwise            -> [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, cursor ks]) ) |]
         --
-        inRange c = case offsets ! div i n of
+        inRange c = case offsets IArray.! div i n of
           ks | all (== 0) ks    -> let f = indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar "ix"])
                                    in  [[cdecl| const $ty:t $id:(show v) = $exp:f; |]]
              | otherwise        -> [cdecl| const typename Shape $id:j = $exp:(cursor ks); |]

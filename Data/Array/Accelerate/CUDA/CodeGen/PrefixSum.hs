@@ -1,4 +1,7 @@
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -26,7 +29,7 @@ import Foreign.CUDA.Analysis
 import Data.Maybe
 
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Monad
+import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 
 data Direction = L | R
@@ -37,7 +40,7 @@ instance Show Direction where
   show R = "r"
 
 
-mkScanl, mkScanr :: DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
+mkScanl, mkScanr :: DeviceProperties -> CUFun (a -> a -> a) -> Maybe (CUExp a) -> CUTranslSkel
 mkScanl = mkScan L
 mkScanr = mkScan R
 
@@ -105,11 +108,14 @@ mkScanr = mkScan R
 --   * scanl1, scanr1 : no change (argSum is required, even though it will not be used Haskell-side)
 --   * scanl', scanr' : no change
 --
-mkScan :: Direction -> DeviceProperties -> [Type] -> [Exp] -> Maybe [Exp] -> CGM CUTranslSkel
-mkScan dir dev elt combine mseed = do
-  env                                   <- environment
-  (argIn0, x0, decl0, getIn0, _)        <- getters 0 elt
-  return $ CUTranslSkel name [cunit|
+mkScan :: forall a.
+          Direction
+       -> DeviceProperties
+       -> CUFun (a -> a -> a)
+       -> Maybe (CUExp a)
+       -> CUTranslSkel
+mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
+  CUTranslSkel name [cunit|
     extern "C"
     __global__ void
     $id:name
@@ -134,7 +140,7 @@ mkScan dir dev elt combine mseed = do
         int carry_in = 0;
 
         if ( threadIdx.x == 0 ) {
-            $stms:(initialise mseed x0)
+            $stms:(initialise mseed)
         }
 
         const int start = blockIdx.x * interval_size;
@@ -180,39 +186,42 @@ mkScan dir dev elt combine mseed = do
          * for exclusive scans, set the overall scan result and reapply the
          * initial element at the boundaries of each interval
          */
-        $stms:(finalise mseed x0)
+        $stms:(finalise mseed)
     }
   |]
   where
-    name                        = "scan" ++ show dir ++ maybe "1" (const "") mseed
-    (argOut, _, setOut)         = setters elt
-    setSum                      = totalSum "0"
-    (argSum, totalSum)          = arrays "d_sum" elt
-    (argBlk, blkSum)            = arrays "d_blk" elt
-    (x1,   decl1)               = locals "x1" elt
-    (smem, sdata)               = shared 0 Nothing [cexp| blockDim.x |] elt
+    name                                = "scan" ++ show dir ++ maybe "1" (const "") mseed
+    elt                                 = eltType (undefined :: a)
+    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt use0
+    (argOut, _, setOut)                 = setters elt
+    setSum                              = totalSum "0"
+    (argSum, totalSum)                  = arrays "d_sum" elt
+    (argBlk, blkSum)                    = arrays "d_blk" elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    exclusive                   = isJust mseed
-    left                        = dir == L
-    firstBlock                  = if     left then "0" else "gridDim.x - 1"
-    lastBlock                   = if not left then "0" else "gridDim.x - 1"
+    exclusive                           = isJust mseed
+    left                                = dir == L
+    firstBlock                          = if     left then "0" else "gridDim.x - 1"
+    lastBlock                           = if not left then "0" else "gridDim.x - 1"
     --
-    initialise Nothing x0       = [cstm|
+    initialise Nothing                  = [cstm|
         if ( blockIdx.x != $id:firstBlock ) {
             $stms:(x0 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
             carry_in = 1;
         }
       |] : []
-    initialise (Just seed) x0   = [cstm|
+    initialise (Just (CUExp env' seed)) = [cstm|
         if ( gridDim.x > 1 ) {
             $stms:(x0 .=. blkSum "blockIdx.x")
         } else {
+            $decls:env'
             $stms:(x0 .=. seed)
         }
       |] : [cstm| carry_in = 1; |] : []
     --
-    finalise Nothing     _      = []
-    finalise (Just seed) x0     = [[cstm|
+    finalise Nothing                    = []
+    finalise (Just (CUExp env' seed))   = [[cstm|
       if ( threadIdx.x == 0 ) {
           if ( blockIdx.x == $id:lastBlock ) {
               $stms:(setSum .=. x0)
@@ -223,6 +232,7 @@ mkScan dir dev elt combine mseed = do
                   $stms:(setOut (if left then "start" else "end - 1") (blkSum "blockIdx.x"))
               }
               else {
+                  $decls:env'
                   $stms:(setOut (if left then "start" else "end - 1") seed)
               }
           }
@@ -255,7 +265,7 @@ scanBlock :: DeviceProperties
           -> Maybe Exp                  -- partially-full block bounds check?
           -> Exp                        -- CTA size
           -> (String -> [Exp])          -- index shared memory area
-          -> Environment                -- local environment for the..
+          -> [InitGroup]                -- local environment for the..
           -> [Exp]                      -- ..binary function
           -> [Stm]
 scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThreads]
