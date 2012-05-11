@@ -131,6 +131,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         $decls:smem
         $decls:decl0
         $decls:decl1
+        $decls:decl2
 
         /*
          * Read in previous result partial sum. We store the carry value in x0
@@ -140,7 +141,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         int carry_in = 0;
 
         if ( threadIdx.x == 0 ) {
-            $stms:(initialise mseed)
+            $stm:(initialise mseed)
         }
 
         const int start = blockIdx.x * interval_size;
@@ -152,8 +153,9 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             const int j = $id:(if left then "start + i" else "end - i - 1");
             $stms:(x1 .=. getIn0 "j")
 
-            if (threadIdx.x == 0 && carry_in) {
+            if ( $exp:carry_in ) {
                 $decls:env
+                $stms:(x0 .=. x2)
                 $stms:(x1 .=. combine)
             }
 
@@ -165,8 +167,12 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
 
             $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
 
-            if ( $exp:(cbool exclusive) && threadIdx.x != 0 ) {
-                $stms:(x1 .=. sdata "threadIdx.x - 1")
+            if ( $exp:(cbool exclusive) ) {
+                if ( threadIdx.x == 0 ) {
+                    $stms:(x1 .=. x2)
+                } else {
+                    $stms:(x1 .=. sdata "threadIdx.x - 1")
+                }
             }
             $stms:(setOut "j" x1)
 
@@ -177,16 +183,18 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
              */
             if ( threadIdx.x == 0 ) {
                 const int last = min(interval_size - i, blockDim.x) - 1;
-                $stms:(x0 .=. sdata "last")
+                $stms:(x2 .=. sdata "last")
             }
-            carry_in = 1;
+            $id:( if not exclusive then "carry_in = 1" else [] ) ;
         }
 
         /*
          * for exclusive scans, set the overall scan result and reapply the
          * initial element at the boundaries of each interval
          */
-        $stms:(finalise mseed)
+        if ( $exp:(cbool exclusive) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
+            $stms:(setSum .=. x2)
+        }
     }
   |]
   where
@@ -198,8 +206,12 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
     (argSum, totalSum)                  = arrays "d_sum" elt
     (argBlk, blkSum)                    = arrays "d_blk" elt
     (x1,   decl1)                       = locals "x1" elt
+    (x2,   decl2)                       = locals "x2" elt
     (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
+    carry_in
+      | exclusive                       = [cexp| threadIdx.x == 0 |]
+      | otherwise                       = [cexp| threadIdx.x == 0 && carry_in |]
     exclusive                           = isJust mseed
     left                                = dir == L
     firstBlock                          = if     left then "0" else "gridDim.x - 1"
@@ -207,36 +219,18 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
     --
     initialise Nothing                  = [cstm|
         if ( blockIdx.x != $id:firstBlock ) {
-            $stms:(x0 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
+            $stms:(x2 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
             carry_in = 1;
         }
-      |] : []
+      |]
     initialise (Just (CUExp env' seed)) = [cstm|
         if ( gridDim.x > 1 ) {
-            $stms:(x0 .=. blkSum "blockIdx.x")
+            $stms:(x2 .=. blkSum "blockIdx.x")
         } else {
             $decls:env'
-            $stms:(x0 .=. seed)
+            $stms:(x2 .=. seed)
         }
-      |] : [cstm| carry_in = 1; |] : []
-    --
-    finalise Nothing                    = []
-    finalise (Just (CUExp env' seed))   = [[cstm|
-      if ( threadIdx.x == 0 ) {
-          if ( blockIdx.x == $id:lastBlock ) {
-              $stms:(setSum .=. x0)
-          }
-
-          if ( num_elements > 0 ) {
-              if ( gridDim.x > 1 ) {
-                  $stms:(setOut (if left then "start" else "end - 1") (blkSum "blockIdx.x"))
-              }
-              else {
-                  $decls:env'
-                  $stms:(setOut (if left then "start" else "end - 1") seed)
-              }
-          }
-      } |]]
+      |]
 
 
 --------------------------------------------------------------------------------
