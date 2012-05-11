@@ -1,5 +1,7 @@
-{-# LANGUAGE CPP, GADTs, PatternGuards, TemplateHaskell #-}
-{-# LANGUAGE TupleSections, TypeFamilies, TypeOperators #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections   #-}
+{-# LANGUAGE TypeOperators   #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}   -- CUDA.Context
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
@@ -37,10 +39,11 @@ import Data.Array.Accelerate.CUDA.Analysis.Device
 import Data.Label
 import Control.Exception
 import Data.ByteString                                  ( ByteString )
-import Control.Concurrent.MVar                          ( MVar, newMVar, addMVarFinalizer )
+import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
 import System.Mem                                       ( performGC )
+import System.Mem.Weak                                  ( addFinalizer )
 import System.IO.Unsafe
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
@@ -134,12 +137,14 @@ defaultContext = unsafePerformIO $ do
   (dev,prp)     <- selectBestDevice
   ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
   ref           <- newMVar ctx
-  addMVarFinalizer ref $ do
-    CUDA.destroy ctx
-    message dump_gc $ "gc: finalise context"
   --
   message dump_gc $ "gc: initialise context"
   message verbose $ deviceInfo dev prp
+  --
+  addFinalizer ctx $ do
+    message dump_gc $ "gc: finalise context"
+    CUDA.destroy ctx
+  --
   return ref
 
 
