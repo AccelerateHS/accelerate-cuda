@@ -107,15 +107,34 @@ static __inline__ __device__ T atomicCAS32(T* address, T compare, T val)
     return u.a;
 }
 
+template <>
+static __inline__ __device__ int32_t atomicCAS32(int32_t* address, int32_t compare, int32_t val)
+{
+    return atomicCAS(address, compare, val);
+}
+
+template <>
+static __inline__ __device__ uint32_t atomicCAS32(uint32_t* address, uint32_t compare, uint32_t val)
+{
+    return atomicCAS(address, compare, val);
+}
+
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 120
 template <typename T>
 static __inline__ __device__ T atomicCAS64(T* address, T compare, T val)
 {
-    union { T a; uint64_t b; } u;
+    union { T a; unsigned long long int b; } u;
 
-    u.b = atomicCAS((uint64_t*) address, reinterpret64<T>(compare), reinterpret64<T>(val));
+    u.b = atomicCAS((unsigned long long int*) address, reinterpret64<T>(compare), reinterpret64<T>(val));
     return u.a;
 }
 
+template <>
+static __inline__ __device__ unsigned long long int atomicCAS64(unsigned long long int* address, unsigned long long int compare, unsigned long long int val)
+{
+    return atomicCAS(address, compare, val);
+}
+#endif
 
 #if 0
 /* -----------------------------------------------------------------------------
