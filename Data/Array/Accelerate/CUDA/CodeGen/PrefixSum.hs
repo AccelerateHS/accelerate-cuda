@@ -134,7 +134,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         $decls:decl2
 
         /*
-         * Read in previous result partial sum. We store the carry value in x0
+         * Read in previous result partial sum. We store the carry value in x2
          * and read new values from the input array into x1, since 'scanBlock'
          * will store its results into x1 on completion.
          */
@@ -160,13 +160,20 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             }
 
             /*
-             * Store our input into shared memory and cooperatively scan
+             * Store our input into shared memory and perform a cooperative
+             * inclusive left scan.
              */
             $stms:(sdata "threadIdx.x" .=. x1)
             __syncthreads();
 
             $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
 
+            /*
+             * Exclusive scans write the result of the previous thread to global
+             * memory. The first thread must reinstate the carry-in value which
+             * is the result of the last thread from the previous interval, or
+             * the carry-in/seed value for multi-block scans.
+             */
             if ( $exp:(cbool exclusive) ) {
                 if ( threadIdx.x == 0 ) {
                     $stms:(x1 .=. x2)
@@ -177,9 +184,9 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             $stms:(setOut "j" x1)
 
             /*
-             * Carry the final result from this block through x0. If this is the
-             * last section of the interval, this is the value to write out as
-             * the final (reduction) result.
+             * Carry the final result of this block through the set x2. If this
+             * is the final interval, this is the value to write out as the
+             * reduction result
              */
             if ( threadIdx.x == 0 ) {
                 const int last = min(interval_size - i, blockDim.x) - 1;
@@ -189,8 +196,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         }
 
         /*
-         * for exclusive scans, set the overall scan result and reapply the
-         * initial element at the boundaries of each interval
+         * for exclusive scans, set the overall scan result (reduction value)
          */
         if ( $exp:(cbool exclusive) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
             $stms:(setSum .=. x2)
