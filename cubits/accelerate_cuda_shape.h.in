@@ -23,7 +23,7 @@
  * future hardware gains better 64-bit support and/or we need to access very
  * large arrays.
  *
- * typedef @hs_int_type@                             Ix;
+ * typedef @type_hs_int@                             Ix;
  */
 typedef int32_t                                   Ix;
 typedef void*                                     DIM0;

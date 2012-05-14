@@ -4,3 +4,4 @@ config.status
 config.log
 autom4te.cache/
 configure
+accelerate-cuda.buildinfo

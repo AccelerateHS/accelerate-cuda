@@ -56,14 +56,6 @@ segmentsType seg
   | otherwise           = INTERNAL_ERROR(error) "accType" "non-scalar segment type"
 
 
---sizeOfAccTypes :: OpenAcc aenv (Sugar.Array dim e) -> [Int]
---sizeOfAccTypes = sizeOf' . Sugar.accType
---  where
---    sizeOf' :: TupleType a -> [Int]
---    sizeOf' UnitTuple           = []
---    sizeOf' x@(SingleTuple _)   = [Sugar.sizeOf x]
---    sizeOf' (PairTuple a b)     = sizeOf' a ++ sizeOf' b
-
 eltType :: Sugar.Elt a => a {- dummy -} -> [C.Type]
 eltType =  codegenTupleType . Sugar.eltType
 
@@ -111,19 +103,16 @@ codegenIntegralType (TypeCLong   _) = [cty|long int|]
 codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
 codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
 codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
-
-codegenIntegralType (TypeInt     _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "int32_t"
-       8 -> typename "int64_t"
-       _ -> error "we can never get here"
-
-codegenIntegralType (TypeWord    _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "uint32_t"
-       8 -> typename "uint64_t"
-       _ -> error "we can never get here"
-
+#if SIZEOF_HSINT == 4
+codegenIntegralType (TypeInt     _) = typename "int32_t"
+#elif SIZEOF_HSINT == 8
+codegenIntegralType (TypeInt     _) = typename "int64_t"
+#endif
+#if SIZEOF_HSINT == 4
+codegenIntegralType (TypeWord    _) = typename "uint32_t"
+#elif SIZEOF_HSINT == 8
+codegenIntegralType (TypeWord    _) = typename "uint64_t"
+#endif
 
 codegenFloatingType :: FloatingType a -> C.Type
 codegenFloatingType (TypeFloat   _) = [cty|float|]
@@ -178,18 +167,16 @@ codegenIntegralTex (TypeCLong   _) = typename "TexCLong"
 codegenIntegralTex (TypeCULong  _) = typename "TexCULong"
 codegenIntegralTex (TypeCLLong  _) = typename "TexCLLong"
 codegenIntegralTex (TypeCULLong _) = typename "TexCULLong"
-
-codegenIntegralTex (TypeInt     _) =
-  case F.sizeOf (undefined::Int) of
-       4 -> typename "TexInt32"
-       8 -> typename "TexInt64"
-       _ -> error "we can never get here"
-
-codegenIntegralTex (TypeWord    _) =
-  case F.sizeOf (undefined::Word) of
-       4 -> typename "TexWord32"
-       8 -> typename "TexWord64"
-       _ -> error "we can never get here"
+#if   SIZEOF_HSINT == 4
+codegenIntegralTex (TypeInt     _) = typename "TexInt32"
+#elif SIZEOF_HSINT == 8
+codegenIntegralTex (TypeInt     _) = typename "TexInt64"
+#endif
+#if   SIZEOF_HSINT == 4
+codegenIntegralTex (TypeWord    _) = typename "TexWord32"
+#elif SIZEOF_HSINT == 8
+codegenIntegralTex (TypeWord    _) = typename "TexWord64"
+#endif
 
 
 codegenFloatingTex :: FloatingType a -> C.Type

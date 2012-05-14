@@ -410,10 +410,11 @@ compileFlags cufile = do
     , machine
     , cufile ]
   where
-    wordSize                    = sizeOf (undefined::Int)
-    machine | wordSize == 4     = "-m32"
-            | wordSize == 8     = "-m64"
-            | otherwise         = error "recreational scolding?"
+#if SIZEOF_HSINT == 4
+    machine     = "-m32"
+#elif SIZEOF_HSINT == 8
+    machine     = "-m64"
+#endif
 
 
 -- Open a unique file in the temporary directory used for compilation

@@ -126,19 +126,16 @@ instance TextureData Word32 where format _ = (CUDA.Word32, 1)
 instance TextureData Word64 where format _ = (CUDA.Word32, 2)
 instance TextureData Float  where format _ = (CUDA.Float,  1)
 instance TextureData Double where format _ = (CUDA.Int32,  2)
-
-instance TextureData Int where
-  format _ = case sizeOf (undefined :: Int) of
-                  4 -> (CUDA.Int32, 1)
-                  8 -> (CUDA.Int32, 2)
-                  _ -> error "we can never get here"
-
-instance TextureData Word where
-  format _ = case sizeOf (undefined :: Word) of
-                  4 -> (CUDA.Word32, 1)
-                  8 -> (CUDA.Word32, 2)
-                  _ -> error "we can never get here"
-
+#if   SIZEOF_HSINT == 4
+instance TextureData Int    where format _ = (CUDA.Int32, 1)
+#elif SIZEOF_HSINT == 8
+instance TextureData Int    where format _ = (CUDA.Int32, 2)
+#endif
+#if   SIZEOF_HSINT == 4
+instance TextureData Word   where format _ = (CUDA.Word32, 1)
+#elif SIZEOF_HSINT == 8
+instance TextureData Word   where format _ = (CUDA.Word32, 2)
+#endif
 
 
 -- Primitive array operations
