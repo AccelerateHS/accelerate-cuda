@@ -641,9 +641,9 @@ stencilOp
     -> Val aenv
     -> Array dim a
     -> CIO (Array dim b)
-stencilOp kernel@(Kernel _ mdl _ _ _) bindings aenv in0@(Array sh0 _) = do
+stencilOp kernel bindings aenv in0@(Array sh0 _) = do
   res@(Array _ out)     <- allocateArray (toElt sh0)
-  bindStencil 0 mdl in0
+  bindAcc 0 kernel in0
   execute kernel bindings aenv (size sh0)
     (((), out)
         , toElt sh0 :: dim)
@@ -657,10 +657,10 @@ stencil2Op
     -> Array dim a
     -> Array dim b
     -> CIO (Array dim c)
-stencil2Op kernel@(Kernel _ mdl _ _ _) bindings aenv in1@(Array sh1 _) in0@(Array sh0 _) = do
+stencil2Op kernel bindings aenv in1@(Array sh1 _) in0@(Array sh0 _) = do
   res@(Array sh out)    <- allocateArray $ toElt (sh1 `intersect` sh0)
-  bindStencil 1 mdl in1
-  bindStencil 0 mdl in0
+  bindAcc 1 kernel in1
+  bindAcc 0 kernel in0
   execute kernel bindings aenv (size sh)
     (((((), out)
           , toElt sh  :: dim)
@@ -756,40 +756,42 @@ executeTuple (t `SnocTup` e) env aenv = (,) <$> executeTuple   t env aenv
 -- Array references in scalar code
 -- -------------------------------
 
-bindLifted :: CUDA.Module -> Val aenv -> AccBindings aenv -> CIO ()
-bindLifted mdl aenv (AccBindings vars) = mapM_ (bindAcc mdl aenv) (Set.toList vars)
+-- All CUDA devices have between 6-8KB of read-only texture memory per
+-- multiprocessor. Since all arrays in Accelerate are immutable, we can always
+-- access input arrays through the texture cache to reduce global memory demand
+-- when accesses do not follow the regular patterns required for coalescing.
+--
+-- This is great for older 1.x series devices, but compute 2.x devices have a
+-- dedicated 768KB L2 cache, as well as a configurable L1 cache of 16/48KB
+-- (combined with shared memory). What we really want is for the code generator
+-- to pass all inputs either as textures or global arrays, depending on what
+-- device we are currently targeting.
+--
 
-
-bindAcc
-    :: CUDA.Module
-    -> Val aenv
-    -> ArrayVar aenv
-    -> CIO ()
-bindAcc mdl aenv (ArrayVar idx) =
-  let idx'        = show $ idxToInt idx
-      Array sh ad = prj idx aenv
-      --
-      bindDim = liftIO $
-        CUDA.getPtr mdl ("sh" ++ idx') >>=
-        CUDA.pokeListArray (convertSh sh) . fst
-      --
-      arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
-      tex     = CUDA.getTex mdl . arr
-      bindTex = marshalTextureData ad (size sh) =<< liftIO (sequence' $ map tex [0..])
-  in
-  bindDim >> bindTex
-
-
-bindStencil
-    :: Int
-    -> CUDA.Module
-    -> Array dim e
-    -> CIO ()
-bindStencil s mdl (Array sh ad) =
-  let sten n = "stencil" ++ show s ++ "_a" ++ show (n::Int)
-      tex    = CUDA.getTex mdl . sten
+bindAcc :: Int -> AccKernel a -> Array dim a' -> CIO ()
+bindAcc base (Kernel _ mdl _ _ _) (Array sh ad) =
+  let arr n     = "arrIn" ++ show base ++ "_a" ++ show (n::Int)
+      tex       = CUDA.getTex mdl . arr
   in
   marshalTextureData ad (size sh) =<< liftIO (sequence' $ map tex [0..])
+
+
+bindAccEnv :: AccKernel a -> Val aenv -> AccBindings aenv -> CIO ()
+bindAccEnv (Kernel _ mdl _ _ _) aenv (AccBindings vars) = mapM_ bindAvar (Set.toList vars)
+  where
+    bindAvar (ArrayVar idx) =
+      let idx'          = show $ idxToInt idx
+          Array sh ad   = prj idx aenv
+          --
+          bindDim       = liftIO $
+            CUDA.getPtr mdl ("sh" ++ idx') >>=
+            CUDA.pokeListArray (convertSh sh) . fst
+          --
+          arr n         = "avar" ++ idx' ++ "_a" ++ show (n::Int)
+          tex           = CUDA.getTex mdl . arr
+          bindTex       = marshalTextureData ad (size sh) =<< liftIO (sequence' $ map tex [0..])
+      in
+      bindDim >> bindTex
 
 
 -- Kernel execution
@@ -864,8 +866,8 @@ execute :: Marshalable args
         -> Int
         -> args
         -> CIO ()
-execute kernel@(Kernel _ !mdl !_ !_ !_) !bindings !aenv !n !args = do
-  bindLifted mdl aenv bindings
+execute kernel@(Kernel _ !_ !_ !_ !_) !bindings !aenv !n !args = do
+  bindAccEnv kernel aenv bindings
   launch kernel (configure kernel n) args
 
 

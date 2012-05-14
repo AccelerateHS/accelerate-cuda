@@ -184,7 +184,7 @@ codegenAcc dev acc (AccBindings vars) = CUTranslSkel entry (extras : fvars code)
           idx'    = show $ idxToInt idx
           sh      = cshape ("sh" ++ idx') (accDim avar)
           ty      = accTypeTex avar
-          arr n   = "arr" ++ idx' ++ "_a" ++ show (n::Int)
+          arr n   = "avar" ++ idx' ++ "_a" ++ show (n::Int)
       in
       sh : zipWith (\t n -> cglobal t (arr n)) (reverse ty) [0..]
 
@@ -361,8 +361,8 @@ codegenOpenExp exp env =
     IndexScalar arr ix
       | OpenAcc (Avar a) <- arr ->
         let avar        = show (idxToInt a)
-            sh          = cvar ("sh"  ++ avar)
-            array x     = cvar ("arr" ++ avar ++ "_a" ++ show x)
+            sh          = cvar ("sh"   ++ avar)
+            array x     = cvar ("avar" ++ avar ++ "_a" ++ show x)
             elt         = accTypeTex arr
             n           = length elt
         in do

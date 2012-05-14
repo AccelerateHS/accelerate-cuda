@@ -116,8 +116,8 @@ getters
        , String -> [InitGroup] )        -- const declarations and initialisation from index
 getters base arrElt expElt =
   let n                 = length arrElt
-      arr x             = "d_in" ++ shows base "_a" ++ show x
       arrParams         = zipWith (\t x -> [cparam| const $ty:(cptr t) $id:(arr x) |]) arrElt [n-1, n-2 .. 0]
+      arr x             = "arrIn" ++ shows base "_a" ++ show x
       expVars           = map (\(_,_,v) -> v) expElt
       expDecls          = map (\(_,t,v) -> [cdecl| $ty:t $id:(show v) ; |]) expElt
   in
@@ -139,7 +139,7 @@ setters
        , String -> [Exp] -> [Stm])      -- store a value to the given index
 setters arrElt =
   let n                 = length arrElt
-      arrVars           = map (\x -> "d_out_a" ++ show x) [n-1, n-2 .. 0]
+      arrVars           = map (\x -> "arrOut_a" ++ show x) [n-1, n-2 .. 0]
       arrParams         = zipWith (\t x -> [cparam| $ty:(cptr t) $id:x |]) arrElt arrVars
       set ix a x        = [cstm| $id:a [$id:ix] = $exp:x; |]
   in

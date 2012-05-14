@@ -184,8 +184,8 @@ stencilAccess base dim stencil subs boundary shx =
   , \ix -> concatMap (get ix) subs )
   where
     n           = length stencil
-    sh          = "shIn"    ++ show  base
-    arr x       = "stencil" ++ shows base "_a" ++ show (x `mod` n)
+    sh          = "shIn" ++ show  base
+    arr x       = "arrIn" ++ shows base "_a" ++ show (x `mod` n)
     textures    = zipWith cglobal stencil (map arr [n-1, n-2 .. 0])
     --
     offsets     :: IArray.Array Int [Int]
