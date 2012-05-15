@@ -122,7 +122,7 @@ codegenFloatingType (TypeCDouble _) = [cty|double|]
 codegenNonNumType :: NonNumType a -> C.Type
 codegenNonNumType (TypeBool   _) = typename "uint8_t"
 #if   SIZEOF_HSCHAR == 4
-codegenNonNumType (TypeChar   _) = typename "int32_t"
+codegenNonNumType (TypeChar   _) = typename "uint32_t"
 #endif
 codegenNonNumType (TypeCChar  _) = [cty|char|]
 codegenNonNumType (TypeCSChar _) = [cty|signed char|]
