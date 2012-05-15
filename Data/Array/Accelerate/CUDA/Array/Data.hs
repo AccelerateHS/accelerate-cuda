@@ -1,4 +1,7 @@
-{-# LANGUAGE CPP, GADTs, TypeFamilies, ScopedTypeVariables #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Data
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -26,15 +29,15 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 ) where
 
 -- libraries
-import Prelude                                          hiding (fst, snd)
+import Prelude                                          hiding ( fst, snd )
 import Data.Label.PureM
 import Control.Applicative
 import Control.Monad.Trans
 
 -- friends
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                (Array(..), Shape, Elt, fromElt, toElt)
-import Data.Array.Accelerate.Array.Representation       (size, index)
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt )
+import Data.Array.Accelerate.Array.Representation       ( size, index )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
@@ -77,8 +80,8 @@ snd = sndArrayData
 ; dispatcher ArrayEltRword64 = worker                                       \
 ; dispatcher ArrayEltRfloat  = worker                                       \
 ; dispatcher ArrayEltRdouble = worker                                       \
-; dispatcher ArrayEltRbool   = error "mkPrimDispatcher: ArrayEltRbool"      \
-; dispatcher ArrayEltRchar   = error "mkPrimDispatcher: ArrayEltRchar"      \
+; dispatcher ArrayEltRbool   = worker                                       \
+; dispatcher ArrayEltRchar   = worker                                       \
 ; dispatcher _               = error "mkPrimDispatcher: not primitive"
 
 
@@ -140,10 +143,24 @@ indexArray (Array sh adata) ix = doIndex =<< gets memoryTable
         indexR ArrayEltRunit             _  = return ()
         indexR (ArrayEltRpair aeR1 aeR2) ad = (,) <$> indexR aeR1 (fst ad)
                                                   <*> indexR aeR2 (snd ad)
-        indexR aer                       ad = indexPrim aer mt ad i
         --
-        indexPrim :: ArrayEltR e -> MemoryTable -> ArrayData e -> Int -> IO e
-        mkPrimDispatch(indexPrim,Prim.indexArray)
+        indexR ArrayEltRbool             ad = toBool <$> Prim.indexArray mt ad i
+          where toBool 0 = False
+                toBool _ = True
+        --
+        indexR ArrayEltRint              ad = Prim.indexArray mt ad i
+        indexR ArrayEltRint8             ad = Prim.indexArray mt ad i
+        indexR ArrayEltRint16            ad = Prim.indexArray mt ad i
+        indexR ArrayEltRint32            ad = Prim.indexArray mt ad i
+        indexR ArrayEltRint64            ad = Prim.indexArray mt ad i
+        indexR ArrayEltRword             ad = Prim.indexArray mt ad i
+        indexR ArrayEltRword8            ad = Prim.indexArray mt ad i
+        indexR ArrayEltRword16           ad = Prim.indexArray mt ad i
+        indexR ArrayEltRword32           ad = Prim.indexArray mt ad i
+        indexR ArrayEltRword64           ad = Prim.indexArray mt ad i
+        indexR ArrayEltRfloat            ad = Prim.indexArray mt ad i
+        indexR ArrayEltRdouble           ad = Prim.indexArray mt ad i
+        indexR ArrayEltRchar             ad = Prim.indexArray mt ad i
 
 
 -- |Copy data between two device arrays. The operation is asynchronous with

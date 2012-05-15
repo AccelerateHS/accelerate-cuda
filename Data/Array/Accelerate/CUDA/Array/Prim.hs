@@ -1,4 +1,8 @@
-{-# LANGUAGE BangPatterns, CPP, GADTs, TypeFamilies, ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -88,14 +92,10 @@ primArrayElt(Double)
 -- CFloat
 -- CDouble
 
--- FIXME:
--- No concrete implementation in Data.Array.Accelerate.Array.Data
---
-type instance HostPtrs   Bool = ()
-type instance DevicePtrs Bool = ()
+type instance HostPtrs   Bool = CUDA.HostPtr   Word8
+type instance DevicePtrs Bool = CUDA.DevicePtr Word8
 
-type instance HostPtrs   Char = ()
-type instance DevicePtrs Char = ()
+primArrayElt(Char)
 
 -- FIXME:
 -- CChar
@@ -126,6 +126,7 @@ instance TextureData Word32 where format _ = (CUDA.Word32, 1)
 instance TextureData Word64 where format _ = (CUDA.Word32, 2)
 instance TextureData Float  where format _ = (CUDA.Float,  1)
 instance TextureData Double where format _ = (CUDA.Int32,  2)
+instance TextureData Bool   where format _ = (CUDA.Word8,  1)
 #if   SIZEOF_HSINT == 4
 instance TextureData Int    where format _ = (CUDA.Int32, 1)
 #elif SIZEOF_HSINT == 8
@@ -135,6 +136,9 @@ instance TextureData Int    where format _ = (CUDA.Int32, 2)
 instance TextureData Word   where format _ = (CUDA.Word32, 1)
 #elif SIZEOF_HSINT == 8
 instance TextureData Word   where format _ = (CUDA.Word32, 2)
+#endif
+#if SIZEOF_HSCHAR == 4
+instance TextureData Char   where format _ = (CUDA.Word32, 1)
 #endif
 
 

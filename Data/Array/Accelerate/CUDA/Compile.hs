@@ -45,7 +45,6 @@ import Data.Label.PureM
 import Data.List
 import Data.Maybe
 import Data.Monoid
-import Foreign.Storable
 import System.Directory
 import System.Exit                                      ( ExitCode(..) )
 import System.FilePath

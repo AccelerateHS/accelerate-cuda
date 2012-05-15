@@ -35,7 +35,6 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 -- libraries
 import Language.C.Quote.CUDA
 import qualified Language.C                             as C
-import qualified Foreign.Storable                       as F
 
 
 #include "accelerate.h"
@@ -103,12 +102,12 @@ codegenIntegralType (TypeCLong   _) = [cty|long int|]
 codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
 codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
 codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
-#if SIZEOF_HSINT == 4
+#if   SIZEOF_HSINT == 4
 codegenIntegralType (TypeInt     _) = typename "int32_t"
 #elif SIZEOF_HSINT == 8
 codegenIntegralType (TypeInt     _) = typename "int64_t"
 #endif
-#if SIZEOF_HSINT == 4
+#if   SIZEOF_HSINT == 4
 codegenIntegralType (TypeWord    _) = typename "uint32_t"
 #elif SIZEOF_HSINT == 8
 codegenIntegralType (TypeWord    _) = typename "uint64_t"
@@ -121,8 +120,10 @@ codegenFloatingType (TypeDouble  _) = [cty|double|]
 codegenFloatingType (TypeCDouble _) = [cty|double|]
 
 codegenNonNumType :: NonNumType a -> C.Type
-codegenNonNumType (TypeBool   _) = error "codegenNonNum :: Bool"
-codegenNonNumType (TypeChar   _) = error "codegenNonNum :: Char"
+codegenNonNumType (TypeBool   _) = typename "uint8_t"
+#if   SIZEOF_HSCHAR == 4
+codegenNonNumType (TypeChar   _) = typename "int32_t"
+#endif
 codegenNonNumType (TypeCChar  _) = [cty|char|]
 codegenNonNumType (TypeCSChar _) = [cty|signed char|]
 codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
@@ -186,13 +187,11 @@ codegenFloatingTex (TypeDouble  _) = typename "TexDouble"
 codegenFloatingTex (TypeCDouble _) = typename "TexCDouble"
 
 
--- TLM 2010-06-29:
---   Bool and Char can be implemented once the array types in
---   Data.Array.Accelerate.[CUDA.]Array.Data are made concrete.
---
 codegenNonNumTex :: NonNumType a -> C.Type
-codegenNonNumTex (TypeBool   _) = error "codegenNonNumTex :: Bool"
-codegenNonNumTex (TypeChar   _) = error "codegenNonNumTex :: Char"
+codegenNonNumTex (TypeBool   _) = typename "TexWord8"
+#if   SIZEOF_HSCHAR == 4
+codegenNonNumTex (TypeChar   _) = typename "TexWord32"
+#endif
 codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
 codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
 codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"
