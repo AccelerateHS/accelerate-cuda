@@ -13,8 +13,33 @@
 -- Accelerate. Expressions are on-line translated into CUDA code, compiled, and
 -- executed in parallel on the GPU.
 --
--- The accelerate-cuda library is hosted at <https://github.com/tmcdonell/accelerate-cuda>.
--- Comments, bug reports, and patches are always welcome.
+-- The accelerate-cuda library is hosted at: <https://github.com/AccelerateHS/accelerate-cuda>.
+-- Comments, bug reports, and patches, are always welcome.
+--
+--
+-- /NOTES:/
+--
+-- CUDA devices are categorised into different \'compute capabilities\',
+-- indicating what operations are supported by the hardware. For example, double
+-- precision arithmetic is only supported on devices of compute capability 1.3
+-- or higher.
+--
+-- Devices generally perform best when dealing with (tuples of) 32-bit types, so
+-- be cautious when introducing 8-, 16-, or 64-bit elements. Keep in mind the
+-- size of 'Int' and 'Data.Word.Word' changes depending on the architecture GHC
+-- runs on.
+--
+-- Additional notes:
+--
+--  * 'Double' precision requires compute-1.3.
+--
+--  * 'Bool' is represented internally using 'Data.Word.Word8', 'Char' by
+--    'Data.Word.Word32'.
+--
+--  * If the permutation function to 'Data.Array.Accelerate.permute' resolves to
+--    non-unique indices, the combination function requires compute-1.1 to
+--    combine 32-bit types, or compute-1.2 for 64-bit types. Tuple components
+--    are resolved separately.
 --
 
 module Data.Array.Accelerate.CUDA (
