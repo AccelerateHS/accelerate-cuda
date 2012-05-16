@@ -90,8 +90,7 @@ import Data.Array.Accelerate.CUDA.Execute
 --    before it is passed to the next computation.
 --
 --  * Keep all computations in the 'Acc' meta-language form and only 'run' the
---    computation once at the end, returning all intermediate results. This has
---    the added benefit of reducing memory traffic and startup times.
+--    computation at the end, returning all the required arrays at once.
 --
 -- If not, this will produce a \"blocked indefinitely on MVar\" exception, as the
 -- first computation attempts to evaluate its result only after the second has
