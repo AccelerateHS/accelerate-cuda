@@ -408,6 +408,8 @@ addVar :: C.Type -> C.Exp -> CGM Bool
 addVar ty exp = case show exp of
   ('x':v:'_':'a':n) | [(v',[])] <- reads [v], [(n',[])] <- reads n
         -> use v' n' ty exp >> return True
+  ('v':n) | [(_ :: Int,[])] <- reads n
+        ->                     return True
   _     ->                     return False
 
 
