@@ -54,7 +54,20 @@ Extra-source-files:     configure
 --   Default:              False
 
 Flag debug
-  Description:          Enable tracing message flags
+  Description:
+    Enable tracing message flags. These are read from the command-line
+    arguments, which is convenient but may cause problems interacting with the
+    user program, so is not enabled by default. The available options:
+    .
+    * -ddump-cc: print the generated code, nvcc compiler warnings, and thread &
+      resource statistics
+    .
+    * -ddump-exec: print each kernel name as it is invoked
+    .
+    * -ddump-gc: print memory management information
+    .
+    * -dverbose: other, uncategorised messages
+    .
   Default:              False
 
 Flag bounds-checks
