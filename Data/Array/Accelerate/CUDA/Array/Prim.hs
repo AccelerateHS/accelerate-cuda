@@ -151,20 +151,21 @@ instance TextureData Char   where format _ = (CUDA.Word32, 1)
 --
 mallocArray
     :: forall e a. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
-mallocArray !mt !ad !n0 = do
+mallocArray !ctx !mt !ad !n0 = do
   let !n = 1 `max` n0
-  exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+  exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
     message $ "mallocArray: " ++ showBytes (n * sizeOf (undefined::a))
     ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
       case e of
         ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
         _                    -> throwIO e
-    insert mt ad (ptr :: CUDA.DevicePtr a)
+    insert ctx mt ad (ptr :: CUDA.DevicePtr a)
 
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
@@ -173,15 +174,16 @@ mallocArray !mt !ad !n0 = do
 --
 useArray
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
-useArray !mt !ad !n0 =
+useArray !ctx !mt !ad !n0 =
   let src = ptrsOfArrayData ad
       !n  = 1 `max` n0
   in do
-    exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+    exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
       message $ "useArray/malloc: " ++ showBytes (n * sizeOf (undefined::a))
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
@@ -189,21 +191,22 @@ useArray !mt !ad !n0 =
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
           _                    -> throwIO e
       CUDA.pokeArray n src dst
-      insert mt ad dst
+      insert ctx mt ad dst
 
 
 useArrayAsync
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> Maybe CUDA.Stream
     -> IO ()
-useArrayAsync !mt !ad !n0 !ms =
+useArrayAsync !ctx !mt !ad !n0 !ms =
   let src = CUDA.HostPtr (ptrsOfArrayData ad)
       !n  = 1 `max` n0
   in do
-    exists <- isJust <$> (lookup mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+    exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
       message $ "useArrayAsync/malloc: " ++ showBytes (n * sizeOf (undefined::a))
       dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
@@ -211,20 +214,21 @@ useArrayAsync !mt !ad !n0 !ms =
           ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
           _                    -> throwIO e
       CUDA.pokeArrayAsync n src dst ms
-      insert mt ad dst
+      insert ctx mt ad dst
 
 
 -- Read a single element from an array at the given row-major index
 --
 indexArray
     :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable e, Typeable b, Storable b)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO b
-indexArray !mt !ad !i =
+indexArray !ctx !mt !ad !i =
   alloca                        $ \dst ->
-  devicePtrsOfArrayData mt ad >>= \src -> do
+  devicePtrsOfArrayData ctx mt ad >>= \src -> do
     CUDA.peekArray 1 (src `CUDA.advanceDevPtr` i) dst
     peek dst
 
@@ -234,14 +238,15 @@ indexArray !mt !ad !i =
 --
 copyArray
     :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e              -- source array
     -> ArrayData e              -- destination array
     -> Int                      -- number of array elements
     -> IO ()
-copyArray !mt !from !to !n = do
-  src <- devicePtrsOfArrayData mt from
-  dst <- devicePtrsOfArrayData mt to
+copyArray !ctx !mt !from !to !n = do
+  src <- devicePtrsOfArrayData ctx mt from
+  dst <- devicePtrsOfArrayData ctx mt to
   CUDA.copyArrayAsync n src dst
 
 
@@ -249,23 +254,25 @@ copyArray !mt !from !to !n = do
 --
 peekArray
     :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
-peekArray !mt !ad !n =
-  devicePtrsOfArrayData mt ad >>= \src ->
+peekArray !ctx !mt !ad !n =
+  devicePtrsOfArrayData ctx mt ad >>= \src ->
     CUDA.peekArray n src (ptrsOfArrayData ad)
 
 peekArrayAsync
     :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> Maybe CUDA.Stream
     -> IO ()
-peekArrayAsync !mt !ad !n !st =
-  devicePtrsOfArrayData mt ad >>= \src ->
+peekArrayAsync !ctx !mt !ad !n !st =
+  devicePtrsOfArrayData ctx mt ad >>= \src ->
     CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) st
 
 
@@ -273,23 +280,25 @@ peekArrayAsync !mt !ad !n !st =
 --
 pokeArray
     :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
-pokeArray !mt !ad !n =
-  devicePtrsOfArrayData mt ad >>= \dst ->
+pokeArray !ctx !mt !ad !n =
+  devicePtrsOfArrayData ctx mt ad >>= \dst ->
     CUDA.pokeArray n (ptrsOfArrayData ad) dst
 
 pokeArrayAsync
     :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> Int
     -> Maybe CUDA.Stream
     -> IO ()
-pokeArrayAsync !mt !ad !n !st =
-  devicePtrsOfArrayData mt ad >>= \dst ->
+pokeArrayAsync !ctx !mt !ad !n !st =
+  devicePtrsOfArrayData ctx mt ad >>= \dst ->
     CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
 
@@ -308,24 +317,26 @@ marshalDevicePtrs !_ !ptr = CUDA.VArg ptr
 --
 marshalArrayData
     :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable b, Typeable e)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> IO CUDA.FunParam
-marshalArrayData !mt !ad = marshalDevicePtrs ad <$> devicePtrsOfArrayData mt ad
+marshalArrayData !ctx !mt !ad = marshalDevicePtrs ad <$> devicePtrsOfArrayData ctx mt ad
 
 
 -- Bind device memory to the given texture reference, setting appropriate type
 --
 marshalTextureData
     :: forall a e. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a, TextureData a)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e              -- host array
     -> Int                      -- number of elements
     -> CUDA.Texture             -- texture reference to bind array to
     -> IO ()
-marshalTextureData !mt !ad !n !tex =
+marshalTextureData !ctx !mt !ad !n !tex =
   let (fmt, c) = format (undefined :: a)
-  in  devicePtrsOfArrayData mt ad >>= \ptr -> do
+  in  devicePtrsOfArrayData ctx mt ad >>= \ptr -> do
         CUDA.setFormat tex fmt c
         CUDA.bind tex ptr (fromIntegral $ n * sizeOf (undefined :: a))
 
@@ -334,11 +345,12 @@ marshalTextureData !mt !ad !n !tex =
 --
 devicePtrsOfArrayData
     :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable e, Typeable b)
-    => MemoryTable
+    => Context
+    -> MemoryTable
     -> ArrayData e
     -> IO (DevicePtrs e)
-devicePtrsOfArrayData !mt !ad = do
-  mv <- lookup mt ad
+devicePtrsOfArrayData !ctx !mt !ad = do
+  mv <- lookup ctx mt ad
   case mv of
     Just v  -> return v
     Nothing -> do

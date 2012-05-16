@@ -1,4 +1,7 @@
-{-# LANGUAGE BangPatterns, CPP, GADTs, PatternGuards #-}
+{-# LANGUAGE BangPatterns  #-}
+{-# LANGUAGE CPP           #-}
+{-# LANGUAGE GADTs         #-}
+{-# LANGUAGE PatternGuards #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Table
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -13,7 +16,7 @@
 module Data.Array.Accelerate.CUDA.Array.Table (
 
   -- Tables for host/device memory associations
-  MemoryTable, new, lookup, insert, reclaim
+  MemoryTable, Context(..), new, lookup, insert, reclaim
 
 ) where
 
@@ -24,7 +27,7 @@ import Data.Hashable                                    ( Hashable(..) )
 import Data.Typeable                                    ( Typeable, gcast )
 import Control.Monad                                    ( unless )
 import Control.Exception                                ( bracket_ )
-import Control.Applicative                              ( (<$>), (<*>) )
+import Control.Applicative                              ( (<$>) )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( Weak, mkWeak, deRefWeak, finalize )
 import System.Mem.StableName                            ( StableName, makeStableName, hashStableName )
@@ -53,15 +56,22 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc 
 -- return Nothing. References from 'val' to the key are ignored (see the
 -- semantics of weak pointers in the documentation).
 --
-type HashTable key val = HT.BasicHashTable key val
-type MT                = IORef ( HashTable HostArray DeviceArray )
-data MemoryTable       = MemoryTable {-# UNPACK #-} !MT
-                                     {-# UNPACK #-} !(Weak MT)
+type HashTable key val  = HT.BasicHashTable key val
+type MT                 = IORef ( HashTable HostArray DeviceArray )
+data MemoryTable        = MemoryTable {-# UNPACK #-} !MT
+                                      {-# UNPACK #-} !(Weak MT)
 
+-- The currently active context. Finaliser threads need to check if the context
+-- is still active before attempting to release their associated memory.
+--
+data Context = Context {-# UNPACK #-} !CUDA.Context
+                       {-# UNPACK #-} !(Weak CUDA.Context)
 
+-- Arrays on the host and device
+--
 data HostArray where
   HostArray :: Typeable e
-            => {-# UNPACK #-} !CUDA.Context
+            => {-# UNPACK #-} !Int      -- unique ID relating to the parent context
             -> {-# UNPACK #-} !(StableName (ArrayData e))
             -> HostArray
 
@@ -75,8 +85,7 @@ instance Eq HostArray where
     = maybe False (== a2) (gcast a1)
 
 instance Hashable HostArray where
-  hash (HostArray (CUDA.Context p) sn) =
-    fromIntegral (ptrToIntPtr p) `hashWithSalt` sn
+  hash (HostArray cid sn) = hashWithSalt cid sn
 
 instance Show HostArray where
   show (HostArray _ sn) = "Array #" ++ show (hashStableName sn)
@@ -98,28 +107,28 @@ new = do
 
 -- Look for the device memory corresponding to a given host-side array.
 --
-lookup :: (Typeable a, Typeable b) => MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
-lookup (MemoryTable ref _) !arr = do
-  sa <- makeStableArray arr
+lookup :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
+lookup ctx (MemoryTable ref _) !arr = do
+  sa <- makeStableArray ctx arr
   mw <- withIORef ref (`HT.lookup` sa)
   case mw of
     Nothing              -> trace ("lookup/not found: " ++ show sa) $ return Nothing
     Just (DeviceArray w) -> do
       mv <- deRefWeak w
       case mv of
-        Just v | Just p <- gcast v   -> trace ("lookup/found: " ++ show sa) $ return (Just p)
-               | otherwise           -> INTERNAL_ERROR(error) "lookup" $ "type mismatch"
-        Nothing                      ->
-          makeStableArray arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
+        Just v | Just p <- gcast v -> trace ("lookup/found: " ++ show sa) $ return (Just p)
+               | otherwise         -> INTERNAL_ERROR(error) "lookup" $ "type mismatch"
+        Nothing                    ->
+          makeStableArray ctx arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
 
 
 -- Record an association between a host-side array and a new device memory area.
 -- The device memory will be freed when the host array is garbage collected.
 --
-insert :: (Typeable a, Typeable b) => MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
-insert (MemoryTable ref weak_ref) !arr !ptr = do
-  key  <- makeStableArray arr
-  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ref key ptr)
+insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
+insert ctx@(Context _ weak_ctx) (MemoryTable ref weak_ref) !arr !ptr = do
+  key  <- makeStableArray ctx arr
+  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ctx weak_ref key ptr)
   tbl  <- readIORef ref
   message $ "insert: " ++ show key
   HT.insert tbl key dev
@@ -152,17 +161,17 @@ reclaim (MemoryTable _ weak_ref) = do
 -- the hash tables --- but we must do this first before failing to use a dead
 -- context.
 --
-finalizer :: Weak MT -> HostArray -> DevicePtr b -> IO ()
-finalizer !weak_ref !key@(HostArray ctx _) !ptr = do
+finalizer :: Weak CUDA.Context -> Weak MT -> HostArray -> DevicePtr b -> IO ()
+finalizer !weak_ctx !weak_ref !key !ptr = do
   mr <- deRefWeak weak_ref
   case mr of
-    Nothing  -> trace ("finalise/dead table: " ++ show key) $ return ()
-    Just ref -> trace ("finalise: "            ++ show key) $ withIORef ref (`HT.delete` key)
+    Nothing  -> message ("finalise/dead table: " ++ show key)
+    Just ref -> trace   ("finalise: "            ++ show key) $ withIORef ref (`HT.delete` key)
   --
-  bracket_
-    (CUDA.push ctx)
-    (CUDA.pop)
-    (CUDA.free ptr)
+  mc <- deRefWeak weak_ctx
+  case mc of
+    Nothing  -> message ("finalise/dead context: " ++ show key)
+    Just ctx -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
 
 
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()
@@ -175,8 +184,10 @@ table_finalizer !tbl
 -- -------------
 
 {-# INLINE makeStableArray #-}
-makeStableArray :: Typeable a => ArrayData a -> IO HostArray
-makeStableArray !arr = HostArray <$> CUDA.get <*> makeStableName arr
+makeStableArray :: Typeable a => Context -> ArrayData a -> IO HostArray
+makeStableArray (Context (CUDA.Context !p) !_) !arr =
+  let cid = fromIntegral (ptrToIntPtr p)
+  in  HostArray cid <$> makeStableName arr
 
 {-# INLINE withIORef #-}
 withIORef :: IORef a -> (a -> IO b) -> IO b
