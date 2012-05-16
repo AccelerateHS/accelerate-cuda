@@ -128,9 +128,9 @@ instance TextureData Float  where format _ = (CUDA.Float,  1)
 instance TextureData Double where format _ = (CUDA.Int32,  2)
 instance TextureData Bool   where format _ = (CUDA.Word8,  1)
 #if   SIZEOF_HSINT == 4
-instance TextureData Int    where format _ = (CUDA.Int32, 1)
+instance TextureData Int    where format _ = (CUDA.Int32,  1)
 #elif SIZEOF_HSINT == 8
-instance TextureData Int    where format _ = (CUDA.Int32, 2)
+instance TextureData Int    where format _ = (CUDA.Int32,  2)
 #endif
 #if   SIZEOF_HSINT == 4
 instance TextureData Word   where format _ = (CUDA.Word32, 1)
@@ -220,15 +220,16 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
 -- Read a single element from an array at the given row-major index
 --
 indexArray
-    :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable e, Typeable b, Storable b)
+    :: forall e a. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
     => Context
     -> MemoryTable
     -> ArrayData e
     -> Int
-    -> IO b
+    -> IO a
 indexArray !ctx !mt !ad !i =
-  alloca                        $ \dst ->
+  alloca                            $ \dst ->
   devicePtrsOfArrayData ctx mt ad >>= \src -> do
+    message $ "indexArray: " ++ showBytes (sizeOf (undefined::a))
     CUDA.peekArray 1 (src `CUDA.advanceDevPtr` i) dst
     peek dst
 
@@ -237,7 +238,7 @@ indexArray !ctx !mt !ad !i =
 -- respect to the host, but will never overlap kernel execution.
 --
 copyArray
-    :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
     => Context
     -> MemoryTable
     -> ArrayData e              -- source array
@@ -245,6 +246,7 @@ copyArray
     -> Int                      -- number of array elements
     -> IO ()
 copyArray !ctx !mt !from !to !n = do
+  message $ "copyArrayAsync: " ++ showBytes (n * sizeOf (undefined :: b))
   src <- devicePtrsOfArrayData ctx mt from
   dst <- devicePtrsOfArrayData ctx mt to
   CUDA.copyArrayAsync n src dst
@@ -253,18 +255,19 @@ copyArray !ctx !mt !from !to !n = do
 -- Copy data from the device into the associated Accelerate host-side array
 --
 peekArray
-    :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
     => Context
     -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
 peekArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \src ->
+  devicePtrsOfArrayData ctx mt ad >>= \src -> do
+    message $ "peekArray: " ++ showBytes (n * sizeOf (undefined :: a))
     CUDA.peekArray n src (ptrsOfArrayData ad)
 
 peekArrayAsync
-    :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
     => Context
     -> MemoryTable
     -> ArrayData e
@@ -272,25 +275,27 @@ peekArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 peekArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \src ->
+  devicePtrsOfArrayData ctx mt ad >>= \src -> do
+    message $ "peekArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
     CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) st
 
 
 -- Copy data from an Accelerate array into the associated device array
 --
 pokeArray
-    :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
     => Context
     -> MemoryTable
     -> ArrayData e
     -> Int
     -> IO ()
 pokeArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+  devicePtrsOfArrayData ctx mt ad >>= \dst -> do
+    message $ "pokeArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
     CUDA.pokeArray n (ptrsOfArrayData ad) dst
 
 pokeArrayAsync
-    :: (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
     => Context
     -> MemoryTable
     -> ArrayData e
@@ -298,7 +303,8 @@ pokeArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 pokeArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+  devicePtrsOfArrayData ctx mt ad >>= \dst -> do
+    message $ "pokeArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
     CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
 
