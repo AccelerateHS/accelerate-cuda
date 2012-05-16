@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections   #-}
 {-# LANGUAGE TypeOperators   #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}   -- CUDA.Context
+{-# OPTIONS_GHC -fno-warn-orphans #-}   -- Eq CUDA.Context
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -24,7 +24,7 @@ module Data.Array.Accelerate.CUDA.State (
   CIO, KernelTable, KernelKey, KernelEntry(KernelEntry), KernelObject(KernelObject),
 
   -- Evaluating computations
-  evalCUDA, defaultContext, deviceProps,
+  evalCUDA, defaultContext, deviceProps, activeContext,
   memoryTable, kernelTable, kernelName, kernelStatus
 
 ) where
@@ -43,7 +43,7 @@ import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
 import System.Mem                                       ( performGC )
-import System.Mem.Weak                                  ( addFinalizer )
+import System.Mem.Weak                                  ( mkWeakPtr, addFinalizer )
 import System.IO.Unsafe
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
@@ -82,10 +82,15 @@ data KernelEntry = KernelEntry
     _kernelStatus       :: !(Either ProcessHandle KernelObject)
   }
 
+-- The raw compiled data, and the list of contexts that the object has already
+-- been linked into. If we locate this entry in the KernelTable, it may have
+-- been inserted by an alternate but compatible device context, so just re-link
+-- into the current context.
+--
 data KernelObject = KernelObject
   {
-    _binaryData         :: !ByteString,
-    _activeContexts     :: {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
+    _objectData         :: !ByteString,
+    _objectLink         :: {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
   }
 
 -- The state token for CUDA accelerated array operations
@@ -94,6 +99,7 @@ type CIO        = StateT CUDAState IO
 data CUDAState  = CUDAState
   {
     _deviceProps        :: !CUDA.DeviceProperties,
+    _activeContext      :: {-# UNPACK #-} !Context,
     _kernelTable        :: {-# UNPACK #-} !KernelTable,
     _memoryTable        :: {-# UNPACK #-} !MemoryTable
   }
@@ -117,9 +123,14 @@ evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
       CUDA.push ctx
       dev       <- CUDA.device
       prp       <- CUDA.props dev
-      return $! CUDAState prp knl mem
+      weak_ctx  <- mkWeakPtr ctx Nothing
+      return $! CUDAState prp (Context ctx weak_ctx) knl mem
 
     -- one-shot top-level mutable state
+    --
+    -- TLM: we really ought to ensure these stay alive for the program lifetime,
+    --      not just over the single execution
+    --
     {-# NOINLINE mem #-}
     {-# NOINLINE knl #-}
     mem = unsafePerformIO MT.new
