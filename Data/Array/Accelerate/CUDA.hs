@@ -82,6 +82,23 @@ import Data.Array.Accelerate.CUDA.Execute
 -- This will select the fastest device available on which to execute
 -- computations, based on compute capability and estimated maximum GFLOPS.
 --
+-- /NOTE:/ The GPU is a single shared resource that we must take exclusive
+-- access to when running a computation. This means that if you have several GPU
+-- computations that depend on one another, you will need to either:
+--
+--  * Make sure that each of those is evaluated (using `seq` or otherwise)
+--    before it is passed to the next computation.
+--
+--  * Keep all computations in the 'Acc' meta-language form and only 'run' the
+--    computation once at the end, returning all intermediate results. This has
+--    the added benefit of reducing memory traffic and startup times.
+--
+-- If not, this will produce a \"blocked indefinitely on MVar\" exception, as the
+-- first computation attempts to evaluate its result only after the second has
+-- begun and already taken control of the device.
+--
+-- These same considerations apply to all the @run*@ forms.
+--
 run :: Arrays a => Acc a -> a
 run a
   = unsafePerformIO
@@ -136,7 +153,13 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
 -- This function can be used to improve performance in cases where the array
 -- program is constant between invocations, because it allows us to bypass all
 -- front-end conversion stages and move directly to the execution phase. If you
--- have a computation applied repeatedly to different input data, use this.
+-- have a computation applied repeatedly to different input data, use this. If
+-- the function is only evaluated once, this is equivalent to 'run'.
+--
+-- >  let step :: Vector a -> Vector b
+-- >      step = run1 f
+-- >  in
+-- >  simulate step ...
 --
 -- See the Crystal demo, part of the 'accelerate-examples' package, for an
 -- example.
