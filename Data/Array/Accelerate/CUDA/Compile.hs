@@ -404,7 +404,7 @@ compileFlags cufile = do
     , "-arch=sm_" ++ show (round (arch * 10) :: Int)
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
-    , if D.mode D.verbose then ""   else "--disable-warnings"
+    , if D.mode D.dump_cc then ""   else "--disable-warnings"
     , if D.mode D.debug   then "-G" else "-O3"
     , machine
     , cufile ]
