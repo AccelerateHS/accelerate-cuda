@@ -31,7 +31,7 @@ module Data.Array.Accelerate.CUDA.State (
 
 -- friends
 import Data.Array.Accelerate.CUDA.FullList              ( FullList )
-import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, dump_gc, showFFloatSIBase )
+import Data.Array.Accelerate.CUDA.Debug                 ( message, when, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
@@ -39,6 +39,7 @@ import Data.Array.Accelerate.CUDA.Analysis.Device
 import Data.Label
 import Control.Exception
 import Data.ByteString                                  ( ByteString )
+import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Process                                   ( ProcessHandle )
@@ -124,17 +125,37 @@ evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
       dev       <- CUDA.device
       prp       <- CUDA.props dev
       weak_ctx  <- mkWeakPtr ctx Nothing
-      return $! CUDAState prp (Context ctx weak_ctx) knl mem
+      return $! CUDAState prp (Context ctx weak_ctx) theKernelTable theMemoryTable
 
-    -- one-shot top-level mutable state
+
+-- Top-level mutable state
+-- -----------------------
+--
+-- It is important to keep some information alive for the entire run of the
+-- program, not just a single execution. These tokens use unsafePerformIO to
+-- ensure they are executed only once, and reused for subsequent invocations.
+--
+
+{-# NOINLINE theMemoryTable #-}
+theMemoryTable :: MemoryTable
+theMemoryTable =  unsafePerformIO $ do
+  mt    <- MT.new
+  when dump_gc $ do
+    -- should never happen, so only make the finaliser thread if we are
+    -- specifically looking for GC problems.
     --
-    -- TLM: we really ought to ensure these stay alive for the program lifetime,
-    --      not just over the single execution
-    --
-    {-# NOINLINE mem #-}
-    {-# NOINLINE knl #-}
-    mem = unsafePerformIO MT.new
-    knl = unsafePerformIO HT.new
+    message dump_gc                   "gc: initialise memory table"
+    addFinalizer mt $ message dump_gc "gc: finalise memory table"
+  keepAlive mt
+
+{-# NOINLINE theKernelTable #-}
+theKernelTable :: KernelTable
+theKernelTable =  unsafePerformIO $ do
+  kt    <- HT.new
+  when dump_gc $ do
+    message dump_gc                   "gc: initialise kernel table"
+    addFinalizer kt $ message dump_gc "gc: finalise kernel table"
+  keepAlive kt
 
 
 -- Select and initialise a default CUDA device, and create a new execution
@@ -153,10 +174,23 @@ defaultContext = unsafePerformIO $ do
   message verbose $ deviceInfo dev prp
   --
   addFinalizer ctx $ do
-    message dump_gc $ "gc: finalise context"
+    message dump_gc $ "gc: finalise context"    -- should never happen!
     CUDA.destroy ctx
   --
-  return ref
+  keepAlive ref
+
+
+-- Make sure the GC knows that we want to keep this thing alive past the end of
+-- 'evalCUDA'.
+--
+-- We may want to introduce some way to actually shut this down if, for example,
+-- the object has not been accessed in a while, and so let it be collected.
+--
+keepAlive :: a -> IO a
+keepAlive x = forkIO (caffeine x) >> return x
+  where
+    caffeine hit = do threadDelay 5000000 -- microseconds = 5 seconds
+                      caffeine hit
 
 
 -- Debugging
