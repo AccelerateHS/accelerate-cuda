@@ -13,8 +13,8 @@
 #ifndef __ACCELERATE_CUDA_FUNCTION_H__
 #define __ACCELERATE_CUDA_FUNCTION_H__
 
-#include <stdint.h>
 #include <cuda_runtime.h>
+#include "accelerate_cuda_type.h"
 
 #ifdef __cplusplus
 
@@ -26,16 +26,16 @@
  * Left/Right bitwise rotation
  */
 template <typename T>
-static __inline__ __device__ T rotateL(const T x, const int32_t i)
+static __inline__ __device__ T rotateL(const T x, const Int32 i)
 {
-    const int32_t i8 = i & 8 * sizeof(x) - 1;
+    const Int32 i8 = i & 8 * sizeof(x) - 1;
     return i8 == 0 ? x : x << i8 | x >> 8 * sizeof(x) - i8;
 }
 
 template <typename T>
-static __inline__ __device__ T rotateR(const T x, const int32_t i)
+static __inline__ __device__ T rotateR(const T x, const Int32 i)
 {
-    const int32_t i8 = i & 8 * sizeof(x) - 1;
+    const Int32 i8 = i & 8 * sizeof(x) - 1;
     return i8 == 0 ? x : x >> i8 | x << 8 * sizeof(x) - i8;
 }
 
@@ -63,24 +63,24 @@ static __inline__ __device__ T mod(const T x, const T y)
  * Type coercion
  */
 template <typename T>
-static __inline__ __device__ uint32_t reinterpret32(const T x)
+static __inline__ __device__ Word32 reinterpret32(const T x)
 {
-    union { T a; uint32_t b; } u;
+    union { T a; Word32 b; } u;
 
     u.a = x;
     return u.b;
 }
 
 template <>
-static __inline__ __device__ uint32_t reinterpret32(const float x)
+static __inline__ __device__ Word32 reinterpret32(const float x)
 {
     return __float_as_int(x);
 }
 
 template <typename T>
-static __inline__ __device__ uint64_t reinterpret64(const T x)
+static __inline__ __device__ Word64 reinterpret64(const T x)
 {
-    union { T a; uint64_t b; } u;
+    union { T a; Word64 b; } u;
 
     u.a = x;
     return u.b;
@@ -88,7 +88,7 @@ static __inline__ __device__ uint64_t reinterpret64(const T x)
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 130
 template <>
-static __inline__ __device__ uint64_t reinterpret64(const double x)
+static __inline__ __device__ Word64 reinterpret64(const double x)
 {
     return __double_as_longlong(x);
 }
@@ -101,20 +101,20 @@ static __inline__ __device__ uint64_t reinterpret64(const double x)
 template <typename T>
 static __inline__ __device__ T atomicCAS32(T* address, T compare, T val)
 {
-    union { T a; uint32_t b; } u;
+    union { T a; Word32 b; } u;
 
-    u.b = atomicCAS((uint32_t*) address, reinterpret32<T>(compare), reinterpret32<T>(val));
+    u.b = atomicCAS((Word32*) address, reinterpret32<T>(compare), reinterpret32<T>(val));
     return u.a;
 }
 
 template <>
-static __inline__ __device__ int32_t atomicCAS32(int32_t* address, int32_t compare, int32_t val)
+static __inline__ __device__ Int32 atomicCAS32(Int32* address, Int32 compare, Int32 val)
 {
     return atomicCAS(address, compare, val);
 }
 
 template <>
-static __inline__ __device__ uint32_t atomicCAS32(uint32_t* address, uint32_t compare, uint32_t val)
+static __inline__ __device__ Word32 atomicCAS32(Word32* address, Word32 compare, Word32 val)
 {
     return atomicCAS(address, compare, val);
 }
@@ -123,14 +123,14 @@ static __inline__ __device__ uint32_t atomicCAS32(uint32_t* address, uint32_t co
 template <typename T>
 static __inline__ __device__ T atomicCAS64(T* address, T compare, T val)
 {
-    union { T a; unsigned long long int b; } u;
+    union { T a; Word64 b; } u;
 
-    u.b = atomicCAS((unsigned long long int*) address, reinterpret64<T>(compare), reinterpret64<T>(val));
+    u.b = atomicCAS((Word64*) address, reinterpret64<T>(compare), reinterpret64<T>(val));
     return u.a;
 }
 
 template <>
-static __inline__ __device__ unsigned long long int atomicCAS64(unsigned long long int* address, unsigned long long int compare, unsigned long long int val)
+static __inline__ __device__ Word64 atomicCAS64(Word64* address, Word64 compare, Word64 val)
 {
     return atomicCAS(address, compare, val);
 }

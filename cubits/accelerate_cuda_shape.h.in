@@ -13,8 +13,8 @@
 #ifndef __ACCELERATE_CUDA_SHAPE_H__
 #define __ACCELERATE_CUDA_SHAPE_H__
 
-#include <stdint.h>
 #include <cuda_runtime.h>
+#include "accelerate_cuda_type.h"
 
 /*
  * For the time being, the D.A.A.CUDA.Execute converts shape components from
@@ -25,7 +25,7 @@
  *
  * typedef @type_hs_int@                             Ix;
  */
-typedef int32_t                                   Ix;
+typedef Int32                                     Ix;
 typedef void*                                     DIM0;
 typedef Ix                                        DIM1;
 typedef struct { Ix a1,a0; }                      DIM2;

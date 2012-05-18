@@ -1,4 +1,4 @@
-AC_INIT([accelerate-cuda], [0.12.0.0], [accelerate-haskell@googlegroups.com])
+AC_INIT([accelerate-cuda], [0.13.0.0], [accelerate-haskell@googlegroups.com])
 AC_CONFIG_SRCDIR([Data/Array/Accelerate/CUDA.hs])
 AC_CONFIG_FILES([accelerate-cuda.buildinfo cubits/accelerate_cuda_shape.h])
 
@@ -14,8 +14,8 @@ AC_DEFUN([AC_SIZEOF_HS], [
     AC_MSG_RESULT($sizeof_hs_[$1])
 
     case $sizeof_hs_[$1] in
-        4) [$2]=[$3]int32_t ;;
-        8) [$2]=[$3]int64_t ;;
+        4) [$2]=[$3]32 ;;
+        8) [$2]=[$3]64 ;;
     esac
 
     def="-DSIZEOF_HS$(echo [$1] | tr [[:lower:]] [[:upper:]])=$sizeof_hs_[$1]"
@@ -23,8 +23,8 @@ AC_DEFUN([AC_SIZEOF_HS], [
     ghc_flags="$ghc_flags -optP$def"
 ])
 
-AC_SIZEOF_HS(Int,  type_hs_int)
-AC_SIZEOF_HS(Char, type_hs_char)
+AC_SIZEOF_HS(Int,  type_hs_int,  Int)
+AC_SIZEOF_HS(Char, type_hs_char, Word)
 
 AC_SUBST([type_hs_int])
 AC_SUBST([type_hs_char])
