@@ -86,14 +86,14 @@ codegenNumType (IntegralNumType ty) = codegenIntegralType ty
 codegenNumType (FloatingNumType ty) = codegenFloatingType ty
 
 codegenIntegralType :: IntegralType a -> C.Type
-codegenIntegralType (TypeInt8    _) = typename "int8_t"
-codegenIntegralType (TypeInt16   _) = typename "int16_t"
-codegenIntegralType (TypeInt32   _) = typename "int32_t"
-codegenIntegralType (TypeInt64   _) = typename "int64_t"
-codegenIntegralType (TypeWord8   _) = typename "uint8_t"
-codegenIntegralType (TypeWord16  _) = typename "uint16_t"
-codegenIntegralType (TypeWord32  _) = typename "uint32_t"
-codegenIntegralType (TypeWord64  _) = typename "uint64_t"
+codegenIntegralType (TypeInt8    _) = typename "Int8"
+codegenIntegralType (TypeInt16   _) = typename "Int16"
+codegenIntegralType (TypeInt32   _) = typename "Int32"
+codegenIntegralType (TypeInt64   _) = typename "Int64"
+codegenIntegralType (TypeWord8   _) = typename "Word8"
+codegenIntegralType (TypeWord16  _) = typename "Word16"
+codegenIntegralType (TypeWord32  _) = typename "Word32"
+codegenIntegralType (TypeWord64  _) = typename "Word64"
 codegenIntegralType (TypeCShort  _) = [cty|short|]
 codegenIntegralType (TypeCUShort _) = [cty|unsigned short|]
 codegenIntegralType (TypeCInt    _) = [cty|int|]
@@ -103,14 +103,14 @@ codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
 codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
 codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
 #if   SIZEOF_HSINT == 4
-codegenIntegralType (TypeInt     _) = typename "int32_t"
+codegenIntegralType (TypeInt     _) = typename "Int32"
 #elif SIZEOF_HSINT == 8
-codegenIntegralType (TypeInt     _) = typename "int64_t"
+codegenIntegralType (TypeInt     _) = typename "Int64"
 #endif
 #if   SIZEOF_HSINT == 4
-codegenIntegralType (TypeWord    _) = typename "uint32_t"
+codegenIntegralType (TypeWord    _) = typename "Word32"
 #elif SIZEOF_HSINT == 8
-codegenIntegralType (TypeWord    _) = typename "uint64_t"
+codegenIntegralType (TypeWord    _) = typename "Word64"
 #endif
 
 codegenFloatingType :: FloatingType a -> C.Type
@@ -120,9 +120,9 @@ codegenFloatingType (TypeDouble  _) = [cty|double|]
 codegenFloatingType (TypeCDouble _) = [cty|double|]
 
 codegenNonNumType :: NonNumType a -> C.Type
-codegenNonNumType (TypeBool   _) = typename "uint8_t"
+codegenNonNumType (TypeBool   _) = typename "Word8"
 #if   SIZEOF_HSCHAR == 4
-codegenNonNumType (TypeChar   _) = typename "uint32_t"
+codegenNonNumType (TypeChar   _) = typename "Word32"
 #endif
 codegenNonNumType (TypeCChar  _) = [cty|char|]
 codegenNonNumType (TypeCSChar _) = [cty|signed char|]

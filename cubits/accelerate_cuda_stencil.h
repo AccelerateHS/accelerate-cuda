@@ -53,7 +53,7 @@ template <>
 static __inline__ __device__ DIM1 clamp(const DIM1 sz, const DIM1 i)
 {
     // CUDA-4.0 does not include 64-bit min/max functions for Fermi (?)
-    return max(0, min((int) i, (int) sz-1));
+    return max(0, min(i, sz-1));
 }
 
 
@@ -88,6 +88,6 @@ static __inline__ __device__ DIM1 wrap(const DIM1 sz, const DIM1 i)
     else              return i;
 }
 
-#endif
+#endif  // __cplusplus
+#endif  // __ACCELERATE_CUDA_STENCIL_H__
 
-#endif
