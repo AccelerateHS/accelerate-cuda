@@ -38,7 +38,7 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Data.HashTable.IO                      as HT
 
 import Data.Array.Accelerate.Array.Data                 ( ArrayData )
-import qualified Data.Array.Accelerate.CUDA.Debug       as D ( message, dump_gc )
+import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 #include "accelerate.h"
 
@@ -142,7 +142,8 @@ insert ctx@(Context _ weak_ctx) (MemoryTable ref weak_ref) !arr !ptr = do
 --
 reclaim :: MemoryTable -> IO ()
 reclaim (MemoryTable _ weak_ref) = do
-  trace "reclaim" performGC
+  (free, total) <- CUDA.getMemInfo
+  performGC
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> return ()
@@ -150,7 +151,12 @@ reclaim (MemoryTable _ weak_ref) = do
       flip HT.mapM_ tbl $ \(_,DeviceArray w) -> do
         alive <- isJust `fmap` deRefWeak w
         unless alive $ finalize w
-
+  --
+  D.when D.dump_gc $ do
+    (free', _)  <- CUDA.getMemInfo
+    message $ "reclaim: freed "   ++ showBytes (fromIntegral (free - free'))
+                        ++ ", "   ++ showBytes (fromIntegral free')
+                        ++ " of " ++ showBytes (fromIntegral total) ++ " remaining"
 
 -- Because a finaliser might run at any time, we must reinstate the context in
 -- which the array was allocated before attempting to release it.
@@ -196,6 +202,10 @@ withIORef ref f = readIORef ref >>= f
 
 -- Debug
 -- -----
+
+{-# INLINE showBytes #-}
+showBytes :: Int -> String
+showBytes x = D.showFFloatSIBase (Just 0) 1024 (fromIntegral x :: Double) "B"
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
