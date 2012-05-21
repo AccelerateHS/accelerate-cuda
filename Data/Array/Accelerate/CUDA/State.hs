@@ -20,79 +20,33 @@
 
 module Data.Array.Accelerate.CUDA.State (
 
-  -- Types
-  CIO, KernelTable, KernelKey, KernelEntry(KernelEntry), KernelObject(KernelObject),
-
   -- Evaluating computations
-  evalCUDA, defaultContext, deviceProps, activeContext,
-  memoryTable, kernelTable, kernelName, kernelStatus
+  CIO, evalCUDA,
+
+  -- Querying execution state
+  defaultContext, deviceProps, activeContext, kernelTable, memoryTable
 
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import Data.Array.Accelerate.CUDA.Debug                 ( message, when, verbose, dump_gc, showFFloatSIBase )
+import Data.Array.Accelerate.CUDA.Persistent            as KT
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
 import Data.Label
 import Control.Exception
-import Data.ByteString                                  ( ByteString )
 import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
-import System.Process                                   ( ProcessHandle )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( mkWeakPtr, addFinalizer )
-import System.IO.Unsafe
+import System.IO.Unsafe                                 ( unsafePerformIO )
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
 import qualified Foreign.CUDA.Driver.Context            as CUDA
-import qualified Foreign.CUDA.Analysis                  as CUDA
-import qualified Data.HashTable.IO                      as HT
 
-#ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
-import Data.Binary                                      ( encodeFile, decodeFile )
-import Control.Arrow                                    ( second )
-import Paths_accelerate                                 ( getDataDir )
-#endif
-
-
--- An exact association between an accelerate computation and its
--- implementation, which is either a reference to the external compiler (nvcc)
--- or the resulting binary module.
---
--- Note that since we now support running in multiple contexts, we also need to
--- keep track of
---   a) the compute architecture the code was compiled for
---   b) which contexts have linked the code
---
--- We aren't concerned with true (typed) equality of an OpenAcc expression,
--- since we largely want to disregard the array environment; we really only want
--- to assert the type and index of those variables that are accessed by the
--- computation and no more, but we can not do that. Instead, this is keyed to
--- the generated kernel code.
---
-type KernelTable = HT.BasicHashTable KernelKey KernelEntry
-
-type KernelKey   = (CUDA.Compute, ByteString)
-data KernelEntry = KernelEntry
-  {
-    _kernelName         :: !FilePath,
-    _kernelStatus       :: !(Either ProcessHandle KernelObject)
-  }
-
--- The raw compiled data, and the list of contexts that the object has already
--- been linked into. If we locate this entry in the KernelTable, it may have
--- been inserted by an alternate but compatible device context, so just re-link
--- into the current context.
---
-data KernelObject = KernelObject
-  {
-    _objectData         :: !ByteString,
-    _objectLink         :: {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
-  }
 
 -- The state token for CUDA accelerated array operations
 --
@@ -108,7 +62,7 @@ data CUDAState  = CUDAState
 instance Eq CUDA.Context where
   CUDA.Context p1 == CUDA.Context p2    = p1 == p2
 
-$(mkLabels [''CUDAState, ''KernelEntry])
+$(mkLabels [''CUDAState])
 
 
 -- Execution State
@@ -151,7 +105,7 @@ theMemoryTable =  unsafePerformIO $ do
 {-# NOINLINE theKernelTable #-}
 theKernelTable :: KernelTable
 theKernelTable =  unsafePerformIO $ do
-  kt    <- HT.new
+  kt    <- KT.new
   when dump_gc $ do
     message dump_gc                   "gc: initialise kernel table"
     addFinalizer kt $ message dump_gc "gc: finalise kernel table"
@@ -217,36 +171,4 @@ deviceInfo dev prp = render $
     clock       = showFFloatSIBase (Just 2) 1000 (fromIntegral $ CUDA.clockRate prp * 1000 :: Double) "Hz"
     mem         = showFFloatSIBase (Just 0) 1024 (fromIntegral $ CUDA.totalGlobalMem prp   :: Double) "B"
     at          = char '@'
-
-
--- Persistent caching (deprecated)
--- -------------------------------
-
-#ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
--- Load and save the persistent kernel index file
---
-indexFileName :: IO FilePath
-indexFileName = do
-  tmp <- (</> "cache") `fmap` getDataDir
-  dir <- createDirectoryIfMissing True tmp >> canonicalizePath tmp
-  return (dir </> "_index")
-
-saveIndexFile :: CUDAState -> IO ()
-saveIndexFile s = do
-  ind <- indexFileName
-  encodeFile ind . map (second _kernelName) =<< HT.toList (_kernelTable s)
-
--- Read the kernel index map file (if it exists), loading modules into the
--- current context
---
-loadIndexFile :: IO (KernelTable, Int)
-loadIndexFile = do
-  f <- indexFileName
-  x <- doesFileExist f
-  e <- if x then mapM reload =<< decodeFile f
-            else return []
-  (,length e) <$> HT.fromList hashAccKey e
-  where
-    reload (k,n) = (k,) . KernelEntry n . Right <$> CUDA.loadFile (n `replaceExtension` ".cubin")
-#endif
 

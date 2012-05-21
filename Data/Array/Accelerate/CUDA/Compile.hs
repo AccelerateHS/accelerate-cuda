@@ -24,11 +24,12 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 
 import Data.Array.Accelerate.CUDA.AST
-import Data.Array.Accelerate.CUDA.FullList              as FL
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
+import Data.Array.Accelerate.CUDA.FullList              as FL
+import Data.Array.Accelerate.CUDA.Persistent            as KT
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 -- libraries
@@ -54,7 +55,6 @@ import System.Process
 import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderCompact )
 import Data.ByteString.Internal                         ( w2c )
 import qualified Data.HashSet                           as Set
-import qualified Data.HashTable.IO                      as HT
 import qualified Data.ByteString                        as B
 import qualified Data.ByteString.Lazy                   as L
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -304,46 +304,50 @@ build acc fvar = do
 
 -- Link a compiled binary and update the associated kernel entry in the hash
 -- table. This may entail waiting for the external compilation process to
--- complete. If successfully, the temporary files are removed.
+-- complete. If successful, the temporary files are removed.
 --
 link :: KernelTable -> KernelKey -> IO CUDA.Module
 link table key =
   let intErr = INTERNAL_ERROR(error) "link" "missing kernel entry"
   in do
-    ctx                         <- CUDA.get
-    (KernelEntry cufile stat)   <- fromMaybe intErr `fmap` HT.lookup table key
-    case stat of
-      Right (KernelObject bin active)
-        | Just mdl <- FL.lookup ctx active      -> return mdl
-        | otherwise                             -> do
-            message "re-linking module for current context"
-            mdl         <- CUDA.loadData bin
-            let obj     =  KernelObject bin (FL.cons ctx mdl active)
-            HT.insert table key (KernelEntry cufile (Right obj))
-            return mdl
-      --
-      Left  pid         -> do
-        -- wait for compiler to finish and load binary object
+    ctx         <- CUDA.get
+    entry       <- fromMaybe intErr `fmap` KT.lookup table key
+    case entry of
+      CompileProcess cufile pid -> do
+        -- Wait for the compiler to finish and load the binary object into the
+        -- current context
         --
         message "waiting for nvcc..."
         waitFor pid
-        bin     <- B.readFile (replaceExtension cufile ".cubin")
-        mdl     <- CUDA.loadData bin
-        let obj =  KernelObject bin (FL.singleton ctx mdl)
+        let cubin       =  replaceExtension cufile ".cubin"
+        bin             <- B.readFile cubin
+        mdl             <- CUDA.loadData bin
 
-#ifndef ACCELERATE_CUDA_PERSISTENT_CACHE
-        -- remove build products
+        -- Update hash tables and stash the binary object into the persistent
+        -- cache
+        --
+        KT.insert table key $! KernelObject bin (FL.singleton ctx mdl)
+        KT.persist cubin key
+
+        -- Remove temporary build products
         --
         removeFile      cufile
-        removeFile      (replaceExtension cufile ".cubin")
         removeDirectory (dropFileName cufile)
           `catch` \(_ :: IOError) -> return ()          -- directory not empty
-#endif
 
-        -- update hash table
-        --
-        HT.insert table key (KernelEntry cufile (Right obj))
         return mdl
+
+      -- If we get a real object back, then this will already be in the
+      -- persistent cache, since either it was just read in from there, or we
+      -- had to generate new code and the link step above has added it.
+      --
+      KernelObject bin active
+        | Just mdl <- FL.lookup ctx active      -> return mdl
+        | otherwise                             -> do
+            message "re-linking module for current context"
+            mdl                 <- CUDA.loadData bin
+            KT.insert table key $! KernelObject bin (FL.cons ctx mdl active)
+            return mdl
 
 
 -- Generate and compile code for a single open array expression
@@ -354,17 +358,17 @@ compile :: KernelTable
         -> AccBindings aenv
         -> CIO (String, KernelKey)
 compile table dev acc fvar = do
-  exists        <- isJust `fmap` liftIO (HT.lookup table key)
+  exists        <- isJust `fmap` liftIO (KT.lookup table key)
   unless exists $ do
     message     $  unlines [ show key, map w2c (L.unpack code) ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
-    (file,hdl)  <- openOutputFile "dragon.cu"   -- rawr!
+    (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
     (_,_,_,pid) <- liftIO $ do
       L.hPut hdl code                 `finally`     hClose hdl
       createProcess (proc nvcc flags) `onException` removeFile file
     --
-    liftIO $ HT.insert table key (KernelEntry file (Left pid))
+    liftIO $ KT.insert table key (CompileProcess file pid)
   --
   return (entry, key)
   where
@@ -404,8 +408,8 @@ compileFlags cufile = do
     , "-arch=sm_" ++ show (round (arch * 10) :: Int)
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
-    , if D.mode D.dump_cc then ""   else "--disable-warnings"
-    , if D.mode D.debug   then "-G" else "-O3"
+    , if D.mode D.dump_cc  then ""   else "--disable-warnings"
+    , if D.mode D.debug_cc then "-G" else "-O3"
     , machine
     , cufile ]
   where
@@ -419,14 +423,10 @@ compileFlags cufile = do
 -- Open a unique file in the temporary directory used for compilation
 -- by-products. The directory will be created if it does not exist.
 --
-openOutputFile :: String -> CIO (FilePath, Handle)
-openOutputFile template = liftIO $ do
-#ifdef ACCELERATE_CUDA_PERSISTENT_CACHE
-  dir <- (</>) <$> getDataDir            <*> pure "cache"
-#else
+openTemporaryFile :: String -> CIO (FilePath, Handle)
+openTemporaryFile template = liftIO $ do
   pid <- getProcessID
   dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
-#endif
   createDirectoryIfMissing True dir
   openTempFile dir template
 
@@ -440,9 +440,9 @@ getProcessID = getProcessId
 
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
-message msg = trace ("cc: " ++ msg) $ return ()
+message msg = trace msg $ return ()
 
 {-# INLINE trace #-}
 trace :: MonadIO m => String -> m a -> m a
-trace msg next = D.message D.dump_cc msg >> next
+trace msg next = D.message D.dump_cc ("cc: " ++ msg) >> next
 

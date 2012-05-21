@@ -20,8 +20,8 @@ module Data.Array.Accelerate.CUDA.Debug (
   showFFloatSIBase,
 
   message, event, when, mode,
-  verbose, debug,
-  dump_gc, dump_cc, dump_exec,
+  verbose, flush_cache,
+  dump_gc, dump_cc, debug_cc, dump_exec,
 
 ) where
 
@@ -67,13 +67,14 @@ showFFloatSIBase p b n
 data Flags = Flags
   {
     -- phase control
-    _dump_gc    :: !Bool        -- garbage collection & memory management
-  , _dump_cc    :: !Bool        -- compilation & linking
-  , _dump_exec  :: !Bool        -- kernel execution
+    _dump_gc            :: !Bool        -- garbage collection & memory management
+  , _dump_cc            :: !Bool        -- compilation & linking
+  , _debug_cc           :: !Bool        -- compile device code with debug symbols
+  , _dump_exec          :: !Bool        -- kernel execution
 
     -- general options
-  , _verbose    :: !Bool        -- additional status messages
-  , _debug      :: !Bool        -- generate device code suitable for debugging
+  , _verbose            :: !Bool        -- additional status messages
+  , _flush_cache        :: !Bool        -- delete the persistent cache directory
   }
 
 $(mkLabels [''Flags])
@@ -82,15 +83,16 @@ flags :: [OptDescr (Flags -> Flags)]
 flags =
   [ Option [] ["ddump-gc"]      (NoArg (set dump_gc True))      "print device memory management trace"
   , Option [] ["ddump-cc"]      (NoArg (set dump_cc True))      "print generated code and compilation information"
+  , Option [] ["ddebug-cc"]     (NoArg (set debug_cc True))     "generate debug information for device code"
   , Option [] ["ddump-exec"]    (NoArg (set dump_exec True))    "print kernel execution trace"
   , Option [] ["dverbose"]      (NoArg (set verbose True))      "print additional information"
-  , Option [] ["ddebug"]        (NoArg (set debug True))        "generate debug information for device code"
+  , Option [] ["fflush-cache"]  (NoArg (set flush_cache True))  "delete the persistent cache directory"
   ]
 
 initialise :: IO Flags
 initialise = parse `fmap` getArgs
   where
-    defaults      = Flags False False False False False
+    defaults      = Flags False False False False False False
     parse         = foldl parse1 defaults
     parse1 opts x = case filter (\(Option _ [f] _ _) -> x `isPrefixOf` ('-':f)) flags of
                       [Option _ _ (NoArg go) _] -> go opts
