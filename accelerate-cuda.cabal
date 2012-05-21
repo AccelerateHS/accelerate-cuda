@@ -50,24 +50,24 @@ Extra-source-files:     configure
                         cubits/accelerate_cuda_shape.h.in
                         include/accelerate.h
 
--- Flag pcache
---   Description:          Enable the persistent caching of the compiled CUDA modules (experimental)
---   Default:              False
-
 Flag debug
   Description:
     Enable tracing message flags. These are read from the command-line
     arguments, which is convenient but may cause problems interacting with the
     user program, so is not enabled by default. The available options:
     .
-    * -ddump-cc: print the generated code, nvcc compiler warnings, and thread &
-      resource statistics
+    * -ddump-cc: print the generated code, kernel table management information,
+         nvcc compiler warnings, and thread & resource statistics
+    .
+    * -ddebug-cc: compile code with debugging symbols, suitable for 'cuda-gdb'
     .
     * -ddump-exec: print each kernel name as it is invoked
     .
     * -ddump-gc: print memory management information
     .
     * -dverbose: other, uncategorised messages
+    .
+    * -fflush-cache: delete the persistent kernel cache
     .
   Default:              False
 
@@ -137,12 +137,10 @@ Library
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
                         Data.Array.Accelerate.CUDA.FullList
+                        Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
                         Data.Array.Accelerate.Internal.Check
                         Paths_accelerate_cuda
-
---  if flag(pcache)
---    CPP-options:        -DACCELERATE_CUDA_PERSISTENT_CACHE
 
   if flag(debug)
     cpp-options:        -DACCELERATE_DEBUG
