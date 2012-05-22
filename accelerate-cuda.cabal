@@ -106,7 +106,6 @@ Library
                         pretty                  >= 1.0,
                         process                 >= 1.0,
                         srcloc                  >= 0.1,
-                        symbol                  >= 0.1,
                         transformers            >= 0.2,
                         unordered-containers    >= 0.1.4
 
