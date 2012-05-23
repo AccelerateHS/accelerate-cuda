@@ -29,7 +29,7 @@ module Data.Array.Accelerate.CUDA.State (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Debug                 ( message, when, verbose, dump_gc, showFFloatSIBase )
+import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Persistent            as KT
 import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
@@ -92,24 +92,16 @@ evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
 
 {-# NOINLINE theMemoryTable #-}
 theMemoryTable :: MemoryTable
-theMemoryTable =  unsafePerformIO $ do
-  mt    <- MT.new
-  when dump_gc $ do
-    -- should never happen, so only make the finaliser thread if we are
-    -- specifically looking for GC problems.
-    --
-    message dump_gc                   "gc: initialise memory table"
-    addFinalizer mt $ message dump_gc "gc: finalise memory table"
-  keepAlive mt
+theMemoryTable = unsafePerformIO $ do
+  message dump_gc "gc: initialise memory table"
+  keepAlive =<< MT.new
+
 
 {-# NOINLINE theKernelTable #-}
 theKernelTable :: KernelTable
-theKernelTable =  unsafePerformIO $ do
-  kt    <- KT.new
-  when dump_gc $ do
-    message dump_gc                   "gc: initialise kernel table"
-    addFinalizer kt $ message dump_gc "gc: finalise kernel table"
-  keepAlive kt
+theKernelTable = unsafePerformIO $ do
+  message dump_gc "gc: initialise kernel table"
+  keepAlive =<< KT.new
 
 
 -- Select and initialise a default CUDA device, and create a new execution
