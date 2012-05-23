@@ -299,7 +299,7 @@ build acc fvar = do
       --
       -- make sure kernel/stats are printed together
       --
-      message   $ intercalate "\n" [msg1, "cc: " ++ msg2]
+      message   $ intercalate "\n" [msg1, "     ... " ++ msg2]
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
