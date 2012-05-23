@@ -82,26 +82,18 @@ import Data.Array.Accelerate.CUDA.Execute
 -- This will select the fastest device available on which to execute
 -- computations, based on compute capability and estimated maximum GFLOPS.
 --
--- /NOTE:/ The GPU is a single shared resource that we must take exclusive
--- access to when running a computation. This means that if you have several GPU
--- computations that depend on one another, you will need to either:
---
---  * Make sure that each of those is evaluated (using `seq` or otherwise)
---    before it is passed to the next computation.
---
---  * Keep all computations in the 'Acc' meta-language form and only 'run' the
---    computation at the end, returning all the required arrays at once.
---
--- If not, this will produce a \"blocked indefinitely on MVar\" exception, as the
--- first computation attempts to evaluate its result only after the second has
--- begun and already taken control of the device.
---
--- These same considerations apply to all the @run*@ forms.
+-- /NOTE:/
+--   GPUs typically have their own attached memory, which is separate from the
+--   computer's main memory. Hence, every 'Data.Array.Accelerate.use' operation
+--   implies copying data to the device, and every 'run' operation must copy the
+--   results of a computation back to the host. Thus, it is best to keep all
+--   computations in the 'Acc' meta-language form and only 'run' the computation
+--   once at the end, to avoid transferring (unused) intermediate results.
 --
 run :: Arrays a => Acc a -> a
 run a
   = unsafePerformIO
-  $ withMVar defaultContext $ \ctx -> evaluate (runIn ctx a)
+  $ evaluate (runIn defaultContext a)
 
 -- | As 'run', but allow the computation to continue running in a thread and
 -- return immediately without waiting for the result. The status of the
@@ -113,7 +105,7 @@ run a
 runAsync :: Arrays a => Acc a -> Async a
 runAsync a
   = unsafePerformIO
-  $ withMVar defaultContext $ \ctx -> evaluate (runAsyncIn ctx a)
+  $ evaluate (runAsyncIn defaultContext a)
 
 -- | As 'run', but execute using the specified device context rather than using
 -- the default, automatically selected device.
@@ -166,7 +158,7 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 run1 f
   = unsafePerformIO
-  $ withMVar defaultContext $ \ctx -> evaluate (run1In ctx f)
+  $ evaluate (run1In defaultContext f)
 
 
 -- | As 'run1', but the computation is executed asynchronously.
@@ -174,7 +166,7 @@ run1 f
 run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
 run1Async f
   = unsafePerformIO
-  $ withMVar defaultContext $ \ctx -> evaluate (run1AsyncIn ctx f)
+  $ evaluate (run1AsyncIn defaultContext f)
 
 -- | As 'run1', but execute in the specified context.
 --
@@ -203,7 +195,7 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
 stream f arrs
   = unsafePerformIO
-  $ withMVar defaultContext $ \ctx -> evaluate (streamIn ctx f arrs)
+  $ evaluate (streamIn defaultContext f arrs)
 
 -- | As 'stream', but execute in the specified context.
 --
