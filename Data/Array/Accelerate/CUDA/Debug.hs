@@ -30,6 +30,7 @@ import Data.List
 import Data.Label
 import Data.IORef
 import Control.Monad.IO.Class
+import System.CPUTime
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
@@ -115,7 +116,11 @@ mode _ = False
 {-# INLINE message #-}
 message :: MonadIO m => (Flags :-> Bool) -> String -> m ()
 #ifdef ACCELERATE_DEBUG
-message f str = when f (liftIO $ traceIO str)
+message f str
+  = when f . liftIO
+  $ do psec     <- getCPUTime
+       let sec   = fromIntegral psec * 1E-12 :: Double
+       traceIO   $ showFFloat (Just 2) sec (':':str)
 #else
 message _ _   = return ()
 #endif
