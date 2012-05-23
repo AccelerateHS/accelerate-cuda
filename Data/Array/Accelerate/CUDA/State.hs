@@ -38,7 +38,6 @@ import Data.Array.Accelerate.CUDA.Analysis.Device
 import Data.Label
 import Control.Exception
 import Control.Concurrent                               ( forkIO, threadDelay )
-import Control.Concurrent.MVar                          ( MVar, newMVar )
 import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( mkWeakPtr, addFinalizer )
@@ -109,12 +108,11 @@ theKernelTable = unsafePerformIO $ do
 -- maximum throughput.
 --
 {-# NOINLINE defaultContext #-}
-defaultContext :: MVar CUDA.Context
+defaultContext :: CUDA.Context
 defaultContext = unsafePerformIO $ do
   CUDA.initialise []
   (dev,prp)     <- selectBestDevice
   ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
-  ref           <- newMVar ctx
   --
   message dump_gc $ "gc: initialise context"
   message verbose $ deviceInfo dev prp
@@ -123,7 +121,7 @@ defaultContext = unsafePerformIO $ do
     message dump_gc $ "gc: finalise context"    -- should never happen!
     CUDA.destroy ctx
   --
-  keepAlive ref
+  keepAlive ctx
 
 
 -- Make sure the GC knows that we want to keep this thing alive past the end of
