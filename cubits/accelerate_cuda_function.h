@@ -107,6 +107,7 @@ static __inline__ __device__ T atomicCAS32(T* address, T compare, T val)
     return u.a;
 }
 
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 110
 template <>
 static __inline__ __device__ Int32 atomicCAS32(Int32* address, Int32 compare, Int32 val)
 {
@@ -118,6 +119,7 @@ static __inline__ __device__ Word32 atomicCAS32(Word32* address, Word32 compare,
 {
     return atomicCAS(address, compare, val);
 }
+#endif
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 120
 template <typename T>
