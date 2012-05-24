@@ -154,8 +154,8 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             $stms:(x1 .=. getIn0 "j")
 
             if ( $exp:carry_in ) {
-                $decls:env
                 $stms:(x0 .=. x2)
+                $decls:env
                 $stms:(x1 .=. combine)
             }
 
