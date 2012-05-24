@@ -84,8 +84,8 @@ mkFoldAll dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
 
             for (i += gridSize; i < num_elements; i += gridSize)
             {
-                $decls:env
                 $stms:(x0 .=. getIn0 "i")
+                $decls:env
                 $stms:(x1 .=. combine)
             }
         }
@@ -124,6 +124,7 @@ mkFoldAll dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
           if (gridDim.x == 1) {
               $decls:env'
               $stms:(x0 .=. seed)
+              $decls:env
               $stms:(x1 .=. combine)
           }
           $stms:(setOut "blockIdx.x" x1)
@@ -171,7 +172,6 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         $decls:smem
         $decls:decl1
         $decls:decl0
-        $decls:env
 
         /*
          * If the intervals of an exclusive fold are empty, use all threads to
@@ -228,8 +228,8 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
                  */
                 for (i += 2 * blockDim.x; i < end; i += blockDim.x)
                 {
-                    $decls:env
                     $stms:(x0 .=. getIn0 "i")
+                    $decls:env
                     $stms:(x1 .=. combine)
                 }
             }
@@ -252,11 +252,7 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
              * exclusive reductions, we also combine with the seed element here.
              */
             if (threadIdx.x == 0)
-            {
-                $decls:final_decls
-                $stms:final_stms
-                $stms:(setOut "seg" x1)
-            }
+               $stm:(maybe inclusive_finish exclusive_finish mseed)
         }
     }
   |]
@@ -268,10 +264,16 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
     (x1,   decl1)                       = locals "x1" elt
     (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
     --
-    (final_decls, final_stms) =
-      case mseed of
-        Nothing                -> ([], [])
-        Just (CUExp env' seed) -> (env', concat [x0 .=. seed, x1 .=. combine])
+    inclusive_finish                    = [cstm| {
+        $stms:(setOut "seg" x1)
+    } |]
+    exclusive_finish (CUExp env' seed)  = [cstm| {
+        $decls:env'
+        $stms:(x0 .=. seed)
+        $decls:env
+        $stms:(x1 .=. combine)
+        $stms:(setOut "seg" x1)
+    } |]
     --
     mapseed (CUExp env' seed)           = [cstm|
       if (interval_size == 0)
@@ -411,8 +413,8 @@ mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) msee
                  */
                 for (i += 2 * warpSize; i < end; i += warpSize)
                 {
-                    $decls:env
                     $stms:(x0 .=. getIn0 "i")
+                    $decls:env
                     $stms:(x1 .=. combine)
                 }
             }
@@ -451,6 +453,7 @@ mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) msee
       if (num_elements > 0) {
           $decls:env'
           $stms:(x0 .=. seed)
+          $decls:env
           $stms:(x1 .=. combine)
       } else {
           $decls:env'
@@ -486,8 +489,8 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
     reduce i
       | i > 1
       = [cstm| if ( $id:tid + $int:i < $id:n ) {
-                   $decls:env
                    $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+                   $decls:env
                    $stms:(x1 .=. combine)
                    $stms:(sdata "threadIdx.x" .=. x1)
                }
@@ -495,8 +498,8 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
       --
       | otherwise
       = [cstm| if ( $id:tid + $int:i < $id:n ) {
-                   $decls:env
                    $stms:(x0 .=. sdata "threadIdx.x + 1")
+                   $decls:env
                    $stms:(x1 .=. combine)
                }
              |]
@@ -525,8 +528,8 @@ reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u-1,u-2..v]
       | i > warpSize dev
       = [cstm| if ( $id:n > $int:i ) {
                    if ( threadIdx.x + $int:i < $id:n ) {
-                       $decls:env
                        $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+                       $decls:env
                        $stms:(x1 .=. combine)
                        $stms:(sdata "threadIdx.x" .=. x1)
                    }
