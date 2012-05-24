@@ -79,10 +79,15 @@ fresh = do
 use :: Int -> Int -> Type -> Exp -> CGM ()
 use base prj ty var = modify variables (S.adjust (IM.insert prj (ty,var)) base)
 
--- Return the tuple components of a given variable that are actually used
+-- Return the tuple components of a given variable that are actually used. These
+-- in snoc-list ordering, i.e. with variable zero on the right.
 --
 subscripts :: Int -> CGM [(Int, Type, Exp)]
-subscripts base = map swizzle . IM.toList . flip S.index base <$> gets variables
+subscripts base
+  = reverse
+  . map swizzle
+  . IM.toList
+  . flip S.index base <$> gets variables
   where
     swizzle (i, (t,e)) = (i,t,e)
 
