@@ -322,7 +322,9 @@ codegenOpenExp exp env =
           [x]   -> bind [cty| typename bool |] x
           _     -> INTERNAL_ERROR(error) "codegenOpenExp" "expected conditional predicate"
       --
-      return $ zipWith (\a b -> [cexp| $exp:p' ? $exp:a : $exp:b|]) t' e'
+      let cond ty a b   = addVar ty a >> addVar ty b >>
+                          return [cexp| $exp:p' ? $exp:a : $exp:b|]
+      sequence $ zipWith3 cond (expType t) t' e'
 
     -- Array indices and shapes
     --
