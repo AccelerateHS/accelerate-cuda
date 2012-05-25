@@ -1,4 +1,5 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Persistent
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -23,12 +24,13 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 
 -- libraries
-import Prelude                                          hiding ( lookup )
+import Prelude                                          hiding ( lookup, catch )
 import Data.Char
 import System.IO
 import System.FilePath
 import System.Directory
 import System.Process                                   ( ProcessHandle )
+import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
 import Data.Binary
@@ -239,6 +241,12 @@ persist cubin key = do
   message $ "persist/save: " ++ cacheFile
   createDirectoryIfMissing True (dropFileName cacheFile)
   renameFile cubin cacheFile
+    -- If the temporary and cache directories are on different disks, we must
+    -- copy the file instead. Unsupported operation: (Cross-device link)
+    --
+    `catch` \(_ :: IOError) -> do
+      copyFile cubin cacheFile
+      removeFile cubin
   --
   withBinaryFile db ReadWriteMode $ \h -> do
     -- The file opens with the cursor at the beginning of the file
