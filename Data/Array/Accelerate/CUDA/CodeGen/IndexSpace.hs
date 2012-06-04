@@ -379,6 +379,7 @@ fromIndex n dim sh ix base
 --
 project :: Int -> String -> [Exp] -> [Stm]
 project n sh idx
+  | n   == 0    = [[cstm| $id:sh = 0; |]]
   | [e] <- idx  = [[cstm| $id:sh = $exp:e; |]]
   | otherwise   = zipWith (\i c -> [cstm| $id:sh . $id:('a':show c) = $exp:i; |]) idx [n-1,n-2..0]
 
