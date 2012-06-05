@@ -34,6 +34,7 @@ import System.CPUTime
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
+import Text.PrettyPrint                         hiding ( mode )
 
 #if MIN_VERSION_base(4,5,0)
 import Debug.Trace                              ( traceIO, traceEventIO )
@@ -118,9 +119,11 @@ message :: MonadIO m => (Flags :-> Bool) -> String -> m ()
 #ifdef ACCELERATE_DEBUG
 message f str
   = when f . liftIO
-  $ do psec     <- getCPUTime
-       let sec   = fromIntegral psec * 1E-12 :: Double
-       traceIO   $ showFFloat (Just 2) sec (':':str)
+  $ do psec            <- getCPUTime
+       let sec          = fromIntegral psec * 1E-12 :: Double
+           timestamp    = text $ showFFloat (Just 2) sec ":"
+           msg          = timestamp <> vcat (map text (lines str))
+       traceIO (render msg)
 #else
 message _ _   = return ()
 #endif
