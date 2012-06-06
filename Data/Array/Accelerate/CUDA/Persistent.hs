@@ -177,7 +177,7 @@ cacheDirectory = do
 -- A relative path to be appended to (presumably) 'cacheDirectory'.
 --
 cacheFilePath :: KernelKey -> FilePath
-cacheFilePath (cap, key) = show cap </> foldl (flip (mangle . w2c)) ".cubin" (B.unpack key)
+cacheFilePath (cap, key) = show cap </> B.foldl (flip (mangle . w2c)) ".cubin" key
   where
     -- TODO: complete z-encoding? see: compiler/utils/Encoding.hs
     --
