@@ -1,5 +1,5 @@
 Name:                   accelerate-cuda
-Version:                0.12.0.0
+Version:                0.12.1.0
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.4
 Build-type:             Configure
@@ -72,7 +72,7 @@ Flag internal-checks
 Library
   Include-Dirs:         include
 
-  Build-depends:        accelerate              == 0.12.*,
+  Build-depends:        accelerate              >= 0.12.1 & < 0.13,
                         array                   >= 0.3,
                         base                    == 4.*,
                         binary                  >= 0.5,
