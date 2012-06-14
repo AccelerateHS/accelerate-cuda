@@ -1,4 +1,6 @@
-{-# LANGUAGE GADTs, FlexibleInstances, TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.AST
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -37,13 +39,22 @@ import qualified Data.HashSet                           as Set
 -- auxiliary information together with the compiled module, such as entry point
 -- and execution information.
 --
-data AccKernel a = Kernel String CUDA.Module CUDA.Fun CUDA.Occupancy (Int -> (Int,Int,Int))
+data AccKernel a where
+  AccKernel :: !String                          -- __global__ entry function name
+            -> {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
+            -> {-# UNPACK #-} !CUDA.Module      -- binary module
+            -> {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
+            -> {-# UNPACK #-} !Int              -- thread block size
+            -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
+            -> !(Int -> Int)                    -- number of blocks for input problem size
+            -> AccKernel a
+
 
 -- The kernel lists are monomorphic, so sometimes we need to change the phantom
 -- type of the object code.
 --
 retag :: AccKernel a -> AccKernel b
-retag (Kernel x m f o l) = Kernel x m f o l
+retag (AccKernel x1 x2 x3 x4 x5 x6 x7) = AccKernel x1 x2 x3 x4 x5 x6 x7
 
 
 -- Kernel execution is asynchronous, barriers allow (cross-stream)
@@ -76,10 +87,11 @@ instance Hashable (ArrayVar aenv) where
 -- computation AST
 --
 data ExecOpenAcc aenv a where
-  ExecAcc :: FL.FullList () (AccKernel a)       -- executable binary objects
-          -> AccBindings aenv                   -- auxiliary arrays from the environment the kernel needs access to
-          -> PreOpenAcc ExecOpenAcc aenv a      -- the actual computation
-          -> ExecOpenAcc aenv a                 -- the recursive knot
+  ExecAcc :: {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
+          -> !(AccBindings aenv)                                -- auxiliary arrays from the environment the kernel needs access to
+          -> !(PreOpenAcc ExecOpenAcc aenv a)                   -- the actual computation
+          -> ExecOpenAcc aenv a                                 -- the recursive knot
+
 
 -- An annotated AST suitable for execution in the CUDA environment
 --
@@ -94,7 +106,8 @@ instance Show (ExecAfun a) where
 
 
 -- Display the annotated AST
---
+-- -------------------------
+
 prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 

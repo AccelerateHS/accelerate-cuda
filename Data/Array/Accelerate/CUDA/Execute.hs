@@ -769,7 +769,7 @@ executeTuple (t `SnocTup` e) env aenv = (,) <$> executeTuple   t env aenv
 --
 
 bindAcc :: Int -> AccKernel a -> Array dim a' -> CIO ()
-bindAcc base (Kernel _ mdl _ _ _) (Array sh ad) =
+bindAcc base (AccKernel _ _ mdl _ _ _ _) (Array sh ad) =
   let arr n     = "arrIn" ++ show base ++ "_a" ++ show (n::Int)
       tex       = CUDA.getTex mdl . arr
   in
@@ -777,7 +777,8 @@ bindAcc base (Kernel _ mdl _ _ _) (Array sh ad) =
 
 
 bindAccEnv :: AccKernel a -> Val aenv -> AccBindings aenv -> CIO ()
-bindAccEnv (Kernel _ mdl _ _ _) aenv (AccBindings vars) = mapM_ bindAvar (Set.toList vars)
+bindAccEnv (AccKernel _ _ mdl _ _ _ _) aenv (AccBindings vars) =
+  mapM_ bindAvar (Set.toList vars)
   where
     bindAvar (ArrayVar idx) =
       let idx'          = show $ idxToInt idx
@@ -851,8 +852,9 @@ instance Shape sh => Marshalable sh where
 -- What launch parameters should we use to execute the kernel with a number of
 -- array elements?
 --
+{-# INLINE configure #-}
 configure :: AccKernel a -> Int -> (Int, Int, Int)
-configure (Kernel _ !_ !_ !_ !launchConfig) !n = launchConfig n
+configure (AccKernel _ _ _ _ !cta !smem !grid) !n = (cta, grid n, smem)
 
 
 -- Link the binary object implementing the computation, configure the kernel
@@ -866,7 +868,7 @@ execute :: Marshalable args
         -> Int
         -> args
         -> CIO ()
-execute kernel@(Kernel _ !_ !_ !_ !_) !bindings !aenv !n !args = do
+execute !kernel !bindings !aenv !n !args = do
   bindAccEnv kernel aenv bindings
   launch kernel (configure kernel n) args
 
@@ -875,7 +877,7 @@ execute kernel@(Kernel _ !_ !_ !_ !_) !bindings !aenv !n !args = do
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
 launch :: Marshalable args => AccKernel a -> (Int,Int,Int) -> args -> CIO ()
-launch (Kernel entry _ !fn _ _) !(cta, grid, smem) !a = do
+launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !a = do
   message $ entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
   --
   args  <- marshal a
@@ -887,11 +889,13 @@ launch (Kernel entry _ !fn _ _) !(cta, grid, smem) !a = do
 
 -- Generalise concatMap for teh monadz
 --
+{-# INLINE concatMapM #-}
 concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
 concatMapM f xs = concat `liftM` mapM f xs
 
 -- A lazier version of 'Control.Monad.sequence'
 --
+{-# INLINE sequence' #-}
 sequence' :: [IO a] -> IO [a]
 sequence' = foldr k (return [])
   where k m ms = do { x <- m; xs <- unsafeInterleaveIO ms; return (x:xs) }

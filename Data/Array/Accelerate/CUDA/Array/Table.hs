@@ -108,7 +108,7 @@ new = do
 -- Look for the device memory corresponding to a given host-side array.
 --
 lookup :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
-lookup ctx (MemoryTable ref _) !arr = do
+lookup ctx (MemoryTable !ref _) !arr = do
   sa <- makeStableArray ctx arr
   mw <- withIORef ref (`HT.lookup` sa)
   case mw of
@@ -126,7 +126,7 @@ lookup ctx (MemoryTable ref _) !arr = do
 -- The device memory will be freed when the host array is garbage collected.
 --
 insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
-insert ctx@(Context _ weak_ctx) (MemoryTable ref weak_ref) !arr !ptr = do
+insert ctx@(Context _ !weak_ctx) (MemoryTable !ref !weak_ref) !arr !ptr = do
   key  <- makeStableArray ctx arr
   dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ctx weak_ref key ptr)
   tbl  <- readIORef ref

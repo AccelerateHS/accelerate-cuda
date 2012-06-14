@@ -274,7 +274,8 @@ build acc fvar = do
   dev           <- gets deviceProps
   table         <- gets kernelTable
   (entry,key)   <- compile table dev acc fvar
-  let (mdl,fun,occ) = unsafePerformIO $ do
+  let (cta,blocks,smem) = launchConfig acc dev occ
+      (mdl,fun,occ)     = unsafePerformIO $ do
         m <- link table key
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
@@ -282,7 +283,7 @@ build acc fvar = do
         D.when D.dump_cc (stats entry f o)
         return (m,f,o)
   --
-  return $ Kernel entry mdl fun occ (launchConfig acc dev occ)
+  return $ AccKernel entry fun mdl occ cta smem blocks
   where
     stats name fn occ = do
       regs      <- CUDA.requires fn CUDA.NumRegs

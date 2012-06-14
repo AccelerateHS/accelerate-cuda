@@ -40,16 +40,17 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 --
 launchConfig
     :: OpenAcc aenv a
-    -> CUDA.DeviceProperties
+    -> CUDA.DeviceProperties    -- the device being executed on
     -> CUDA.Occupancy           -- kernel occupancy information
-    -> Int                      -- number of elements to configure for
-    -> (Int, Int, Int)
-launchConfig (OpenAcc acc) dev occ = \n ->
+    -> ( Int                    -- block size
+       , Int -> Int             -- number of blocks for input problem size (grid)
+       , Int )                  -- shared memory (bytes)
+launchConfig (OpenAcc acc) dev occ =
   let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
       maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
       smem      = sharedMem dev acc cta
   in
-  (cta, maxGrid `min` gridSize dev acc n cta, smem)
+  (cta, \n -> maxGrid `min` gridSize dev acc n cta, smem)
 
 
 -- |
