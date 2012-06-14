@@ -267,7 +267,10 @@ codegenOpenExp exp env =
     --
     Let a b -> do
       a'        <- codegenOpenExp a env
-      vars      <- zipWithM bindVars (expType a) a'
+      vars      <- case a of
+                     -- Const _    -> return a'
+                     Var _      -> return a'
+                     _          -> zipWithM bindVars (expType a) a'
       codegenOpenExp b (env `Push` vars)
       where
         -- FIXME: if we are let-binding an input argument (read from global
