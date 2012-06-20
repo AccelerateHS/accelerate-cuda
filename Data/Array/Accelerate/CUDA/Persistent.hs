@@ -68,7 +68,7 @@ new = do
 -- the persistent cache, it is loaded and linked into the current context.
 --
 lookup :: KernelTable -> KernelKey -> IO (Maybe KernelEntry)
-lookup (KT kt pt) key = do
+lookup (KT kt pt) !key = do
   -- First check the local cache. If we get a hit, this could be:
   --   a) currently compiling
   --   b) compiled, but not linked into the current context
@@ -107,7 +107,7 @@ lookup (KT kt pt) key = do
 --      entries are added, which the functions currently do not do.
 --
 insert :: KernelTable -> KernelKey -> KernelEntry -> IO ()
-insert (KT kt _) key val = HT.insert kt key val
+insert (KT kt _) !key !val = HT.insert kt key val
 
 
 -- Local cache -----------------------------------------------------------------
@@ -233,7 +233,7 @@ restore db = do
 -- location, and updates the database on disk.
 --
 persist :: FilePath -> KernelKey -> IO ()
-persist cubin key = do
+persist !cubin !key = do
   cacheDir <- cacheDirectory
   let db        = cacheDir </> "persistent.db"
       cacheFile = cacheDir </> cacheFilePath key
@@ -253,7 +253,7 @@ persist cubin key = do
     --
     n <- runGet (get :: Get Int) `fmap` L.hGet h 8
     hSeek h AbsoluteSeek 0
-    L.hPut h $ encode (n+1)
+    L.hPut h (encode (n+1))
 
     -- Append the new entry to the end of file
     --
