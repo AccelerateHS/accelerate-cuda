@@ -368,9 +368,14 @@ mkReplicate dimSl dimOut (CUExp _ slix) _ =
 --
 fromIndex :: Int -> String -> String -> String -> String -> [InitGroup]
 fromIndex n dim sh ix base
-  | n == 1      = [[cdecl| const int $id:(base ++ "_a0") = $id:ix; |]]
+  | n == 1      = [[cdecl| const $ty:int $id:(base ++ "_a0") = $id:ix; |]]
   | otherwise   = sh0 : map (unsh . show) [0 .. n-1]
     where
+#if   SIZEOF_HSINT == 4
+      int       = typename "Int32"
+#elif SIZEOF_HSINT == 8
+      int       = typename "Int64"
+#endif
       sh0       = [cdecl| const typename $id:dim $id:base = fromIndex( $id:sh , $id:ix ); |]
       unsh c    = [cdecl| const int $id:(base ++ "_a" ++ c) = $id:base . $id:('a':c); |]
 
