@@ -146,7 +146,7 @@ keepAlive x = forkIO (caffeine x) >> return x
 --           4 multiprocessors @ 1.25GHz (32 cores), 512MB global memory
 --
 deviceInfo :: CUDA.Device -> CUDA.DeviceProperties -> String
-deviceInfo dev prp = render $
+deviceInfo dev prp = render $ reset <>
   devID <> colon <+> vcat [ name <+> parens compute
                           , processors <+> at <+> text clock <+> parens cores <> comma <+> memory
                           ]
@@ -161,4 +161,5 @@ deviceInfo dev prp = render $
     clock       = showFFloatSIBase (Just 2) 1000 (fromIntegral $ CUDA.clockRate prp * 1000 :: Double) "Hz"
     mem         = showFFloatSIBase (Just 0) 1024 (fromIntegral $ CUDA.totalGlobalMem prp   :: Double) "B"
     at          = char '@'
+    reset       = zeroWidthText "\r"
 
