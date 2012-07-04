@@ -1,4 +1,7 @@
-{-# LANGUAGE CPP, GADTs, TupleSections, ScopedTypeVariables #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Compile
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -366,6 +369,7 @@ compile table dev acc fvar = do
     (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
     (_,_,_,pid) <- liftIO $ do
+      message $ "execute: " ++ nvcc ++ " " ++ unwords flags
       L.hPut hdl code                 `finally`     hClose hdl
       createProcess (proc nvcc flags) `onException` removeFile file
     --
