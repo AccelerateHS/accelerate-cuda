@@ -333,11 +333,14 @@ link table key =
         KT.insert table key $! KernelObject bin (FL.singleton ctx mdl)
         KT.persist cubin key
 
-        -- Remove temporary build products
+        -- Remove temporary build products.
+        -- If compiling kernels with debugging symbols, leave the source files
+        -- in place so that they can be referenced by 'cuda-gdb'.
         --
-        removeFile      cufile
-        removeDirectory (dropFileName cufile)
-          `catch` \(_ :: IOError) -> return ()          -- directory not empty
+        D.unless D.debug_cc $ do
+          removeFile      cufile
+          removeDirectory (dropFileName cufile)
+            `catch` \(_ :: IOError) -> return ()        -- directory not empty
 
         return mdl
 

@@ -1,4 +1,6 @@
-{-# LANGUAGE CPP, TemplateHaskell, TypeOperators #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators   #-}
 {-# OPTIONS -fno-warn-unused-imports #-}
 {-# OPTIONS -fno-warn-unused-binds   #-}
 -- |
@@ -19,7 +21,7 @@ module Data.Array.Accelerate.CUDA.Debug (
 
   showFFloatSIBase,
 
-  message, event, when, mode,
+  message, event, when, unless, mode,
   verbose, flush_cache,
   dump_gc, dump_cc, debug_cc, dump_exec,
 
@@ -141,5 +143,15 @@ when f action
   | otherwise   = return ()
 #else
 when _ _        = return ()
+#endif
+
+{-# INLINE unless #-}
+unless :: MonadIO m => (Flags :-> Bool) -> m () -> m ()
+#ifdef ACCELERATE_DEBUG
+unless f action
+  | mode f      = return ()
+  | otherwise   = action
+#else
+unless _ action = action
 #endif
 
