@@ -516,7 +516,7 @@ reduceBlock :: DeviceProperties
             -> [InitGroup]              -- local binding environment for the..
             -> [Exp]                    -- ..binary associative function
             -> [Stm]
-reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u-1,u-2..v]
+reduceBlock dev elt n sdata env combine = concatMap (reduce . pow2) [u-1,u-2..v]
   where
     u           = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
     v           = floor (logBase 2 (fromIntegral $ warpSize dev           :: Double)) :: Int
@@ -526,20 +526,19 @@ reduceBlock dev elt n sdata env combine = map (reduce . pow2) [u-1,u-2..v]
     --
     reduce i
       | i > warpSize dev
-      = [cstm| if ( $id:n > $int:i ) {
-                   if ( threadIdx.x + $int:i < $id:n ) {
-                       $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-                       $decls:env
-                       $stms:(x1 .=. combine)
-                       $stms:(sdata "threadIdx.x" .=. x1)
-                   }
-                   __syncthreads();
-               }
-             |]
+      = [cstm| if ( threadIdx.x + $int:i < $id:n ) {
+                   $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
+                   $decls:env
+                   $stms:(x1 .=. combine)
+                   $stms:(sdata "threadIdx.x" .=. x1)
+               } |]
+      : [cstm| __syncthreads(); |]
+      : []
       --
       | otherwise
       = [cstm| if ( threadIdx.x < $int:(warpSize dev) ) {
                    $stms:(reduceWarp dev elt n "threadIdx.x" sdata env combine)
                }
              |]
+      : []
 
