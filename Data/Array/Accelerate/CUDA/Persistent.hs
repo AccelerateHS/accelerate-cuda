@@ -33,6 +33,7 @@ import System.Process                                   ( ProcessHandle )
 import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
+import Data.Version
 import Data.Binary
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
@@ -166,13 +167,24 @@ type PersistentCache = HT.BasicHashTable KernelKey ()
 -- The root directory of where the various persistent cache files live; the
 -- database and each individual binary object.
 --
--- TLM: Is this writeable, even at a 'cabal instal --global'? Maybe we should
---      specifically choose something in the user's home directory.
+-- By default, stash cache files in the cabal data directory. However, if
+-- accelerate was installed globally, that directory may not be writeable, so
+-- use the user's home directory instead.
+--
+-- Some platforms may have directories typically assigned to store cache files;
+-- Mac OS X uses ~/Library/Caches, for example. This fact is ignored.
 --
 cacheDirectory :: IO FilePath
 cacheDirectory = do
-  dir   <- canonicalizePath =<< getDataDir
-  return $ dir </> "cache"
+  cabal <- canonicalizePath =<< getDataDir
+  p     <- getPermissions cabal
+  --
+  if writable p
+     then return $ cabal </> "cache"
+     else do
+       home   <- canonicalizePath =<< getAppUserDataDirectory "accelerate"
+       return $ home </> "accelerate-cuda-" ++ showVersion version </> "cache"
+
 
 -- A relative path to be appended to (presumably) 'cacheDirectory'.
 --

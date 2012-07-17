@@ -4,7 +4,11 @@
 
 module Paths_accelerate_cuda where
 
+import Data.Version
 import System.Directory
+
+version :: Version
+version = Version {versionBranch = [0,13,0,0], versionTags = ["dev"]}
 
 getDataDir :: IO FilePath
 getDataDir = getCurrentDirectory
