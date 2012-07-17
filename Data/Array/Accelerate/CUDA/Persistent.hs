@@ -166,25 +166,16 @@ type PersistentCache = HT.BasicHashTable KernelKey ()
 
 
 -- The root directory of where the various persistent cache files live; the
--- database and each individual binary object.
+-- database and each individual binary object. This is inside a folder at the
+-- root of the user's home directory.
 --
--- By default, stash cache files in the cabal data directory. However, if
--- accelerate was installed globally, that directory may not be writeable, so
--- use the user's home directory instead.
---
--- Some platforms may have directories typically assigned to store cache files;
--- Mac OS X uses ~/Library/Caches, for example. This fact is ignored.
+-- Some platforms may have directories assigned to store cache files; Mac OS X
+-- uses ~/Library/Caches, for example. This fact is ignored.
 --
 cacheDirectory :: IO FilePath
 cacheDirectory = do
-  cabal <- canonicalizePath =<< getDataDir
-  p     <- getPermissions cabal
-  --
-  if writable p
-     then return $ cabal </> "cache"
-     else do
-       home   <- canonicalizePath =<< getAppUserDataDirectory "accelerate"
-       return $ home </> "accelerate-cuda-" ++ showVersion version </> "cache"
+  home  <- canonicalizePath =<< getAppUserDataDirectory "accelerate"
+  return $ home </> "accelerate-cuda-" ++ showVersion version </> "cache"
 
 
 -- A relative path to be appended to (presumably) 'cacheDirectory'.
