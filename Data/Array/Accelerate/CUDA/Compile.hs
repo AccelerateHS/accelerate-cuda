@@ -232,6 +232,8 @@ prepareAcc rootAcc = traverseAcc rootAcc
         IndexCons t h           -> liftA2 IndexCons     <$> travE t <*> travE h
         IndexHead h             -> liftA  IndexHead     <$> travE h
         IndexTail t             -> liftA  IndexTail     <$> travE t
+        ToIndex s i             -> liftA2 ToIndex       <$> travE s <*> travE i
+        FromIndex s i           -> liftA2 FromIndex     <$> travE s <*> travE i
         Tuple t                 -> liftA  Tuple         <$> travT t
         Prj ix e                -> liftA  (Prj ix)      <$> travE e
         Cond p t e              -> liftA3 Cond          <$> travE p <*> travE t <*> travE e

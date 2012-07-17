@@ -347,6 +347,16 @@ codegenOpenExp exp env =
       ix'               <- codegenOpenExp ix env
       return (init ix')
 
+    ToIndex sh ix       -> do
+      sh'               <- codegenOpenExp sh env
+      ix'               <- codegenOpenExp ix env
+      return [ ccall "toIndex" [ccall "shape" sh', ccall "shape" ix']]
+
+    FromIndex sh ix     -> do
+      sh'               <- codegenOpenExp sh env
+      ix'               <- codegenOpenExp ix env
+      return [ ccall "fromIndex" (ccall "shape" sh' : ix') ]
+
     -- Array shape and element indexing
     --
     ShapeSize sh        -> do
