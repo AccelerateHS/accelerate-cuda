@@ -25,6 +25,7 @@ import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 
 -- libraries
 import Prelude                                          hiding ( lookup, catch )
+import Numeric
 import Data.Char
 import System.IO
 import System.FilePath
@@ -189,13 +190,65 @@ cacheDirectory = do
 -- A relative path to be appended to (presumably) 'cacheDirectory'.
 --
 cacheFilePath :: KernelKey -> FilePath
-cacheFilePath (cap, key) = show cap </> B.foldl (flip (mangle . w2c)) ".cubin" key
+cacheFilePath (cap, key) =
+  show cap </> zEncodeString (B.foldl (flip (showLitChar . w2c)) [] key)
+
+-- stolen from compiler/utils/Encoding.hs
+--
+type EncodedString = String
+
+zEncodeString :: String -> EncodedString
+zEncodeString []       = []
+zEncodeString (h:rest) = encode_digit h ++ go rest
   where
-    -- TODO: complete z-encoding? see: compiler/utils/Encoding.hs
-    --
-    mangle '\\'   = ("zr" ++)
-    mangle '/'    = ("zs" ++)
-    mangle c      = showLitChar c
+    go []     = []
+    go (c:cs) = encode_ch c ++ go cs
+
+unencodedChar :: Char -> Bool
+unencodedChar 'z' = False
+unencodedChar 'Z' = False
+unencodedChar c   = isAlphaNum c
+
+encode_digit :: Char -> EncodedString
+encode_digit c | isDigit c = encode_as_unicode_char c
+               | otherwise = encode_ch c
+
+encode_ch :: Char -> EncodedString
+encode_ch c | unencodedChar c = [c]     -- Common case first
+encode_ch '('  = "ZL"
+encode_ch ')'  = "ZR"
+encode_ch '['  = "ZM"
+encode_ch ']'  = "ZN"
+encode_ch ':'  = "ZC"
+encode_ch 'Z'  = "ZZ"
+encode_ch 'z'  = "zz"
+encode_ch '&'  = "za"
+encode_ch '|'  = "zb"
+encode_ch '^'  = "zc"
+encode_ch '$'  = "zd"
+encode_ch '='  = "ze"
+encode_ch '>'  = "zg"
+encode_ch '#'  = "zh"
+encode_ch '.'  = "zi"
+encode_ch '<'  = "zl"
+encode_ch '-'  = "zm"
+encode_ch '!'  = "zn"
+encode_ch '+'  = "zp"
+encode_ch '\'' = "zq"
+encode_ch '\\' = "zr"
+encode_ch '/'  = "zs"
+encode_ch '*'  = "zt"
+encode_ch '_'  = "zu"
+encode_ch '%'  = "zv"
+encode_ch c    = encode_as_unicode_char c
+
+encode_as_unicode_char :: Char -> EncodedString
+encode_as_unicode_char c
+  = 'z'
+  : if isDigit (head hex_str) then hex_str
+                              else '0':hex_str
+  where
+    hex_str = showHex (ord c) "U"
 
 
 -- The default Binary instance for lists is (necessarily) spine and value
