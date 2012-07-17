@@ -509,10 +509,10 @@ codegenIntegralScalar :: IntegralType a -> a -> C.Exp
 codegenIntegralScalar ty x | IntegralDict <- integralDict ty = [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
 
 codegenFloatingScalar :: FloatingType a -> a -> C.Exp
-codegenFloatingScalar (TypeFloat   _) x = C.Const (FloatConst (shows x "f") (toRational x) noSrcLoc) noSrcLoc
-codegenFloatingScalar (TypeCFloat  _) x = C.Const (FloatConst (shows x "f") (toRational x) noSrcLoc) noSrcLoc
-codegenFloatingScalar (TypeDouble  _) x = C.Const (DoubleConst (show x) (toRational x) noSrcLoc) noSrcLoc
-codegenFloatingScalar (TypeCDouble _) x = C.Const (DoubleConst (show x) (toRational x) noSrcLoc) noSrcLoc
+codegenFloatingScalar (TypeFloat   _) x = C.Const (FloatConst (shows x "f") (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeCFloat  _) x = C.Const (FloatConst (shows x "f") (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeDouble  _) x = C.Const (DoubleConst (show x) (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeCDouble _) x = C.Const (DoubleConst (show x) (toRational x) noLoc) noLoc
 
 codegenNonNumScalar :: NonNumType a -> a -> C.Exp
 codegenNonNumScalar (TypeBool   _) x = cbool x

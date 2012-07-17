@@ -71,7 +71,7 @@ ccall :: String -> [Exp] -> Exp
 ccall fn args = [cexp|$id:fn ($args:args)|]
 
 typename :: String -> Type
-typename name = Type (DeclSpec [] [] (Tnamed (Id name noSrcLoc) noSrcLoc) noSrcLoc) (DeclRoot noSrcLoc) noSrcLoc
+typename name = Type (DeclSpec [] [] (Tnamed (Id name noLoc) noLoc) noLoc) (DeclRoot noLoc) noLoc
 
 cchar :: Char -> Exp
 cchar c = [cexp|$char:c|]
@@ -178,7 +178,7 @@ shared' base mprev ix elt =
 -- Turn a plain type into a ptr type
 --
 cptr :: Type -> Type
-cptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noSrcLoc) lb
+cptr t | Type d@(DeclSpec _ _ _ _) r@(DeclRoot _) lb <- t = Type d (Ptr [] r noLoc) lb
        | otherwise                                        = t
 
 

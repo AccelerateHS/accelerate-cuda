@@ -39,8 +39,6 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D
 import Numeric
 import Prelude                                          hiding ( exp, catch )
 import Control.Applicative                              hiding ( Const )
-import Blaze.ByteString.Builder
-import Blaze.ByteString.Builder.Char8
 import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
@@ -55,11 +53,12 @@ import System.FilePath
 import System.IO
 import System.IO.Unsafe
 import System.Process
-import Text.PrettyPrint.Mainland                        ( RDoc(..), ppr, renderCompact )
-import Data.ByteString.Internal                         ( w2c )
+import Text.PrettyPrint.Mainland                        ( ppr, renderCompact, displayLazyText )
 import qualified Data.HashSet                           as Set
 import qualified Data.ByteString                        as B
-import qualified Data.ByteString.Lazy                   as L
+import qualified Data.Text.Lazy                         as T
+import qualified Data.Text.Lazy.IO                      as T
+import qualified Data.Text.Lazy.Encoding                as T
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 
@@ -367,13 +366,13 @@ compile :: KernelTable
 compile table dev acc fvar = do
   exists        <- isJust `fmap` liftIO (KT.lookup table key)
   unless exists $ do
-    message     $  unlines [ show key, map w2c (L.unpack code) ]
+    message     $  unlines [ show key, T.unpack code ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
     (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
     (_,_,_,pid) <- liftIO $ do
       message $ "execute: " ++ nvcc ++ " " ++ unwords flags
-      L.hPut hdl code                 `finally`     hClose hdl
+      T.hPutStr hdl code              `finally`     hClose hdl
       createProcess (proc nvcc flags) `onException` removeFile file
     --
     liftIO $ KT.insert table key (CompileProcess file pid)
@@ -382,15 +381,8 @@ compile table dev acc fvar = do
   where
     cunit       = codegenAcc dev acc fvar
     entry       = show cunit
-    key         = (CUDA.computeCapability dev, hashlazy code)
-    code        = toLazyByteString
-                . layout . renderCompact $ ppr cunit
-    --
-    layout (RText _ s next)     = fromString s  `mappend` layout next
-    layout (RChar c   next)     = fromChar c    `mappend` layout next
-    layout (RLine _   next)     = fromChar '\n' `mappend` layout next   -- no indenting
-    layout (RPos _    next)     = layout next                           -- no line markers
-    layout REmpty               = mempty                                -- done
+    key         = (CUDA.computeCapability dev, hashlazy (T.encodeUtf8 code) )
+    code        = displayLazyText . renderCompact $ ppr cunit
 
 
 -- Wait for the compilation process to finish
