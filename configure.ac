@@ -2,10 +2,9 @@ AC_INIT([accelerate-cuda], [0.13.0.0], [accelerate-haskell@googlegroups.com])
 AC_CONFIG_SRCDIR([Data/Array/Accelerate/CUDA.hs])
 AC_CONFIG_FILES([accelerate-cuda.buildinfo cubits/accelerate_cuda_shape.h])
 
-# This doesn't pick up a user specified '--with-compiler' flag
-#
-AC_PROG_CXX(nvcc)
-AC_PATH_PROG(GHC, ghc)
+AC_ARG_WITH([compiler], [Haskell compiler], [GHC=$withval],  [AC_PATH_PROG(GHC, ghc)])
+AC_ARG_WITH([nvcc],     [CUDA compiler],    [NVCC=$withval], [AC_PROG_CXX(nvcc)])
+AC_ARG_WITH([gcc],      [C compiler],       [CC=$withval])
 
 AC_DEFUN([AC_SIZEOF_HS], [
     AC_MSG_CHECKING(size of [$1])
