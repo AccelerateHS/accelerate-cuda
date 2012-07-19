@@ -404,7 +404,6 @@ compileFlags cufile = do
   ddir <- liftIO getDataDir
   return $ filter (not . null) $
     [ "-I", ddir </> "cubits"
-    , "--compiler-options", "-fno-strict-aliasing"
     , "-arch=sm_" ++ show (round (arch * 10) :: Int)
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
