@@ -232,7 +232,7 @@ codegenFun fun = runCGM $ codegenOpenFun (arity fun) fun Empty
 codegenOpenFun :: Int -> OpenFun env aenv t -> Val env -> CGM (CUFun t)
 codegenOpenFun _lvl (Body e) env = do
   e'    <- codegenOpenExp e env
-  env'  <- environment
+  env'  <- bodycode
   zipWithM_ addVar (expType e) e'
   return $ CUBody (CUExp env' e')
 
@@ -240,7 +240,7 @@ codegenOpenFun lvl (Lam (f :: OpenFun (env,a) aenv b)) env = do
   let ty    = eltType (undefined::a)
       n     = length ty
       vars  = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
-  weaken
+  pushEnv
   f'    <- codegenOpenFun (lvl-1) f (env `Push` vars)
   vars' <- subscripts lvl
   return $ CULam vars' f'
@@ -251,7 +251,7 @@ codegenOpenFun lvl (Lam (f :: OpenFun (env,a) aenv b)) env = do
 codegenExp :: Exp aenv t -> CUExp t
 codegenExp exp = runCGM $ do
   e'    <- codegenOpenExp exp Empty
-  env'  <- environment
+  env'  <- bodycode
   return $ CUExp env' e'
 
 

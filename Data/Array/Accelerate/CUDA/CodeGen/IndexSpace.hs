@@ -67,7 +67,7 @@ mkGenerate dimOut (CULam _ (CUBody (CUExp env fn))) =
             ; ix += gridSize)
         {
             $decls:shape
-            $decls:env
+            $items:env
             $stms:(set "ix" fn)
         }
     }
@@ -126,7 +126,7 @@ mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine))))
         {
             typename DimOut dst;
             $decls:src
-            $decls:envIx
+            $items:envIx
             $stms:dst
 
             if (!ignore(dst))
@@ -134,7 +134,7 @@ mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine))))
                 const int jx = toIndex(shOut, dst);
                 $decls:decl1
                 $decls:temps
-                $decls:env
+                $items:env
                 $stms:(x1 .=. getIn0 "ix")
                 $stms:write
             }
@@ -228,7 +228,7 @@ mkBackpermute dimOut dimIn0 (CULam _ (CUBody (CUExp env prj))) _ =
         {
             typename DimIn0 src;
             $decls:dst
-            $decls:env
+            $items:env
             $stms:src
             {
                 const int jx = toIndex(shIn0, src);

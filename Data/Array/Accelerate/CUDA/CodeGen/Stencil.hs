@@ -83,7 +83,7 @@ mkStencil dim (CULam use0 (CUBody (CUExp env stencil))) boundary _ =
         {
             const typename Shape ix = fromIndex(shIn0, i);
             $decls:(getIn0 "ix")
-            $decls:env
+            $items:env
             $stms:(setOut "i" stencil)
         }
     }
@@ -147,7 +147,7 @@ mkStencil2 dim (CULam use1 (CULam use0 (CUBody (CUExp env stencil)))) boundary1 
             const typename Shape ix = fromIndex(shOut, i);
             $decls:(getIn0 "ix")
             $decls:(getIn1 "ix")
-            $decls:env
+            $items:env
             $stms:(setOut "i" stencil)
         }
     }
