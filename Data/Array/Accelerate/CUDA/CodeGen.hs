@@ -1,4 +1,8 @@
-{-# LANGUAGE CPP, GADTs, PatternGuards, ScopedTypeVariables, QuasiQuotes #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE PatternGuards       #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -20,11 +24,12 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 import Prelude                                                  hiding ( exp )
 import Data.Loc
 import Data.Char
+import Data.Label.PureM
 import Control.Monad
 import Control.Applicative                                      hiding ( Const )
-import Text.PrettyPrint.Mainland
 import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
+import Text.PrettyPrint.Mainland
 import qualified Data.HashSet                                   as Set
 import qualified Language.C                                     as C
 import qualified Foreign.CUDA.Analysis                          as CUDA
@@ -59,6 +64,10 @@ prj :: Idx env t -> Val env -> [C.Exp]
 prj ZeroIdx      (Push _   v) = v
 prj (SuccIdx ix) (Push val _) = prj ix val
 prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
+
+sizeEnv :: Val env -> Int
+sizeEnv Empty        = 0
+sizeEnv (Push env _) = 1 + sizeEnv env
 
 
 -- Array expressions
@@ -328,6 +337,49 @@ codegenOpenExp exp env =
       let cond ty a b   = addVar ty a >> addVar ty b >>
                           return [cexp| $exp:p' ? $exp:a : $exp:b|]
       sequence $ zipWith3 cond (expType t) t' e'
+
+    -- Value recursion
+    --
+    -- TLM: Foolishly, TLM introduced lambda abstractions into the scalar
+    --      language, where previously these were always outermost. He now pays
+    --      for that crime.
+    --
+    Iterate n (Lam f) x -> do
+      -- Generate the initial values used to seed the loop. Bind these initial
+      -- values to fresh variables that the loop will accumulate into.
+      --
+      x'        <- codegenOpenExp x env
+      xn        <- replicateM (length x') fresh
+      let seed   = zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) xn x'
+          acc    = map cvar xn
+
+      -- Generate the loop in an almost clean environment. Specifically, we
+      -- don't want any previous code pieces to be included inside the body.
+      --
+      outer     <- gets bindings
+      bindings  =: []
+
+      -- Generate the loop body. The environment consists of the surrounding
+      -- environment plus the new fresh accumulator variables.
+      --
+      pushEnv
+      CUBody (CUExp f' v') <- codegenOpenFun (sizeEnv env - 1) f (env `Push` acc)
+      i                    <- fresh
+
+      let loop = [cstm| for (int $id:i = 0; $id:i < $int:n; ++ $id:i) {
+                            $items:f'
+                            $stms:(acc .=. v')
+                        } |]
+
+      -- Restore the binding state
+      --
+      bindings  =: outer
+      modify bindings ( map C.BlockDecl (reverse seed) ++ )
+      modify bindings ( C.BlockStm loop : )
+      return acc
+
+    Iterate _ _ _
+      -> INTERNAL_ERROR(error) "codegenOpenExp" "expected unary function"
 
     -- Array indices and shapes
     --

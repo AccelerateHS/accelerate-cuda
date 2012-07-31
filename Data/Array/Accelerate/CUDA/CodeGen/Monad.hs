@@ -15,7 +15,7 @@
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
   runCGM, CGM,
-  bind, use, pushEnv, bodycode, subscripts
+  fresh, bind, use, pushEnv, bodycode, subscripts, freevars, bindings,
 
 ) where
 

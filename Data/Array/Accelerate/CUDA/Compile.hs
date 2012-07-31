@@ -237,6 +237,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Tuple t                 -> liftA  Tuple         <$> travT t
         Prj ix e                -> liftA  (Prj ix)      <$> travE e
         Cond p t e              -> liftA3 Cond          <$> travE p <*> travE t <*> travE e
+        Iterate n f x           -> liftA2 (Iterate n)   <$> travF f <*> travE x
         PrimApp f e             -> liftA  (PrimApp f)   <$> travE e
         IndexScalar a e         -> liftA2 IndexScalar   <$> travA a <*> travE e
         Shape a                 -> liftA  Shape         <$> travA a
@@ -247,6 +248,10 @@ prepareAcc rootAcc = traverseAcc rootAcc
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
+
+        travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF (Body b)  = liftA Body <$> travE b
+        travF (Lam  f)  = liftA Lam  <$> travF f
 
         travT :: Tuple (OpenExp env aenv) t
               -> CIO (AccBindings aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
