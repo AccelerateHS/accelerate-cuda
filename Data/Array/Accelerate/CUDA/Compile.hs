@@ -229,20 +229,23 @@ prepareAcc rootAcc = traverseAcc rootAcc
         IndexAny                -> return $ pure IndexAny
         IndexNil                -> return $ pure IndexNil
         --
-        Let a b                 -> liftA2 Let           <$> travE a <*> travE b
-        IndexCons t h           -> liftA2 IndexCons     <$> travE t <*> travE h
-        IndexHead h             -> liftA  IndexHead     <$> travE h
-        IndexTail t             -> liftA  IndexTail     <$> travE t
-        ToIndex s i             -> liftA2 ToIndex       <$> travE s <*> travE i
-        FromIndex s i           -> liftA2 FromIndex     <$> travE s <*> travE i
-        Tuple t                 -> liftA  Tuple         <$> travT t
-        Prj ix e                -> liftA  (Prj ix)      <$> travE e
-        Cond p t e              -> liftA3 Cond          <$> travE p <*> travE t <*> travE e
-        Iterate n f x           -> liftA2 (Iterate n)   <$> travF f <*> travE x
-        PrimApp f e             -> liftA  (PrimApp f)   <$> travE e
-        IndexScalar a e         -> liftA2 IndexScalar   <$> travA a <*> travE e
-        Shape a                 -> liftA  Shape         <$> travA a
-        ShapeSize e             -> liftA  ShapeSize     <$> travE e
+        Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
+        IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
+        IndexHead h             -> liftA  IndexHead             <$> travE h
+        IndexTail t             -> liftA  IndexTail             <$> travE t
+        IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
+        IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
+        ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
+        FromIndex s i           -> liftA2 FromIndex             <$> travE s <*> travE i
+        Tuple t                 -> liftA  Tuple                 <$> travT t
+        Prj ix e                -> liftA  (Prj ix)              <$> travE e
+        Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
+        Iterate n f x           -> liftA2 (Iterate n)           <$> travF f <*> travE x
+        PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
+        IndexScalar a e         -> liftA2 IndexScalar           <$> travA a <*> travE e
+        Shape a                 -> liftA  Shape                 <$> travA a
+        ShapeSize e             -> liftA  ShapeSize             <$> travE e
+        Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
       where
         travA :: (Shape sh, Elt e)
               => OpenAcc aenv (Array sh e) -> CIO (AccBindings aenv, ExecOpenAcc aenv (Array sh e))

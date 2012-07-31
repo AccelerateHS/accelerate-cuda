@@ -24,7 +24,7 @@ module Data.Array.Accelerate.CUDA.Execute (
 -- friends
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Array.Representation               hiding (Shape, sliceIndex)
+import Data.Array.Accelerate.Array.Representation               hiding ( Shape, sliceIndex )
 import qualified Data.Array.Accelerate.Interpreter              as I
 import qualified Data.Array.Accelerate.Array.Data               as AD
 import qualified Data.Array.Accelerate.Array.Representation     as R
@@ -34,7 +34,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar                   hiding
-   (dim, size, index, shapeToList, sliceIndex)
+   (dim, size, intersect, toIndex, fromIndex, shapeToList, sliceIndex)
 import qualified Data.Array.Accelerate.CUDA.Array.Sugar         as Sugar
 import qualified Data.Array.Accelerate.CUDA.Debug               as D ( message, dump_exec )
 
@@ -731,6 +731,16 @@ executeOpenExp exp env aenv = do
         True            -> executeOpenExp t env aenv
         False           -> executeOpenExp e env aenv
 
+    Iterate lIMIT (Lam (Body f)) x ->
+      let loop !i !acc
+            | i >= lIMIT = return acc
+            | otherwise  = loop (i+1) =<< executeOpenExp f (env `Push` acc) aenv
+      in do
+      x'                <- executeOpenExp x env aenv
+      loop 0 x'
+    --
+    Iterate _ _ _       -> error "impossible evaluation"
+
     -- Array indices and shapes
     IndexAny            -> return Sugar.Any
     IndexNil            -> return Z
@@ -747,6 +757,43 @@ executeOpenExp exp env aenv = do
       (ix :. _)         <- executeOpenExp sh env aenv
       return            $! ix
 
+    IndexSlice sliceIndex slix sh -> do
+      slix'             <- executeOpenExp slix env aenv
+      sh'               <- executeOpenExp sh env aenv
+      return . toElt    $! restrict sliceIndex (fromElt slix') (fromElt sh')
+      where
+        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
+        restrict SliceNil              ()        ()       = ()
+        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)
+          = let sl' = restrict sliceIdx slx sl
+            in  (sl', sz)
+        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz)
+          = restrict sliceIdx slx sl
+
+    IndexFull sliceIndex slix sh -> do
+      slix'             <- executeOpenExp slix env aenv
+      sh'               <- executeOpenExp sh env aenv
+      return . toElt    $! extend sliceIndex (fromElt slix') (fromElt sh')
+      where
+        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
+        extend SliceNil              ()        ()       = ()
+        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz)
+          = let sh' = extend sliceIdx slx sl
+            in  (sh', sz)
+        extend (SliceFixed sliceIdx) (slx, sz) sl
+          = let sh' = extend sliceIdx slx sl
+            in  (sh', sz)
+
+    ToIndex sh ix       -> do
+      sh'               <- executeOpenExp sh env aenv
+      ix'               <- executeOpenExp ix env aenv
+      return            $! Sugar.toIndex sh' ix'
+
+    FromIndex sh ix     -> do
+      sh'               <- executeOpenExp sh env aenv
+      ix'               <- executeOpenExp ix env aenv
+      return            $! Sugar.fromIndex sh' ix'
+
     -- Array shape and element indexing
     IndexScalar acc ix  -> do
       arr'              <- executeOpenAcc acc aenv
@@ -760,6 +807,11 @@ executeOpenExp exp env aenv = do
     ShapeSize e         -> do
       sh                <- executeOpenExp e env aenv
       return            $! size (fromElt sh)
+
+    Intersect sh1 sh2   -> do
+      sh1'              <- executeOpenExp sh1 env aenv
+      sh2'              <- executeOpenExp sh2 env aenv
+      return            $! Sugar.intersect sh1' sh2'
 
 
 -- Evaluate a closed expression

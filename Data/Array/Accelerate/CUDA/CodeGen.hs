@@ -39,7 +39,7 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Representation
+import Data.Array.Accelerate.Array.Representation               hiding ( sliceIndex )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
@@ -400,6 +400,38 @@ codegenOpenExp exp env =
       ix'               <- codegenOpenExp ix env
       return (init ix')
 
+    IndexSlice sliceIndex slix sh -> do
+      slix'             <- codegenOpenExp slix env
+      sh'               <- codegenOpenExp sh env
+
+      return . reverse $ restrict sliceIndex (reverse slix') (reverse sh')
+      where
+        restrict :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+        restrict SliceNil               _   _       = []
+        restrict (SliceAll sliceIdx)    slx (sz:sl)     -- elide Any from the head of slx
+          = let sl' = restrict sliceIdx slx sl
+            in sz : sl'
+        restrict (SliceFixed sliceIdx) (_:slx) (_:sl)
+          = restrict sliceIdx slx sl
+        restrict _ _ _
+          = INTERNAL_ERROR(error) "IndexSlice" "unexpected shapes"
+
+    IndexFull sliceIndex slix sh -> do
+      slix'             <- codegenOpenExp slix env
+      sh'               <- codegenOpenExp sh env
+      return . reverse $ extend sliceIndex (reverse slix') (reverse sh')
+      where
+        extend :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+        extend SliceNil               _   _       = []
+        extend (SliceAll sliceIdx)    slx (sz:sl)       -- elide Any from head of slx
+          = let sh' = extend sliceIdx slx sl
+            in sz : sh'
+        extend (SliceFixed sliceIdx) (sz:slx) sl
+          = let sh' = extend sliceIdx slx sl
+            in sz : sh'
+        extend _ _ _
+          = INTERNAL_ERROR(error) "IndexFull" "unexpected shapes"
+
     ToIndex sh ix       -> do
       sh'               <- codegenOpenExp sh env
       ix'               <- codegenOpenExp ix env
@@ -439,6 +471,11 @@ codegenOpenExp exp env =
           return $ zipWith (\t x -> indexArray t (array x) v) elt [n-1, n-2 .. 0]
 
       | otherwise                -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
+
+    Intersect sh1 sh2   -> do
+      sh1'              <- codegenOpenExp sh1 env
+      sh2'              <- codegenOpenExp sh2 env
+      return $ zipWith (\a b -> ccall "min" [a,b]) sh1' sh2'
 
 
 -- Tuples are defined as snoc-lists, so generate code right-to-left
