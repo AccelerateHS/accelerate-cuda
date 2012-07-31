@@ -136,6 +136,11 @@ executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
     Generate e _        ->
       generateOp kernel bindings aenv =<< executeExp e aenv
 
+    Transform e _ _ a   -> do
+      sh <- executeExp e aenv
+      a0 <- executeOpenAcc a aenv
+      transformOp kernel bindings aenv sh a0
+
     Replicate sliceIndex e a -> do
       slix <- executeExp e aenv
       a0   <- executeOpenAcc a aenv
@@ -260,6 +265,24 @@ generateOp kernel bindings aenv sh = do
   execute kernel bindings aenv (Sugar.size sh)
     (((), out)
         , sh)
+  return res
+
+
+transformOp
+    :: forall aenv sh sh' a b. (Shape sh', Elt b)
+    => AccKernel (Array sh' b)
+    -> AccBindings aenv
+    -> Val aenv
+    -> sh'
+    -> Array sh a
+    -> CIO (Array sh' b)
+transformOp kernel bindings aenv dim' (Array sh0 in0) = do
+  res@(Array sh' out) <- allocateArray dim'
+  execute kernel bindings aenv (size sh')
+    (((((), out)
+          , in0)
+          , dim')
+          , toElt sh0 :: sh)
   return res
 
 

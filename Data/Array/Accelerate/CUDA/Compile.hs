@@ -143,6 +143,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
         Unit e                  -> node =<< liftA  Unit                 <$> travE e
         Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
+        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travA a
         Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
         Index slix a e          -> exec =<< liftA2 (Index slix)         <$> travA a <*> travE e
         Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a

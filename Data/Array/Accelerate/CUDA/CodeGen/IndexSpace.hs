@@ -20,7 +20,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
   mkGenerate,
 
   -- Permutations
-  mkPermute, mkBackpermute,
+  mkTransform, mkPermute, mkBackpermute,
 
   -- Multidimensional index and replicate
   mkSlice, mkReplicate
@@ -76,6 +76,69 @@ mkGenerate dimOut (CULam _ (CUBody (CUExp env fn))) =
     (args, _, set)      = setters tyOut
     tyOut               = eltType (undefined :: e)
     shape               = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+
+
+-- A combination map/backpermute, where the index and value transformations have
+-- been separated.
+--
+-- transform   :: (Elt a, Elt b, Shape sh, Shape sh')
+--             => PreExp     acc aenv sh'               -- dimension of the result
+--             -> PreFun     acc aenv (sh' -> sh)       -- index permutation function
+--             -> PreFun     acc aenv (a   -> b)        -- function to apply at each element
+--             ->            acc aenv (Array sh  a)     -- source array
+--             -> PreOpenAcc acc aenv (Array sh' b)
+--
+mkTransform :: forall sh sh' a b. Elt b
+            => Int                              -- result shape: sh'
+            -> Int                              -- source shape: sh
+            -> CUFun (sh' -> sh)
+            -> CUFun (a -> b)
+            -> CUTranslSkel
+mkTransform dimOut dimIn0
+    (CULam _    (CUBody (CUExp envprj prj)))
+    (CULam use0 (CUBody (CUExp envfun fun))) =
+  CUTranslSkel "transform" [cunit|
+    $edecl:(cdim "DimOut" dimOut)
+    $edecl:(cdim "DimIn0" dimIn0)
+
+    extern "C"
+    __global__ void
+    transform
+    (
+        $params:argOut,
+        $params:argIn0,
+        const typename DimOut shOut,
+        const typename DimIn0 shIn0
+    )
+    {
+        const int shapeSize = size(shOut);
+        const int gridSize  = __umul24(blockDim.x, gridDim.x);
+              int ix;
+
+        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
+            ; ix < shapeSize
+            ; ix += gridSize)
+        {
+            typename DimIn0 src;
+            $decls:dst
+            $items:envprj
+            $stms:src
+            {
+                const int jx = toIndex(shIn0, src);
+                $decls:(getIn0 "jx")
+                $items:envfun
+                $stms:(setOut "ix" fun)
+            }
+        }
+    }
+  |]
+  where
+    tyIn0                       = eltType (undefined :: a)
+    tyOut                       = eltType (undefined :: b)
+    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0 use0
+    (argOut, _, setOut)         = setters tyOut
+    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+    src                         = project dimIn0 "src" prj
 
 
 -- Forward permutation specified by an index mapping that determines for each

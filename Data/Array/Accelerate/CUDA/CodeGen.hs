@@ -114,6 +114,7 @@ codegenAcc dev acc (AccBindings vars) = CUTranslSkel entry (extras : fvars code)
       -- Skeleton nodes
       --
       Generate _ f      -> mkGenerate (accDim acc) (codegenFun f)
+      Transform _ p f a -> mkTransform (accDim acc) (accDim a) (codegenFun p) (codegenFun f)
 
       Replicate sl _ a  -> mkReplicate dimSl dimOut (extend sl) (undefined :: a)
         where
