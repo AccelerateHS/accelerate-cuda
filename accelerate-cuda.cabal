@@ -1,5 +1,5 @@
 Name:                   accelerate-cuda
-Version:                0.12.1.0
+Version:                0.12.1.1
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.4
 Build-type:             Configure
@@ -86,28 +86,28 @@ Flag internal-checks
 Library
   Include-Dirs:         include
 
-  Build-depends:        accelerate              >= 0.12.1 && < 0.13,
-                        array                   >= 0.3,
+  Build-depends:        accelerate              >= 0.12.1       && < 0.13,
+                        array                   >= 0.3          && < 0.5,
                         base                    == 4.*,
-                        binary                  >= 0.5,
-                        blaze-builder           >= 0.3,
-                        bytestring              >= 0.9,
-                        containers              >= 0.4,
-                        cryptohash              >= 0.7,
-                        cuda                    >= 0.4.1,
-                        directory               >= 1.0,
-                        fclabels                >= 1.0,
-                        filepath                >= 1.0,
-                        hashable                >= 1.1,
-                        hashtables              >= 1.0.1,
-                        language-c-quote        >= 0.3,
-                        mainland-pretty         >= 0.1.1,
-                        mtl                     >= 2.0,
-                        pretty                  >= 1.0,
-                        process                 >= 1.0,
-                        srcloc                  >= 0.1,
-                        transformers            >= 0.2,
-                        unordered-containers    >= 0.1.4
+                        binary                  == 0.5.*,
+                        blaze-builder           == 0.3.*,
+                        bytestring              == 0.9.*,
+                        containers              == 0.4.*,
+                        cryptohash              == 0.7.*,
+                        cuda                    >= 0.4.1        && < 0.5,
+                        directory               >= 1.0          && < 1.2,
+                        fclabels                >= 1.0          && < 1.2,
+                        filepath                >= 1.0          && < 1.4,
+                        hashable                == 1.1.*,
+                        hashtables              >= 1.0.1        && < 1.1,
+                        language-c-quote        == 0.3.*,
+                        mainland-pretty         == 0.1.*,
+                        mtl                     >= 2.0          && < 2.2,
+                        pretty                  >= 1.0          && < 1.2,
+                        process                 >= 1.0          && < 1.2,
+                        srcloc                  == 0.1.*,
+                        transformers            >= 0.2          && < 0.4,
+                        unordered-containers    >= 0.1.4        && < 0.3
 
   if os(windows)
     build-depends:      Win32                   >= 2.2.1

@@ -1,4 +1,4 @@
-AC_INIT([accelerate-cuda], [0.13.0.0], [accelerate-haskell@googlegroups.com])
+AC_INIT([accelerate-cuda], [0.12.1.1], [accelerate-haskell@googlegroups.com])
 AC_CONFIG_SRCDIR([Data/Array/Accelerate/CUDA.hs])
 AC_CONFIG_FILES([accelerate-cuda.buildinfo cubits/accelerate_cuda_shape.h])
 
