@@ -135,8 +135,8 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
 
         /*
          * Read in previous result partial sum. We store the carry value in x2
-         * and read new values from the input array into x1, since 'scanBlock'
-         * will store its results into x1 on completion.
+         * and read new values from the input array into x0, since 'scanBlock'
+         * will store its results into x0 on completion.
          */
         int carry_in = 0;
 
@@ -151,19 +151,19 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         for (int i = threadIdx.x; i < interval_size; i += blockDim.x)
         {
             const int j = $id:(if left then "start + i" else "end - i - 1");
-            $stms:(x1 .=. getIn0 "j")
+            $stms:(x0 .=. getIn0 "j")
 
             if ( $exp:carry_in ) {
-                $stms:(x0 .=. x2)
+                $stms:(x1 .=. x2)
                 $decls:env
-                $stms:(x1 .=. combine)
+                $stms:(x0 .=. combine)
             }
 
             /*
              * Store our input into shared memory and perform a cooperative
              * inclusive left scan.
              */
-            $stms:(sdata "threadIdx.x" .=. x1)
+            $stms:(sdata "threadIdx.x" .=. x0)
             __syncthreads();
 
             $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
@@ -176,12 +176,12 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
              */
             if ( $exp:(cbool exclusive) ) {
                 if ( threadIdx.x == 0 ) {
-                    $stms:(x1 .=. x2)
+                    $stms:(x0 .=. x2)
                 } else {
-                    $stms:(x1 .=. sdata "threadIdx.x - 1")
+                    $stms:(x0 .=. sdata "threadIdx.x - 1")
                 }
             }
-            $stms:(setOut "j" x1)
+            $stms:(setOut "j" x0)
 
             /*
              * Carry the final result of this block through the set x2. If this
@@ -257,7 +257,7 @@ arrays base elt =
 -- Scan a block of results in shared memory. We hijack the standard local
 -- variables (x0 and x1) for the combination function. This thread must have
 -- already stored its initial value into shared memory. The final result for
--- this thread will be stored in x1 as well as the appropriate place in shared
+-- this thread will be stored in x0 as well as the appropriate place in shared
 -- memory.
 --
 scanBlock :: DeviceProperties
@@ -282,12 +282,12 @@ scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThread
       [cstm|
         if ( $exp:cta > $int:n ) {
             if ( $exp:inrange ) {
-                $stms:(x0 .=. sdata ix)
+                $stms:(x1 .=. sdata ix)
                 $decls:env
-                $stms:(x1 .=. combine)
+                $stms:(x0 .=. combine)
             }
             __syncthreads();
-            $stms:(sdata "threadIdx.x" .=. x1)
+            $stms:(sdata "threadIdx.x" .=. x0)
             __syncthreads();
         }
       |]
