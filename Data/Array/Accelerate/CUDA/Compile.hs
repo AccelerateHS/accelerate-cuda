@@ -30,21 +30,21 @@ import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Analysis.Launch
-import Data.Array.Accelerate.CUDA.FullList              as FL
-import Data.Array.Accelerate.CUDA.Persistent            as KT
-import qualified Data.Array.Accelerate.CUDA.Debug       as D
+import Data.Array.Accelerate.CUDA.Persistent                    as KT
+import qualified Data.Array.Accelerate.CUDA.FullList            as FL
+import qualified Data.Array.Accelerate.CUDA.Analysis.Launch     as Analysis
+import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Numeric
-import Prelude                                          hiding ( exp, catch )
+import Prelude                                          hiding ( exp, catch, scanl, scanr )
 import Control.Applicative                              hiding ( Const )
 import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
 import Crypto.Hash.MD5                                  ( hashlazy )
 import Data.Label.PureM
-import Data.List
+import Data.List                                        ( intercalate )
 import Data.Maybe
 import Data.Monoid
 import System.Directory
@@ -61,6 +61,7 @@ import qualified Data.Text.Lazy.IO                      as T
 import qualified Data.Text.Lazy.Encoding                as T
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
+import Foreign.CUDA.Analysis                            ( DeviceProperties, Occupancy )
 
 #ifdef VERSION_unix
 import System.Posix.Process
@@ -102,7 +103,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
 
       let exec :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
           exec (var, eacc) = do
-            kernel      <- build acc var
+            kernel      <- buildOpenAcc acc var
             return      $  ExecAcc (FL.singleton () kernel) var eacc
 
           node :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
@@ -151,42 +152,17 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travA a
         FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travA a <*> travA (segments s)
         Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travA a <*> travA (segments s)
+        Scanl f e a             -> scanl f =<< liftA3 Scanl             <$> travF f <*> travE e <*> travA a
+        Scanl' f e a            -> scanl f =<< liftA3 Scanl'            <$> travF f <*> travE e <*> travA a
+        Scanl1 f a              -> scanl f =<< liftA2 Scanl1            <$> travF f <*> travA a
+        Scanr f e a             -> scanr f =<< liftA3 Scanr             <$> travF f <*> travE e <*> travA a
+        Scanr' f e a            -> scanr f =<< liftA3 Scanr'            <$> travF f <*> travE e <*> travA a
+        Scanr1 f a              -> scanr f =<< liftA2 Scanr1            <$> travF f <*> travA a
         Permute f a g b         -> exec =<< liftA4 Permute              <$> travF f <*> travA a <*> travF g <*> travA b
         Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travA a
         Stencil f b a           -> exec =<< liftA2 (flip Stencil b)     <$> travF f <*> travA a
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
-
-        -- TODO: write helper functions to clean these up
-        Scanl f e a -> do
-          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () add $ FL.singleton () scan) var eacc
-
-        Scanl' f e a -> do
-          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanl' <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () (retag add) $ FL.singleton () scan) var eacc
-
-        Scanl1 f a -> do
-          ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanl1 <$> travF f <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () add $ FL.singleton () scan1) var eacc
-
-        Scanr f e a -> do
-          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () add $ FL.singleton () scan) var eacc
-
-        Scanr' f e a -> do
-          ExecAcc (FL _ scan _) var eacc  <- exec =<< liftA3 Scanr' <$> travF f <*> travE e <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () (retag add) $ FL.singleton () scan) var eacc
-
-        Scanr1 f a -> do
-          ExecAcc (FL _ scan1 _) var eacc <- exec =<< liftA2 Scanr1 <$> travF f <*> travA a
-          add           <- build (OpenAcc (Fold1 f mat)) var
-          return        $  ExecAcc (cons () add $ FL.singleton () scan1) var eacc
 
       where
         travA :: OpenAcc aenv' a' -> CIO (AccBindings aenv', ExecOpenAcc aenv' a')
@@ -210,11 +186,34 @@ prepareAcc rootAcc = traverseAcc rootAcc
                               Tuple (NilTup `SnocTup` Var (SuccIdx ZeroIdx)
                                             `SnocTup` Var ZeroIdx))))
 
-        mat :: Elt e => OpenAcc aenv (Array DIM2 e)
-        mat = OpenAcc $ Use ((), Array (((),0),0) undefined)
+        -- Special versions of 'exec' for left and right scans, which include
+        -- the first phase upsweep kernel required for multi-block scans.
+        --
+        -- Using 'acc' for the launch and occupancy configuration of the upsweep
+        -- operation, which is similar to an inclusive scan, is close enough.
+        --
+        scanl :: Fun aenv (e -> e -> e)         -- hmm?
+              -> (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a)
+              -> CIO (ExecOpenAcc aenv a)
+        scanl f (var, eacc) = do
+          scan          <- buildOpenAcc acc var
+          upsweep       <- build (\k d -> compile k d (codegenScanlIntervals d f var))
+                                 (Analysis.launchConfig acc)
+                                 (Analysis.determineOccupancy acc)
+          return        $! ExecAcc (FL.cons () upsweep $ FL.singleton () scan) var eacc
 
-        noKernel :: FullList () (AccKernel a)
-        noKernel =  FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") Nil
+        scanr :: Fun aenv (e -> e -> e)
+              -> (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a)
+              -> CIO (ExecOpenAcc aenv a)
+        scanr f (var, eacc) = do
+          scan          <- buildOpenAcc acc var
+          upsweep       <- build (\k d -> compile k d (codegenScanrIntervals d f var))
+                                 (Analysis.launchConfig acc)
+                                 (Analysis.determineOccupancy acc)
+          return        $! ExecAcc (FL.cons () upsweep $ FL.singleton () scan) var eacc
+
+        noKernel :: FL.FullList () (AccKernel a)
+        noKernel =  FL.FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") FL.Nil
 
     -- Traverse a scalar expression
     --
@@ -271,17 +270,26 @@ liftA4 f a b c d = f <$> a <*> b <*> c <*> d
 -- evaluates and blocks on the external compiler only once the compiled object
 -- is truly needed.
 --
-build :: OpenAcc aenv a -> AccBindings aenv -> CIO (AccKernel a)
-build acc fvar = do
+buildOpenAcc :: OpenAcc aenv a -> AccBindings aenv -> CIO (AccKernel a)
+buildOpenAcc acc fvar =
+  build (\table dev -> compileOpenAcc table dev acc fvar)
+        (Analysis.launchConfig acc)
+        (Analysis.determineOccupancy acc)
+
+build :: (KernelTable -> DeviceProperties -> CIO (String, KernelKey))
+      -> (DeviceProperties -> Occupancy -> (Int, Int -> Int, Int))
+      -> (DeviceProperties -> CUDA.Fun -> Int -> IO Occupancy)
+      -> CIO (AccKernel a)
+build compile' launchConfig determineOccupancy = do
   dev           <- gets deviceProps
   table         <- gets kernelTable
-  (entry,key)   <- compile table dev acc fvar
-  let (cta,blocks,smem) = launchConfig acc dev occ
+  (entry,key)   <- compile' table dev
+  let (cta,blocks,smem) = launchConfig dev occ
       (mdl,fun,occ)     = unsafePerformIO $ do
         m <- link table key
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
-        o <- determineOccupancy acc dev f l
+        o <- determineOccupancy dev f l
         D.when D.dump_cc (stats entry f o)
         return (m,f,o)
   --
@@ -300,7 +308,8 @@ build acc fvar = do
                   ++ shows (CUDA.activeWarps occ)        " warps in "
                   ++ shows (CUDA.activeThreadBlocks occ) " blocks"
       --
-      -- make sure kernel/stats are printed together
+      -- make sure kernel/stats are printed together. Use 'intercalate' rather
+      -- than 'unlines' to avoid a trailing newline.
       --
       message   $ intercalate "\n" [msg1, "     ... " ++ msg2]
 
@@ -358,12 +367,12 @@ link table key =
 
 -- Generate and compile code for a single open array expression
 --
-compile :: KernelTable
-        -> CUDA.DeviceProperties
-        -> OpenAcc aenv a
-        -> AccBindings aenv
-        -> CIO (String, KernelKey)
-compile table dev acc fvar = do
+compileOpenAcc :: KernelTable -> CUDA.DeviceProperties -> OpenAcc aenv a -> AccBindings aenv -> CIO (String, KernelKey)
+compileOpenAcc table dev acc fvar
+  = compile table dev (codegenAcc dev acc fvar)
+
+compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel -> CIO (String, KernelKey)
+compile table dev cunit = do
   exists        <- isJust `fmap` liftIO (KT.lookup table key)
   unless exists $ do
     message     $  unlines [ show key, T.unpack code ]
@@ -379,7 +388,6 @@ compile table dev acc fvar = do
   --
   return (entry, key)
   where
-    cunit       = codegenAcc dev acc fvar
     entry       = show cunit
     key         = (CUDA.computeCapability dev, hashlazy (T.encodeUtf8 code) )
     code        = displayLazyText . renderCompact $ ppr cunit

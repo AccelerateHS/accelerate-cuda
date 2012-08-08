@@ -433,8 +433,10 @@ scanOp
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
-scanOp dir (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
-  let (_,num_intervals,_)       =  configure kscan num_elements
+scanOp dir (FL _ kupsweep (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
+  let num_elements              = size sh0
+      (_,num_intervals,_)       = configure kscan num_elements
+  --
   a_out@(Array _ out)           <- allocateArray (Z :. num_elements + 1)
   (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
   d_out                         <- devicePtrsOfArrayData out
@@ -459,7 +461,7 @@ scanOp dir (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
     message $ "scan phase 1: interval_size = " ++ shows interval_size
                 ", num_intervals = " ++ shows num_intervals
                 ", num_elements = " ++ show num_elements
-    execute kfold1 bindings aenv num_elements
+    execute kupsweep bindings aenv num_elements
       ((((((), blk)
              , in0)
              , convertIx interval_size)
@@ -489,10 +491,6 @@ scanOp dir (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
             , convertIx interval_size)
             , convertIx num_elements)
   return a_out
-  where
-    num_elements                = size sh0
-    kfold1                      = retag kfold1' :: AccKernel (Vector e)
---    kscan1                      = retag kscan1' :: AccKernel (Vector e)
 
 scanOp _ _ _ _ _ = error "I'll just pretend to hug you until you get here."
 
@@ -504,8 +502,10 @@ scan'Op
     -> Val aenv
     -> Vector e
     -> CIO (Vector e, Scalar e)
-scan'Op (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
-  let (_,num_intervals,_)       =  configure kscan num_elements
+scan'Op (FL _ kupsweep (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
+  let num_elements              = size sh0
+      (_,num_intervals,_)       = configure kscan num_elements
+  --
   (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
   a_out@(Array _ out)           <- allocateArray (Z :. num_elements)
   a_sum@(Array _ sum)           <- allocateArray Z
@@ -516,7 +516,7 @@ scan'Op (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
     message $ "scan phase 1: interval_size = " ++ shows interval_size
                 ", num_intervals = " ++ shows num_intervals
                 ", num_elements = " ++ show num_elements
-    execute kfold1 bindings aenv num_elements
+    execute kupsweep bindings aenv num_elements
       ((((((), blk)
              , in0)
              , convertIx interval_size)
@@ -541,9 +541,6 @@ scan'Op (FL _ kfold1' (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
             , convertIx interval_size)
             , convertIx num_elements)
   return (a_out, a_sum)
-  where
-    num_elements        = size sh0
-    kfold1              = retag kfold1' :: AccKernel (Vector e)
 
 scan'Op _ _ _ _ = error "If I promise not to kill you, can I have a hug?"
 
@@ -555,8 +552,10 @@ scan1Op
     -> Val aenv
     -> Vector e
     -> CIO (Vector e)
-scan1Op (FL _ kfold1' (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
-  let (_,num_intervals,_)       =  configure kscan1 num_elements
+scan1Op (FL _ kupsweep (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
+  let num_elements              = size sh0
+      (_,num_intervals,_)       = configure kscan1 num_elements
+  --
   (Array _ sum)                 <- allocateArray Z                      :: CIO (Scalar e)
   (Array _ blk)                 <- allocateArray (Z :. num_intervals)   :: CIO (Vector e)
   a_out@(Array _ out)           <- allocateArray (Z :. num_elements)
@@ -567,7 +566,7 @@ scan1Op (FL _ kfold1' (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
     message $ "scan phase 1: interval_size = " ++ shows interval_size
                 ", num_intervals = " ++ shows num_intervals
                 ", num_elements = " ++ show num_elements
-    execute kfold1 bindings aenv num_elements
+    execute kupsweep bindings aenv num_elements
       ((((((), blk)
              , in0)
              , convertIx interval_size)
@@ -593,8 +592,6 @@ scan1Op (FL _ kfold1' (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
             , convertIx num_elements)
   return a_out
   where
-    num_elements        = size sh0
-    kfold1              = retag kfold1' :: AccKernel (Vector e)
 
 scan1Op _ _ _ _ = error "If you get wet, you'll get sick."
 

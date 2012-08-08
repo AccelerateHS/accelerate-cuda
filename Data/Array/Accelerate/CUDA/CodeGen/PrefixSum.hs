@@ -17,9 +17,10 @@ module  Data.Array.Accelerate.CUDA.CodeGen.PrefixSum (
 
   -- skeletons
   mkScanl, mkScanr,
+  mkScanlIntervals, mkScanrIntervals,
 
   -- closets
-  scanBlock
+  scanBlock,
 
 ) where
 
@@ -43,6 +44,10 @@ instance Show Direction where
 mkScanl, mkScanr :: DeviceProperties -> CUFun (a -> a -> a) -> Maybe (CUExp a) -> CUTranslSkel
 mkScanl = mkScan L
 mkScanr = mkScan R
+
+mkScanlIntervals, mkScanrIntervals :: DeviceProperties -> CUFun (a -> a -> a) -> CUTranslSkel
+mkScanlIntervals = mkScanIntervals L
+mkScanrIntervals = mkScanIntervals R
 
 
 -- [OVERVIEW]
@@ -237,6 +242,90 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             $stms:(x2 .=. seed)
         }
       |]
+
+
+-- This computes the _upsweep_ phase of a multi-block scan. This is much like a
+-- regular inclusive scan, except that only the final value for each interval is
+-- output, rather than the entire body of the scan. Indeed, if the combination
+-- function were commutative, this is equivalent to a parallel tree reduction.
+--
+mkScanIntervals
+    :: forall a.
+       Direction
+    -> DeviceProperties
+    -> CUFun (a -> a -> a)
+    -> CUTranslSkel
+mkScanIntervals dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) =
+  CUTranslSkel name [cunit|
+    extern "C"
+    __global__ void
+    $id:name
+    (
+        $params:argOut,
+        $params:argIn0,
+              typename Ix interval_size,
+        const typename Ix num_intervals,
+        const typename Ix num_elements
+    )
+    {
+        $decls:smem
+        $decls:decl1
+        $decls:decl0
+
+        const int start = blockIdx.x * interval_size;
+        const int end   = min(start + interval_size, num_elements);
+        interval_size   = end - start;
+
+        int carry_in    = false;
+
+        for (int i = threadIdx.x; i < interval_size; i += blockDim.x)
+        {
+            const int j = $id:(if dir == L then "start + i" else "end - i - 1");
+            $stms:(x0 .=. getIn0 "j")
+
+            /*
+             * Carry in the result from the previous segment, stored in x1
+             */
+            if ( threadIdx.x == 0 && carry_in ) {
+                $decls:env
+                $stms:(x0 .=. combine)
+            }
+
+            /*
+             * Store our input into shared memory and perform a cooperative
+             * inclusive left scan.
+             */
+            $stms:(sdata "threadIdx.x" .=. x0)
+            __syncthreads();
+
+            $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
+
+            /*
+             * Add the final result of this block to the set x1. If this is the
+             * final interval, this value is written out as the interval sum.
+             */
+            if ( threadIdx.x == 0 ) {
+                const int last = min(interval_size - i, blockDim.x) - 1;
+                $stms:(x1 .=. sdata "last")
+            }
+            carry_in = true;
+        }
+
+        /*
+         * Finally, the first thread writes the result for this segment.
+         */
+        if ( threadIdx.x == 0 ) {
+            $stms:(setOut "blockIdx.x" x1)
+        }
+    }
+  |]
+  where
+    name                                = "scan" ++ show dir ++ "Itv"
+    elt                                 = eltType (undefined :: a)
+    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt use0
+    (argOut, _, setOut)                 = setters elt
+    (x1,   decl1)                       = locals "x1" elt
+    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
 
 
 --------------------------------------------------------------------------------

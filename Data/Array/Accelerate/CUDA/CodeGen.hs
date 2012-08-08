@@ -12,7 +12,8 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc
+  CUTranslSkel, codegenAcc,
+  codegenScanlIntervals, codegenScanrIntervals,
 
 ) where
 
@@ -240,6 +241,26 @@ codegenOpenAcc dev acc@(OpenAcc pacc) = case pacc of
     codegenBoundary _ (Constant c)
       = Constant . CUExp []
       $ codegenConst (Sugar.eltType (undefined::e)) c
+
+
+-- Exceptional cases
+-- -----------------
+
+-- Scan is a multi-pass algorithm that requires a few additional operations not
+-- in the standard set. These helper functions generate the necessary code.
+--
+codegenScanlIntervals, codegenScanrIntervals
+    :: CUDA.DeviceProperties
+    -> Fun aenv (a -> a -> a)
+    -> AccBindings aenv
+    -> CUTranslSkel
+codegenScanlIntervals dev f avar
+  = codegenBindEnv avar
+  $ mkScanlIntervals dev (codegenFun f)
+
+codegenScanrIntervals dev f avar
+  = codegenBindEnv avar
+  $ mkScanrIntervals dev (codegenFun f)
 
 
 -- Scalar Expressions
