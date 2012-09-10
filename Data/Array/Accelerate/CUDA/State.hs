@@ -152,7 +152,7 @@ deviceInfo dev prp = render $ reset <>
                           ]
   where
     name        = text (CUDA.deviceName prp)
-    compute     = text "compute capatability" <+> double (CUDA.computeCapability prp)
+    compute     = text "compute capatability" <+> text (show $ CUDA.computeCapability prp)
     devID       = text "Device" <+> int (fromIntegral $ CUDA.useDevice dev)     -- hax
     processors  = int (CUDA.multiProcessorCount prp)                              <+> text "multiprocessors"
     cores       = int (CUDA.multiProcessorCount prp * coresPerMultiProcessor prp) <+> text "cores"

@@ -246,9 +246,9 @@ mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine))))
         )
     --
     reinterpret :: Int -> Maybe Exp
-    reinterpret 4 | sm >= 1.1   = Just [cexp| $id:("atomicCAS32") |]
-    reinterpret 8 | sm >= 1.2   = Just [cexp| $id:("atomicCAS64") |]
-    reinterpret _               = Nothing
+    reinterpret 4 | sm >= Compute 1 1   = Just [cexp| $id:("atomicCAS32") |]
+    reinterpret 8 | sm >= Compute 1 2   = Just [cexp| $id:("atomicCAS64") |]
+    reinterpret _                       = Nothing
 
 
 -- Backwards permutation (gather) of an array according to a permutation

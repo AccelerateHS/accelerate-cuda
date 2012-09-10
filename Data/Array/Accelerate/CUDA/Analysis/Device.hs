@@ -16,6 +16,7 @@ import Data.Ord
 import Data.List
 import Data.Function
 import Foreign.CUDA.Driver.Device
+import Foreign.CUDA.Analysis.Device
 import qualified Foreign.CUDA.Driver    as CUDA
 
 
@@ -45,9 +46,17 @@ selectBestDevice = do
 -- executing in lockstep in half-warp groupings (16 ALUs).
 --
 coresPerMultiProcessor :: DeviceProperties -> Int
-coresPerMultiProcessor prp
-  | computeCapability prp < 2   = 8
-  | computeCapability prp < 2.1 = 32
-  | otherwise                   = 48
+coresPerMultiProcessor dev =
+  let Compute major minor  = computeCapability dev
+  in case (major, minor) of
+    (1, 0)      -> 8     -- Tesla G80
+    (1, 1)      -> 8     -- Tesla G8x
+    (1, 2)      -> 8     -- Tesla G9x
+    (1, 3)      -> 8     -- Tesla GT200
+    (2, 1)      -> 32    -- Fermi GF100
+    (2, 2)      -> 48    -- Fermi GF10x
+    (3, 0)      -> 192   -- Kepler GK10x
+    (3, 5)      -> 192   -- Kepler GK11x
 
+    _           -> -1    -- unknown
 

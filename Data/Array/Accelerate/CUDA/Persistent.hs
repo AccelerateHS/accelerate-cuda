@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}   -- CUDA.Context
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Persistent
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -35,6 +36,7 @@ import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
 import Data.Version
+import Data.Hashable
 import Data.Binary
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
@@ -47,6 +49,15 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 
 import Paths_accelerate_cuda
+
+
+instance Hashable CUDA.Compute where
+  hash (CUDA.Compute major minor)
+    = hash major `hashWithSalt` minor
+
+instance Binary CUDA.Compute where
+  put (CUDA.Compute major minor) = put major >> put minor
+  get                            = CUDA.Compute <$> get <*> get
 
 
 -- Interface -------------------------------------------------------------------

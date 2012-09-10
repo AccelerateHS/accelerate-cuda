@@ -411,11 +411,11 @@ waitFor pid = do
 --
 compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
-  arch <- CUDA.computeCapability `fmap` gets deviceProps
-  ddir <- liftIO getDataDir
-  return $ filter (not . null) $
+  CUDA.Compute m n      <- CUDA.computeCapability `fmap` gets deviceProps
+  ddir                  <- liftIO getDataDir
+  return                $  filter (not . null) $
     [ "-I", ddir </> "cubits"
-    , "-arch=sm_" ++ show (round (arch * 10) :: Int)
+    , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
     , if D.mode D.dump_cc  then ""   else "--disable-warnings"
