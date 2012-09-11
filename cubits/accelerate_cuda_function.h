@@ -48,6 +48,31 @@ static __inline__ __device__ T idiv(const T x, const T y)
     return x > 0 && y < 0 ? (x - y - 1) / y : (x < 0 && y > 0 ? (x - y + 1) / y : x / y);
 }
 
+template <>
+static __inline__ __device__ Word8 idiv(const Word8 x, const Word8 y)
+{
+    return x / y;
+}
+
+template <>
+static __inline__ __device__ Word16 idiv(const Word16 x, const Word16 y)
+{
+    return x / y;
+}
+
+template <>
+static __inline__ __device__ Word32 idiv(const Word32 x, const Word32 y)
+{
+    return x / y;
+}
+
+template <>
+static __inline__ __device__ Word64 idiv(const Word64 x, const Word64 y)
+{
+    return x / y;
+}
+
+
 /*
  * Integer modulus, Haskell style
  */
@@ -57,6 +82,31 @@ static __inline__ __device__ T mod(const T x, const T y)
     const T r = x % y;
     return x > 0 && y < 0 || x < 0 && y > 0 ? (r != 0 ? r + y : 0) : r;
 }
+
+template <>
+static __inline__ __device__ Word8 mod(const Word8 x, const Word8 y)
+{
+    return x % y;
+}
+
+template <>
+static __inline__ __device__ Word16 mod(const Word16 x, const Word16 y)
+{
+    return x % y;
+}
+
+template <>
+static __inline__ __device__ Word32 mod(const Word32 x, const Word32 y)
+{
+    return x % y;
+}
+
+template <>
+static __inline__ __device__ Word64 mod(const Word64 x, const Word64 y)
+{
+    return x % y;
+}
+
 
 
 /*
