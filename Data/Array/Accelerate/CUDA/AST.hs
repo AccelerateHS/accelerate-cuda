@@ -15,8 +15,8 @@
 module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
-  AccKernel(..), AccBindings(..), ArrayVar(..), ExecAcc, ExecAfun, ExecOpenAcc(..),
-  retag
+  AccKernel(..), AccBindings(..), ArrayVar(..),
+  ExecAcc, ExecAfun, ExecOpenAcc(..),
 
 ) where
 
@@ -48,13 +48,6 @@ data AccKernel a where
             -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
             -> !(Int -> Int)                    -- number of blocks for input problem size
             -> AccKernel a
-
-
--- The kernel lists are monomorphic, so sometimes we need to change the phantom
--- type of the object code.
---
-retag :: AccKernel a -> AccKernel b
-retag (AccKernel x1 x2 x3 x4 x5 x6 x7) = AccKernel x1 x2 x3 x4 x5 x6 x7
 
 
 -- Kernel execution is asynchronous, barriers allow (cross-stream)
