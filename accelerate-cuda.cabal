@@ -1,5 +1,5 @@
 Name:                   accelerate-cuda
-Version:                0.12.1.1
+Version:                0.12.1.2
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.4
 Build-type:             Configure
