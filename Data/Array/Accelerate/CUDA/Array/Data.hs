@@ -37,7 +37,7 @@ import Control.Monad.Trans
 -- friends
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt )
-import Data.Array.Accelerate.Array.Representation       ( size, index )
+import Data.Array.Accelerate.Array.Representation       ( size, toIndex )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
@@ -144,7 +144,7 @@ useArrayAsync (Array sh adata) ms = run doUse
 indexArray :: (Shape dim, Elt e) => Array dim e -> dim -> CIO e
 indexArray (Array sh adata) ix = run doIndex
   where
-    i              = index sh (fromElt ix)
+    i              = toIndex sh (fromElt ix)
     doIndex ctx mt = toElt <$> indexR arrayElt adata
       where
         indexR :: ArrayEltR e -> ArrayData e -> IO e

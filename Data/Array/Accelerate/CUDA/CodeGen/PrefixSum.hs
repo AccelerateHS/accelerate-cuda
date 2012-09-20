@@ -160,7 +160,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
 
             if ( $exp:carry_in ) {
                 $stms:(x1 .=. x2)
-                $decls:env
+                $items:env
                 $stms:(x0 .=. combine)
             }
 
@@ -238,7 +238,7 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         if ( gridDim.x > 1 ) {
             $stms:(x2 .=. blkSum "blockIdx.x")
         } else {
-            $decls:env'
+            $items:env'
             $stms:(x2 .=. seed)
         }
       |]
@@ -287,7 +287,7 @@ mkScanIntervals dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) =
              * Carry in the result from the previous segment, stored in x1
              */
             if ( threadIdx.x == 0 && carry_in ) {
-                $decls:env
+                $items:env
                 $stms:(x0 .=. combine)
             }
 
@@ -354,7 +354,7 @@ scanBlock :: DeviceProperties
           -> Maybe Exp                  -- partially-full block bounds check?
           -> Exp                        -- CTA size
           -> (String -> [Exp])          -- index shared memory area
-          -> [InitGroup]                -- local environment for the..
+          -> [BlockItem]                -- local environment for the..
           -> [Exp]                      -- ..binary function
           -> [Stm]
 scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThreads]
@@ -372,7 +372,7 @@ scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThread
         if ( $exp:cta > $int:n ) {
             if ( $exp:inrange ) {
                 $stms:(x1 .=. sdata ix)
-                $decls:env
+                $items:env
                 $stms:(x0 .=. combine)
             }
             __syncthreads();

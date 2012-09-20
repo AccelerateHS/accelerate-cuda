@@ -145,6 +145,7 @@ sharedMem _ (Reshape _ _) _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
 
 -- skeleton nodes
 sharedMem _ (Generate _ _)       _        = 0
+sharedMem _ (Transform _ _ _ _)  _        = 0
 sharedMem _ (Replicate _ _ _)    _        = 0
 sharedMem _ (Index _ _ _)        _        = 0
 sharedMem _ (Map _ _)            _        = 0

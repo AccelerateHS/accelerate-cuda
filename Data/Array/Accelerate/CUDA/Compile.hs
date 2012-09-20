@@ -144,6 +144,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
         Unit e                  -> node =<< liftA  Unit                 <$> travE e
         Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
+        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travA a
         Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
         Index slix a e          -> exec =<< liftA2 (Index slix)         <$> travA a <*> travE e
         Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a
@@ -227,23 +228,33 @@ prepareAcc rootAcc = traverseAcc rootAcc
         IndexAny                -> return $ pure IndexAny
         IndexNil                -> return $ pure IndexNil
         --
-        Let a b                 -> liftA2 Let           <$> travE a <*> travE b
-        IndexCons t h           -> liftA2 IndexCons     <$> travE t <*> travE h
-        IndexHead h             -> liftA  IndexHead     <$> travE h
-        IndexTail t             -> liftA  IndexTail     <$> travE t
-        Tuple t                 -> liftA  Tuple         <$> travT t
-        Prj ix e                -> liftA  (Prj ix)      <$> travE e
-        Cond p t e              -> liftA3 Cond          <$> travE p <*> travE t <*> travE e
-        PrimApp f e             -> liftA  (PrimApp f)   <$> travE e
-        IndexScalar a e         -> liftA2 IndexScalar   <$> travA a <*> travE e
-        Shape a                 -> liftA  Shape         <$> travA a
-        ShapeSize e             -> liftA  ShapeSize     <$> travE e
+        Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
+        IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
+        IndexHead h             -> liftA  IndexHead             <$> travE h
+        IndexTail t             -> liftA  IndexTail             <$> travE t
+        IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
+        IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
+        ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
+        FromIndex s i           -> liftA2 FromIndex             <$> travE s <*> travE i
+        Tuple t                 -> liftA  Tuple                 <$> travT t
+        Prj ix e                -> liftA  (Prj ix)              <$> travE e
+        Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
+        Iterate n f x           -> liftA2 (Iterate n)           <$> travF f <*> travE x
+        PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
+        IndexScalar a e         -> liftA2 IndexScalar           <$> travA a <*> travE e
+        Shape a                 -> liftA  Shape                 <$> travA a
+        ShapeSize e             -> liftA  ShapeSize             <$> travE e
+        Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
       where
         travA :: (Shape sh, Elt e)
               => OpenAcc aenv (Array sh e) -> CIO (AccBindings aenv, ExecOpenAcc aenv (Array sh e))
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
+
+        travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF (Body b)  = liftA Body <$> travE b
+        travF (Lam  f)  = liftA Lam  <$> travF f
 
         travT :: Tuple (OpenExp env aenv) t
               -> CIO (AccBindings aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
@@ -408,11 +419,11 @@ waitFor pid = do
 --
 compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
-  arch <- CUDA.computeCapability `fmap` gets deviceProps
-  ddir <- liftIO getDataDir
-  return $ filter (not . null) $
+  CUDA.Compute m n      <- CUDA.computeCapability `fmap` gets deviceProps
+  ddir                  <- liftIO getDataDir
+  return                $  filter (not . null) $
     [ "-I", ddir </> "cubits"
-    , "-arch=sm_" ++ show (round (arch * 10) :: Int)
+    , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
     , if D.mode D.dump_cc  then ""   else "--disable-warnings"

@@ -85,7 +85,7 @@ mkFoldAll dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
             for (i += gridSize; i < num_elements; i += gridSize)
             {
                 $stms:(x0 .=. getIn0 "i")
-                $decls:env
+                $items:env
                 $stms:(x1 .=. combine)
             }
         }
@@ -122,15 +122,15 @@ mkFoldAll dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
     exclusive_finish (CUExp env' seed)  = [[cstm|
       if (num_elements > 0) {
           if (gridDim.x == 1) {
-              $decls:env'
+              $items:env'
               $stms:(x0 .=. seed)
-              $decls:env
+              $items:env
               $stms:(x1 .=. combine)
           }
           $stms:(setOut "blockIdx.x" x1)
       }
       else {
-          $decls:env'
+          $items:env'
           $stms:(setOut "blockIdx.x" seed)
       }
     |]]
@@ -215,7 +215,7 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
                     $decls:(getTmp "i + blockDim.x")
 
                     if (i >= start) {
-                        $decls:env
+                        $items:env
                         $stms:(x1 .=. combine)
                     }
                     else {
@@ -229,7 +229,7 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
                 for (i += 2 * blockDim.x; i < end; i += blockDim.x)
                 {
                     $stms:(x0 .=. getIn0 "i")
-                    $decls:env
+                    $items:env
                     $stms:(x1 .=. combine)
                 }
             }
@@ -268,9 +268,9 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
         $stms:(setOut "seg" x1)
     } |]
     exclusive_finish (CUExp env' seed)  = [cstm| {
-        $decls:env'
+        $items:env'
         $stms:(x0 .=. seed)
-        $decls:env
+        $items:env
         $stms:(x1 .=. combine)
         $stms:(setOut "seg" x1)
     } |]
@@ -285,7 +285,7 @@ mkFold dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
               ; seg < num_intervals
               ; seg += gridSize )
           {
-              $decls:env'
+              $items:env'
               $stms:(setOut "seg" seed)
           }
           return;
@@ -400,7 +400,7 @@ mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) msee
                     $decls:(getTmp "i + warpSize")
 
                     if (i >= start) {
-                        $decls:env
+                        $items:env
                         $stms:(x1 .=. combine)
                     }
                     else {
@@ -414,7 +414,7 @@ mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) msee
                 for (i += 2 * warpSize; i < end; i += warpSize)
                 {
                     $stms:(x0 .=. getIn0 "i")
-                    $decls:env
+                    $items:env
                     $stms:(x1 .=. combine)
                 }
             }
@@ -451,12 +451,12 @@ mkFoldSeg dev dim tySeg (CULam _ (CULam use0 (CUBody (CUExp env combine)))) msee
     inclusive_finish                    = setOut "seg" x1
     exclusive_finish (CUExp env' seed)  = [cstm|
       if (num_elements > 0) {
-          $decls:env'
+          $items:env'
           $stms:(x0 .=. seed)
-          $decls:env
+          $items:env
           $stms:(x1 .=. combine)
       } else {
-          $decls:env'
+          $items:env'
           $stms:(x1 .=. seed)
       }|] :
       setOut "seg" x1
@@ -476,7 +476,7 @@ reduceWarp :: DeviceProperties
            -> String                    -- number of elements
            -> String                    -- thread identifier: usually the lane or thread id
            -> (String -> [Exp])         -- index shared memory
-           -> [InitGroup]               -- local binding environment for the..
+           -> [BlockItem]               -- local binding environment for the..
            -> [Exp]                     -- ..binary associative combination function
            -> [Stm]
 reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
@@ -490,7 +490,7 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
       | i > 1
       = [cstm| if ( $id:tid + $int:i < $id:n ) {
                    $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-                   $decls:env
+                   $items:env
                    $stms:(x1 .=. combine)
                    $stms:(sdata "threadIdx.x" .=. x1)
                }
@@ -499,7 +499,7 @@ reduceWarp dev elt n tid sdata env combine = map (reduce . pow2) [v,v-1..0]
       | otherwise
       = [cstm| if ( $id:tid + $int:i < $id:n ) {
                    $stms:(x0 .=. sdata "threadIdx.x + 1")
-                   $decls:env
+                   $items:env
                    $stms:(x1 .=. combine)
                }
              |]
@@ -513,7 +513,7 @@ reduceBlock :: DeviceProperties
             -> [Type]
             -> String                   -- number of elements
             -> (String -> [Exp])        -- index shared memory
-            -> [InitGroup]              -- local binding environment for the..
+            -> [BlockItem]              -- local binding environment for the..
             -> [Exp]                    -- ..binary associative function
             -> [Stm]
 reduceBlock dev elt n sdata env combine = concatMap (reduce . pow2) [u-1,u-2..v]
@@ -528,7 +528,7 @@ reduceBlock dev elt n sdata env combine = concatMap (reduce . pow2) [u-1,u-2..v]
       | i > warpSize dev
       = [cstm| if ( threadIdx.x + $int:i < $id:n ) {
                    $stms:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-                   $decls:env
+                   $items:env
                    $stms:(x1 .=. combine)
                    $stms:(sdata "threadIdx.x" .=. x1)
                } |]

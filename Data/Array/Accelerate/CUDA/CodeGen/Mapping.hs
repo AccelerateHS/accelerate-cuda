@@ -53,7 +53,7 @@ mkMap (CULam use0 (CUBody (CUExp env fn))) =
             ; ix += gridSize)
         {
             $decls:(getIn0 "ix")
-            $decls:env
+            $items:env
             $stms:(setOut "ix" fn)
         }
     }
@@ -107,7 +107,7 @@ mkZipWith dim (CULam use1 (CULam use0 (CUBody (CUExp env fn)))) =
             const int ix0 = toIndex(shIn0, fromIndex(shOut, ix));
             $decls:(getIn0 "ix0")
             $decls:(getIn1 "ix1")
-            $decls:env
+            $items:env
             $stms:(setOut "ix" fn)
         }
     }

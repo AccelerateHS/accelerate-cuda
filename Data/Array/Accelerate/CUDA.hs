@@ -1,4 +1,7 @@
-{-# LANGUAGE BangPatterns, CPP, GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -65,7 +68,8 @@ import Foreign.CUDA.Driver                              ( Context )
 import Foreign.CUDA.Driver.Error
 
 -- friends
-import Data.Array.Accelerate.Smart                      ( Acc, convertAcc, convertAccFun1 )
+import Data.Array.Accelerate.Smart                      ( Acc )
+import Data.Array.Accelerate.Trafo                      ( convertAcc, convertAccFun1 )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.State

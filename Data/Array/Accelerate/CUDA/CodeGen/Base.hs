@@ -58,7 +58,7 @@ data CUFun a where
   CULam  :: Elt a => [(Int, Type, Exp)] -> CUFun t -> CUFun (a -> t)
 
 data CUExp e where
-  CUExp  :: [InitGroup] -> [Exp] -> CUExp e
+  CUExp  :: [BlockItem] -> [Exp] -> CUExp e
 
 
 -- Expression and Declaration generation

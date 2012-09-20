@@ -1,4 +1,8 @@
-{-# LANGUAGE CPP, GADTs, PatternGuards, ScopedTypeVariables, QuasiQuotes #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE PatternGuards       #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -21,11 +25,12 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 import Prelude                                                  hiding ( exp )
 import Data.Loc
 import Data.Char
+import Data.Label.PureM
 import Control.Monad
 import Control.Applicative                                      hiding ( Const )
-import Text.PrettyPrint.Mainland
 import Language.C.Syntax                                        ( Const(..) )
 import Language.C.Quote.CUDA
+import Text.PrettyPrint.Mainland
 import qualified Data.HashSet                                   as Set
 import qualified Language.C                                     as C
 import qualified Foreign.CUDA.Analysis                          as CUDA
@@ -35,7 +40,7 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Representation
+import Data.Array.Accelerate.Array.Representation               hiding ( sliceIndex )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
@@ -60,6 +65,10 @@ prj :: Idx env t -> Val env -> [C.Exp]
 prj ZeroIdx      (Push _   v) = v
 prj (SuccIdx ix) (Push val _) = prj ix val
 prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
+
+sizeEnv :: Val env -> Int
+sizeEnv Empty        = 0
+sizeEnv (Push env _) = 1 + sizeEnv env
 
 
 -- Array expressions
@@ -128,6 +137,9 @@ codegenOpenAcc dev acc@(OpenAcc pacc) = case pacc of
   --
   Generate _ f ->
     mkGenerate (accDim acc) (codegenFun f)
+
+  Transform _ p f a ->
+    mkTransform (accDim acc) (accDim a) (codegenFun p) (codegenFun f)
 
   Replicate sl _ a ->
     mkReplicate dimSl dimOut (extend sl) (undefined :: a)
@@ -283,7 +295,7 @@ codegenFun fun = runCGM $ codegenOpenFun (arity fun) fun Empty
 codegenOpenFun :: Int -> OpenFun env aenv t -> Val env -> CGM (CUFun t)
 codegenOpenFun _lvl (Body e) env = do
   e'    <- codegenOpenExp e env
-  env'  <- environment
+  env'  <- bodycode
   zipWithM_ addVar (expType e) e'
   return $ CUBody (CUExp env' e')
 
@@ -291,7 +303,7 @@ codegenOpenFun lvl (Lam (f :: OpenFun (env,a) aenv b)) env = do
   let ty    = eltType (undefined::a)
       n     = length ty
       vars  = map (\i -> cvar ('x':shows lvl "_a" ++ show i)) [n-1,n-2..0]
-  weaken
+  pushEnv
   f'    <- codegenOpenFun (lvl-1) f (env `Push` vars)
   vars' <- subscripts lvl
   return $ CULam vars' f'
@@ -302,7 +314,7 @@ codegenOpenFun lvl (Lam (f :: OpenFun (env,a) aenv b)) env = do
 codegenExp :: Exp aenv t -> CUExp t
 codegenExp exp = runCGM $ do
   e'    <- codegenOpenExp exp Empty
-  env'  <- environment
+  env'  <- bodycode
   return $ CUExp env' e'
 
 
@@ -380,6 +392,49 @@ codegenOpenExp exp env =
                           return [cexp| $exp:p' ? $exp:a : $exp:b|]
       sequence $ zipWith3 cond (expType t) t' e'
 
+    -- Value recursion
+    --
+    -- TLM: Foolishly, TLM introduced lambda abstractions into the scalar
+    --      language, where previously these were always outermost. He now pays
+    --      for that crime.
+    --
+    Iterate n (Lam f) x -> do
+      -- Generate the initial values used to seed the loop. Bind these initial
+      -- values to fresh variables that the loop will accumulate into.
+      --
+      x'        <- codegenOpenExp x env
+      xn        <- replicateM (length x') fresh
+      let seed   = zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) xn x'
+          acc    = map cvar xn
+
+      -- Generate the loop in an almost clean environment. Specifically, we
+      -- don't want any previous code pieces to be included inside the body.
+      --
+      outer     <- gets bindings
+      bindings  =: []
+
+      -- Generate the loop body. The environment consists of the surrounding
+      -- environment plus the new fresh accumulator variables.
+      --
+      pushEnv
+      CUBody (CUExp f' v') <- codegenOpenFun (sizeEnv env - 1) f (env `Push` acc)
+      i                    <- fresh
+
+      let loop = [cstm| for (int $id:i = 0; $id:i < $int:n; ++ $id:i) {
+                            $items:f'
+                            $stms:(acc .=. v')
+                        } |]
+
+      -- Restore the binding state
+      --
+      bindings  =: outer
+      modify bindings ( map C.BlockDecl (reverse seed) ++ )
+      modify bindings ( C.BlockStm loop : )
+      return acc
+
+    Iterate _ _ _
+      -> INTERNAL_ERROR(error) "codegenOpenExp" "expected unary function"
+
     -- Array indices and shapes
     --
     IndexNil            -> return []
@@ -397,6 +452,48 @@ codegenOpenExp exp env =
     IndexTail ix        -> do
       ix'               <- codegenOpenExp ix env
       return (init ix')
+
+    IndexSlice sliceIndex slix sh -> do
+      slix'             <- codegenOpenExp slix env
+      sh'               <- codegenOpenExp sh env
+
+      return . reverse $ restrict sliceIndex (reverse slix') (reverse sh')
+      where
+        restrict :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+        restrict SliceNil               _   _       = []
+        restrict (SliceAll sliceIdx)    slx (sz:sl)     -- elide Any from the head of slx
+          = let sl' = restrict sliceIdx slx sl
+            in sz : sl'
+        restrict (SliceFixed sliceIdx) (_:slx) (_:sl)
+          = restrict sliceIdx slx sl
+        restrict _ _ _
+          = INTERNAL_ERROR(error) "IndexSlice" "unexpected shapes"
+
+    IndexFull sliceIndex slix sh -> do
+      slix'             <- codegenOpenExp slix env
+      sh'               <- codegenOpenExp sh env
+      return . reverse $ extend sliceIndex (reverse slix') (reverse sh')
+      where
+        extend :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+        extend SliceNil               _   _       = []
+        extend (SliceAll sliceIdx)    slx (sz:sl)       -- elide Any from head of slx
+          = let sh' = extend sliceIdx slx sl
+            in sz : sh'
+        extend (SliceFixed sliceIdx) (sz:slx) sl
+          = let sh' = extend sliceIdx slx sl
+            in sz : sh'
+        extend _ _ _
+          = INTERNAL_ERROR(error) "IndexFull" "unexpected shapes"
+
+    ToIndex sh ix       -> do
+      sh'               <- codegenOpenExp sh env
+      ix'               <- codegenOpenExp ix env
+      return [ ccall "toIndex" [ccall "shape" sh', ccall "shape" ix']]
+
+    FromIndex sh ix     -> do
+      sh'               <- codegenOpenExp sh env
+      ix'               <- codegenOpenExp ix env
+      return [ ccall "fromIndex" (ccall "shape" sh' : ix') ]
 
     -- Array shape and element indexing
     --
@@ -427,6 +524,11 @@ codegenOpenExp exp env =
           return $ zipWith (\t x -> indexArray t (array x) v) elt [n-1, n-2 .. 0]
 
       | otherwise                -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
+
+    Intersect sh1 sh2   -> do
+      sh1'              <- codegenOpenExp sh1 env
+      sh2'              <- codegenOpenExp sh2 env
+      return $ zipWith (\a b -> ccall "min" [a,b]) sh1' sh2'
 
 
 -- Tuples are defined as snoc-lists, so generate code right-to-left

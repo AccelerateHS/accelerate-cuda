@@ -16,6 +16,7 @@ import Data.Ord
 import Data.List
 import Data.Function
 import Foreign.CUDA.Driver.Device
+import Foreign.CUDA.Analysis.Device
 import qualified Foreign.CUDA.Driver    as CUDA
 
 
@@ -45,9 +46,5 @@ selectBestDevice = do
 -- executing in lockstep in half-warp groupings (16 ALUs).
 --
 coresPerMultiProcessor :: DeviceProperties -> Int
-coresPerMultiProcessor prp
-  | computeCapability prp < 2   = 8
-  | computeCapability prp < 2.1 = 32
-  | otherwise                   = 48
-
+coresPerMultiProcessor = coresPerMP . deviceResources
 
