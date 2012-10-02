@@ -88,6 +88,7 @@ Library
 
   Build-depends:        accelerate              == 0.13.*,
                         array                   >= 0.3,
+                        async                   >= 2.0,
                         base                    == 4.*,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
