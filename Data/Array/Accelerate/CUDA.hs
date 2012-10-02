@@ -59,7 +59,9 @@ module Data.Array.Accelerate.CUDA (
 ) where
 
 -- standard library
+#if !MIN_VERSION_base(4,6,0)
 import Prelude                                          hiding ( catch )
+#endif
 import Control.Exception
 import Control.Applicative
 import Control.Concurrent

@@ -25,14 +25,14 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 
 -- libraries
-import Prelude                                          hiding ( lookup, catch )
+import Prelude                                          hiding ( lookup )
 import Numeric
 import Data.Char
 import System.IO
 import System.FilePath
 import System.Directory
 import System.Process                                   ( ProcessHandle )
-import Control.Exception
+import System.IO.Error
 import Control.Applicative
 import Control.Monad.Trans
 import Data.Version
@@ -311,7 +311,7 @@ persist !cubin !key = do
     -- If the temporary and cache directories are on different disks, we must
     -- copy the file instead. Unsupported operation: (Cross-device link)
     --
-    `catch` \(_ :: IOError) -> do
+    `catchIOError` \_ -> do
       copyFile cubin cacheFile
       removeFile cubin
   --

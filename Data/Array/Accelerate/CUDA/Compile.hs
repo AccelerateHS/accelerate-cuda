@@ -37,31 +37,32 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Numeric
-import Prelude                                          hiding ( exp, catch, scanl, scanr )
-import Control.Applicative                              hiding ( Const )
+import Prelude                                                  hiding ( exp, scanl, scanr )
+import Control.Applicative                                      hiding ( Const )
 import Control.Exception
 import Control.Monad
 import Control.Monad.Trans
-import Crypto.Hash.MD5                                  ( hashlazy )
+import Crypto.Hash.MD5                                          ( hashlazy )
 import Data.Label.PureM
-import Data.List                                        ( intercalate )
+import Data.List                                                ( intercalate )
 import Data.Maybe
 import Data.Monoid
 import System.Directory
-import System.Exit                                      ( ExitCode(..) )
+import System.Exit                                              ( ExitCode(..) )
 import System.FilePath
 import System.IO
+import System.IO.Error
 import System.IO.Unsafe
 import System.Process
-import Text.PrettyPrint.Mainland                        ( ppr, renderCompact, displayLazyText )
-import qualified Data.HashSet                           as Set
-import qualified Data.ByteString                        as B
-import qualified Data.Text.Lazy                         as T
-import qualified Data.Text.Lazy.IO                      as T
-import qualified Data.Text.Lazy.Encoding                as T
-import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Foreign.CUDA.Analysis                  as CUDA
-import Foreign.CUDA.Analysis                            ( DeviceProperties, Occupancy )
+import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
+import qualified Data.HashSet                                   as Set
+import qualified Data.ByteString                                as B
+import qualified Data.Text.Lazy                                 as T
+import qualified Data.Text.Lazy.IO                              as T
+import qualified Data.Text.Lazy.Encoding                        as T
+import qualified Foreign.CUDA.Driver                            as CUDA
+import qualified Foreign.CUDA.Analysis                          as CUDA
+import Foreign.CUDA.Analysis                                    ( DeviceProperties, Occupancy )
 
 #ifdef VERSION_unix
 import System.Posix.Process
@@ -73,7 +74,7 @@ import System.Win32.Process
 import Foreign.Storable
 #endif
 
-import Paths_accelerate_cuda                            ( getDataDir )
+import Paths_accelerate_cuda                                    ( getDataDir )
 
 
 -- | Initiate code generation, compilation, and data transfer for an array
@@ -363,7 +364,7 @@ link table key =
         D.unless D.debug_cc $ do
           removeFile      cufile
           removeDirectory (dropFileName cufile)
-            `catch` \(_ :: IOError) -> return ()        -- directory not empty
+            `catchIOError` \_ -> return ()      -- directory not empty
 
         return mdl
 
