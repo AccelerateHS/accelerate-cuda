@@ -106,7 +106,6 @@ type instance DevicePtrs (a,b) = (DevicePtrs a, DevicePtrs b)
 type instance HostPtrs   (a,b) = (HostPtrs   a, HostPtrs   b)
 
 
-
 -- Texture References
 -- ------------------
 
@@ -129,16 +128,29 @@ instance TextureData Double where format _ = (CUDA.Int32,  2)
 instance TextureData Bool   where format _ = (CUDA.Word8,  1)
 #if   SIZEOF_HSINT == 4
 instance TextureData Int    where format _ = (CUDA.Int32,  1)
-#elif SIZEOF_HSINT == 8
-instance TextureData Int    where format _ = (CUDA.Int32,  2)
-#endif
-#if   SIZEOF_HSINT == 4
 instance TextureData Word   where format _ = (CUDA.Word32, 1)
 #elif SIZEOF_HSINT == 8
+instance TextureData Int    where format _ = (CUDA.Int32,  2)
 instance TextureData Word   where format _ = (CUDA.Word32, 2)
+#else
+instance TextureData Int    where
+  format _ =
+    case sizeOf (undefined::Int) of
+      4 -> (CUDA.Int32, 1)
+      8 -> (CUDA.Int32, 2)
+instance TextureData Word   where
+  format _ =
+    case sizeOf (undefined::Word) of
+      4 -> (CUDA.Word32, 1)
+      8 -> (CUDA.Word32, 2)
 #endif
 #if SIZEOF_HSCHAR == 4
 instance TextureData Char   where format _ = (CUDA.Word32, 1)
+#else
+instance TextureData Char   where
+  format _ =
+    case sizeOf (undefined::Char) of
+         4 -> (CUDA.Word32, 1)
 #endif
 
 

@@ -36,6 +36,10 @@ import Data.Array.Accelerate.Array.Sugar                ( Array, Elt )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 
+#ifndef SIZEOF_HSINT
+import Foreign.Storable
+#endif
+
 
 -- Construct a new array by applying a function to each index. Each thread
 -- processes multiple elements, striding the array by the grid size.
@@ -439,6 +443,10 @@ fromIndex n dim sh ix base
       int       = typename "Int32"
 #elif SIZEOF_HSINT == 8
       int       = typename "Int64"
+#else
+      int       = typename $ case sizeOf (undefined::Int) of
+                    4 -> "Int32"
+                    8 -> "Int64"
 #endif
       sh0       = [cdecl| const typename $id:dim $id:base = fromIndex( $id:sh , $id:ix ); |]
       unsh c    = [cdecl| const int $id:(base ++ "_a" ++ c) = $id:base . $id:('a':c); |]

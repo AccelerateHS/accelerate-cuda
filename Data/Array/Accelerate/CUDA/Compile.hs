@@ -69,6 +69,10 @@ import System.Posix.Process
 import System.Win32.Process
 #endif
 
+#ifndef SIZEOF_HSINT
+import Foreign.Storable
+#endif
+
 import Paths_accelerate_cuda                            ( getDataDir )
 
 
@@ -435,6 +439,10 @@ compileFlags cufile = do
     machine     = "-m32"
 #elif SIZEOF_HSINT == 8
     machine     = "-m64"
+#else
+    machine     = case sizeOf (undefined :: Int) of
+                    4 -> "-m32"
+                    8 -> "-m64"
 #endif
 
 

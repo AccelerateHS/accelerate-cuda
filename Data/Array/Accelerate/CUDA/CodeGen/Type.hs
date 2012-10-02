@@ -36,6 +36,9 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 import Language.C.Quote.CUDA
 import qualified Language.C                             as C
 
+#if !defined(SIZEOF_HSINT) || !defined(SIZEOF_HSCHAR)
+import Foreign.Storable
+#endif
 
 #include "accelerate.h"
 
@@ -106,11 +109,21 @@ codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
 codegenIntegralType (TypeInt     _) = typename "Int32"
 #elif SIZEOF_HSINT == 8
 codegenIntegralType (TypeInt     _) = typename "Int64"
+#else
+codegenIntegralType (TypeInt     _) = typename
+  $ case sizeOf (undefined :: Int) of
+      4 -> "Int32"
+      8 -> "Int64"
 #endif
 #if   SIZEOF_HSINT == 4
 codegenIntegralType (TypeWord    _) = typename "Word32"
 #elif SIZEOF_HSINT == 8
 codegenIntegralType (TypeWord    _) = typename "Word64"
+#else
+codegenIntegralType (TypeWord    _) = typename
+  $ case sizeOf (undefined :: Int) of
+      4 -> "Word32"
+      8 -> "Word64"
 #endif
 
 codegenFloatingType :: FloatingType a -> C.Type
@@ -123,6 +136,10 @@ codegenNonNumType :: NonNumType a -> C.Type
 codegenNonNumType (TypeBool   _) = typename "Word8"
 #if   SIZEOF_HSCHAR == 4
 codegenNonNumType (TypeChar   _) = typename "Word32"
+#else
+codegenNonNumType (TypeChar   _) = typename
+  $ case sizeOf (undefined :: Char) of
+      4 -> "Word32"
 #endif
 codegenNonNumType (TypeCChar  _) = [cty|char|]
 codegenNonNumType (TypeCSChar _) = [cty|signed char|]
@@ -172,11 +189,21 @@ codegenIntegralTex (TypeCULLong _) = typename "TexCULLong"
 codegenIntegralTex (TypeInt     _) = typename "TexInt32"
 #elif SIZEOF_HSINT == 8
 codegenIntegralTex (TypeInt     _) = typename "TexInt64"
+#else
+codegenIntegralTex (TypeInt     _) = typename
+  $ case sizeOf (undefined :: Int) of
+      4 -> "TexInt32"
+      8 -> "TexInt64"
 #endif
 #if   SIZEOF_HSINT == 4
 codegenIntegralTex (TypeWord    _) = typename "TexWord32"
 #elif SIZEOF_HSINT == 8
 codegenIntegralTex (TypeWord    _) = typename "TexWord64"
+#else
+codegenIntegralTex (TypeWord    _) = typename
+  $ case sizeOf (undefined :: Word) of
+      4 -> "TexWord32"
+      8 -> "TexWord64"
 #endif
 
 
@@ -191,6 +218,10 @@ codegenNonNumTex :: NonNumType a -> C.Type
 codegenNonNumTex (TypeBool   _) = typename "TexWord8"
 #if   SIZEOF_HSCHAR == 4
 codegenNonNumTex (TypeChar   _) = typename "TexWord32"
+#else
+codegenNonNumTex (TypeChar   _) = typename
+  $ case sizeOf (undefined :: Char) of
+      4 -> "TexWord32"
 #endif
 codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
 codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
