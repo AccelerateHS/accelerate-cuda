@@ -146,10 +146,10 @@ executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
       a0   <- executeOpenAcc a aenv
       replicateOp kernel bindings aenv sliceIndex slix a0
 
-    Index sliceIndex a e -> do
+    Slice sliceIndex a e -> do
       slix <- executeExp e aenv
       a0   <- executeOpenAcc a aenv
-      indexOp kernel bindings aenv sliceIndex a0 slix
+      sliceOp kernel bindings aenv sliceIndex a0 slix
 
     Map _ a             -> do
       a0 <- executeOpenAcc a aenv
@@ -312,7 +312,7 @@ replicateOp kernel bindings aenv sliceIndex slix (Array sh0 in0) = do
     extend (SliceFixed sliceIdx) (slx,sz) sl      = (extend sliceIdx slx sl, sz)
 
 
-indexOp
+sliceOp
     :: forall sl co slix aenv dim e. (Shape sl, Elt slix)
     => AccKernel (Array sl e)
     -> AccBindings aenv
@@ -321,7 +321,7 @@ indexOp
     -> Array dim e
     -> slix
     -> CIO (Array sl e)
-indexOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
+sliceOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
   let sz                = toElt sh0                                                 :: dim
       sh                = toElt $ restrict sliceIndex (fromElt slix) sh0            :: sl
       sl                = Sugar.listToShape $ convertSlix sliceIndex (fromElt slix) :: sl
@@ -792,10 +792,15 @@ executeOpenExp exp env aenv = do
       return            $! Sugar.fromIndex sh' ix'
 
     -- Array shape and element indexing
-    IndexScalar acc ix  -> do
-      arr'              <- executeOpenAcc acc aenv
+    Index acc ix        -> do
+      arr'@(Array sh _) <- executeOpenAcc acc aenv
       ix'               <- executeOpenExp ix env aenv
-      indexArray arr' ix'
+      indexArray arr' (toIndex sh (fromElt ix'))
+
+    LinearIndex acc i   -> do
+      arr'              <- executeOpenAcc acc aenv
+      i'                <- executeOpenExp i env aenv
+      indexArray arr' i'
 
     Shape acc           -> do
       (Array sh _)      <- executeOpenAcc acc aenv

@@ -155,7 +155,7 @@ codegenOpenAcc dev acc@(OpenAcc pacc) = case pacc of
       extend' n (SliceAll   sliceIdx) = mkPrj dimOut "dim" n : extend' (n+1) sliceIdx
       extend' n (SliceFixed sliceIdx) =                        extend' (n+1) sliceIdx
 
-  Index sl a slix ->
+  Slice sl a slix ->
     mkSlice dimSl dimCo dimIn0 (restrict sl) (undefined :: a)
     where
       dimCo  = length (expType slix)
@@ -511,7 +511,7 @@ codegenOpenExp exp env =
 
       | otherwise               -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
 
-    IndexScalar arr ix
+    Index arr ix
       | OpenAcc (Avar a) <- arr ->
         let avar        = show (idxToInt a)
             sh          = cvar ("sh"   ++ avar)
@@ -524,6 +524,19 @@ codegenOpenExp exp env =
           return $ zipWith (\t x -> indexArray t (array x) v) elt [n-1, n-2 .. 0]
 
       | otherwise                -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
+
+    LinearIndex arr ix
+      | OpenAcc (Avar a) <- arr ->
+        let v           = show (idxToInt a)
+            array x     = cvar ("avar" ++ v ++ "_a" ++ show x)
+            elt         = accTypeTex arr
+            n           = length elt
+        in do
+          [i]   <- codegenOpenExp ix env
+          return $ zipWith (\t x -> indexArray t (array x) i) elt [n-1, n-2 .. 0]
+
+      | otherwise
+      -> INTERNAL_ERROR(error) "codegenOpenExp" "expected array variable"
 
     Intersect sh1 sh2   -> do
       sh1'              <- codegenOpenExp sh1 env

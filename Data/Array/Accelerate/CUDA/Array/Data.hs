@@ -36,8 +36,8 @@ import Control.Monad.Trans
 
 -- friends
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt )
-import Data.Array.Accelerate.Array.Representation       ( size, toIndex )
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt )
+import Data.Array.Accelerate.Array.Representation       ( size )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
@@ -141,10 +141,9 @@ useArrayAsync (Array sh adata) ms = run doUse
 -- |Read a single element from an array at the given row-major index. This is a
 -- synchronous operation.
 --
-indexArray :: (Shape dim, Elt e) => Array dim e -> dim -> CIO e
-indexArray (Array sh adata) ix = run doIndex
+indexArray :: (Shape dim, Elt e) => Array dim e -> Int -> CIO e
+indexArray (Array _ adata) i = run doIndex
   where
-    i              = toIndex sh (fromElt ix)
     doIndex ctx mt = toElt <$> indexR arrayElt adata
       where
         indexR :: ArrayEltR e -> ArrayData e -> IO e

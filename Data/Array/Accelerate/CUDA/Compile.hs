@@ -115,25 +115,21 @@ prepareAcc rootAcc = traverseAcc rootAcc
           node (_, eacc) = return $ ExecAcc noKernel mempty eacc
 
       case pacc of
-        --
         -- Environment manipulations
         --
         Avar ix                 -> node $ pure (Avar ix)
 
-        --
         -- Let bindings
         --
         Alet a b                -> node . pure =<< Alet         <$> traverseAcc a  <*> traverseAcc b
         Apply f a               -> node . pure =<< Apply        <$> compileAfun1 f <*> traverseAcc a
         Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
 
-        --
         -- Tuples
         --
         Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
-        --
         -- Array injection
         --
         Use arrs                -> use (arrays (undefined::a)) arrs >> node (pure $ Use arrs)
@@ -143,7 +139,6 @@ prepareAcc rootAcc = traverseAcc rootAcc
             use ArraysRarray        arr      = useArray arr
             use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
 
-        --
         -- Computation nodes
         --
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
@@ -151,7 +146,7 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
         Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travA a
         Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
-        Index slix a e          -> exec =<< liftA2 (Index slix)         <$> travA a <*> travE e
+        Slice slix a e          -> exec =<< liftA2 (Slice slix)         <$> travA a <*> travE e
         Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a
         ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travA a <*> travA b
         Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travA a
@@ -246,7 +241,8 @@ prepareAcc rootAcc = traverseAcc rootAcc
         Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
         Iterate n f x           -> liftA2 (Iterate n)           <$> travF f <*> travE x
         PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
-        IndexScalar a e         -> liftA2 IndexScalar           <$> travA a <*> travE e
+        Index a e               -> liftA2 Index                 <$> travA a <*> travE e
+        LinearIndex a e         -> liftA2 LinearIndex           <$> travA a <*> travE e
         Shape a                 -> liftA  Shape                 <$> travA a
         ShapeSize e             -> liftA  ShapeSize             <$> travE e
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
