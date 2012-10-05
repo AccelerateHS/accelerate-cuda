@@ -53,6 +53,7 @@ module Data.Array.Accelerate.CUDA (
   run, run1, stream, runIn, run1In, streamIn,
 
   -- * Asynchronous execution
+  Async, wait, poll, cancel,
   runAsync, run1Async, runAsyncIn, run1AsyncIn
 
 ) where
@@ -63,7 +64,7 @@ import Prelude                                          hiding ( catch )
 #endif
 import Control.Exception
 import Control.Applicative
-import Control.Concurrent.Async
+import Control.Concurrent
 import System.IO.Unsafe
 import Foreign.CUDA.Driver                              ( Context )
 import Foreign.CUDA.Driver.Error
@@ -220,4 +221,51 @@ collect arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
     collectR ArraysRarray        arr            = peekArray arr >> return arr
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
+
+
+-- Running asynchronously
+-- ----------------------
+
+-- We need to execute the main thread asynchronously to give finalisers a chance
+-- to run. Make sure to catch exceptions to avoid "blocked indefinitely on MVar"
+-- errors.
+--
+data Async a = Async !ThreadId !(MVar (Either SomeException a))
+
+-- Fork an action to execute asynchronously.
+--
+-- TLM:
+--   CUDA contexts are specific to the processor on which they were created. It
+--   may be necessary to take this into account when forking accelerate
+--   computations (forkOn rather than forkIO), either by always requiring a
+--   specific CPU, and/or having the driver API store the processor ordinal when
+--   creating contexts.
+--
+async :: IO a -> IO (Async a)
+async action = do
+   var <- newEmptyMVar
+   tid <- forkIO $ (putMVar var . Right =<< action)
+                   `catch`
+                   \e -> putMVar var (Left e)
+   return (Async tid var)
+
+-- | Block the calling thread until the computation completes, then return the
+-- result.
+--
+wait :: Async a -> IO a
+wait (Async _ var) = either throwIO return =<< readMVar var
+
+-- | Test whether the asynchronous computation has already completed. If so,
+-- return the result, else 'Nothing'.
+--
+poll :: Async a -> IO (Maybe a)
+poll (Async _ var) =
+  maybe (return Nothing) (either throwIO (return . Just)) =<< tryTakeMVar var
+
+-- | Cancel a running asynchronous computation.
+--
+cancel :: Async a -> IO ()
+cancel (Async tid _) = throwTo tid ThreadKilled
+  -- TLM: catch and ignore exceptions?
+  --      silently do nothing if the thread has already finished?
 
