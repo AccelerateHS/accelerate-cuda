@@ -7,7 +7,7 @@
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
 -- Stability   : experimental
--- Portability : non-partable (GHC extensions)
+-- Portability : non-portable (GHC extensions)
 --
 -- Non-empty lists of key/value pairs. The lists are strict in the key and lazy
 -- in the values. We assume that keys only occur once.

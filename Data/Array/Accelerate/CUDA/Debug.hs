@@ -11,7 +11,7 @@
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
 -- Stability   : experimental
--- Portability : non-partable (GHC extensions)
+-- Portability : non-portable (GHC extensions)
 --
 -- Hijack some command line arguments to pass runtime debugging options. This
 -- might cause problems for users of the library...

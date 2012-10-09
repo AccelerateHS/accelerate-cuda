@@ -7,7 +7,7 @@
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
 -- Stability   : experimental
--- Portability : non-partable (GHC extensions)
+-- Portability : non-portable (GHC extensions)
 --
 
 module Data.Array.Accelerate.CUDA.Analysis.Launch (
