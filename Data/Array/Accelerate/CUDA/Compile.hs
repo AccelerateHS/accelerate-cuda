@@ -16,7 +16,7 @@
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
-  compileAcc, compileAfun1
+  compileAcc, compileAfun
 
 ) where
 
@@ -82,20 +82,23 @@ import Paths_accelerate_cuda                                    ( getDataDir )
 -- execution in the CUDA environment. This includes:
 --
 --   * list of array variables embedded within scalar expressions
+--
 --   * kernel object(s) required to executed the kernel
 --
 compileAcc :: Acc a -> CIO (ExecAcc a)
-compileAcc acc = prepareAcc acc
+compileAcc = prepareOpenAcc
+
+compileAfun :: Afun f -> CIO (ExecAfun f)
+compileAfun = prepareOpenAfun
 
 
-compileAfun1 :: Afun (a -> b) -> CIO (ExecAfun (a -> b))
-compileAfun1 (Alam (Abody b)) = Alam . Abody <$> prepareAcc b
-compileAfun1 _                =
-  error "Hope (noun): something that happens to facts when the world refuses to agree"
+prepareOpenAfun :: OpenAfun aenv f -> CIO (PreOpenAfun ExecOpenAcc aenv f)
+prepareOpenAfun (Alam l)  = Alam  <$> prepareOpenAfun l
+prepareOpenAfun (Abody b) = Abody <$> prepareOpenAcc b
 
 
-prepareAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-prepareAcc rootAcc = traverseAcc rootAcc
+prepareOpenAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
+prepareOpenAcc rootAcc = traverseAcc rootAcc
   where
     -- Traverse an open array expression in depth-first order
     --
@@ -121,8 +124,8 @@ prepareAcc rootAcc = traverseAcc rootAcc
 
         -- Let bindings
         --
-        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a  <*> traverseAcc b
-        Apply f a               -> node . pure =<< Apply        <$> compileAfun1 f <*> traverseAcc a
+        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a <*> traverseAcc b
+        Apply f a               -> node . pure =<< Apply        <$> compileAfun f <*> traverseAcc a
         Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
 
         -- Tuples

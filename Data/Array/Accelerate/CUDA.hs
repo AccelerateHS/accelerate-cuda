@@ -186,7 +186,7 @@ run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
     acc       = convertAccFun1 f
-    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun1 acc)
+    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc)
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
                 \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
@@ -196,7 +196,7 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
 
 
 -- | Stream a lazily read list of input arrays through the given program,
--- collecting results as we go.
+--   collecting results as we go.
 --
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
 stream f arrs
