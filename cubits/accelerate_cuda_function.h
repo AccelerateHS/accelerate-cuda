@@ -200,6 +200,86 @@ static __inline__ __device__ Word64 atomicCAS64(Word64* address, Word64 compare,
 }
 #endif
 
+
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 300
+/*
+ * Warp shuffle functions
+ */
+template <typename T>
+static __inline__ __device__ T shfl_up32(T var, unsigned int delta, int width=warpSize)
+{
+    union { T a; Int32 b; } u, v;
+
+    v.a = var;
+    u.b = __shfl_up(v.b, delta, warpSize);
+
+    return u.a;
+}
+
+template <>
+static __inline__ __device__ int shfl_up32(int var, unsigned int delta, int width)
+{
+    return __shfl_up(var, delta, width);
+}
+
+template <>
+static __inline__ __device__ float shfl_up32(float var, unsigned int delta, int width)
+{
+    return __shfl_up(var, delta, width);
+}
+
+
+template <typename T>
+static __inline__ __device__ T shfl_up64(T var, unsigned int delta, int width=warpSize)
+{
+    union { T a; struct { Int32 lo; Int32 hi; }; } u, v;
+
+    v.a  = var;
+    u.lo = __shfl_up(v.lo, delta, warpSize);
+    u.hi = __shfl_up(v.hi, delta, warpSize);
+
+    return u.a;
+}
+
+
+template <typename T>
+static __inline__ __device__ T shfl_xor32(T var, int laneMask, int width=warpSize)
+{
+    union { T a; Int32 b; } u, v;
+
+    v.a = var;
+    u.b = __shfl_xor(v.b, laneMask, warpSize);
+
+    return u.a;
+}
+
+template <>
+static __inline__ __device__ int shfl_xor32(int var, int laneMask, int width)
+{
+    return __shfl_xor(var, laneMask, width);
+}
+
+template <>
+static __inline__ __device__ float shfl_xor32(float var, int laneMask, int width)
+{
+    return __shfl_xor(var, laneMask, width);
+}
+
+
+template <typename T>
+static __inline__ __device__ T shfl_xor64(T var, int laneMask, int width=warpSize)
+{
+    union { T a; struct { Int32 lo; Int32 hi; }; } u, v;
+
+    v.a  = var;
+    u.lo = __shfl_xor(v.lo, laneMask, warpSize);
+    u.hi = __shfl_xor(v.hi, laneMask, warpSize);
+
+    return u.a;
+}
+#endif
+
+
 #if 0
 /* -----------------------------------------------------------------------------
  * Additional helper functions
