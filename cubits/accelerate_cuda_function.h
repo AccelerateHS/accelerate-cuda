@@ -122,6 +122,12 @@ static __inline__ __device__ Word32 reinterpret32(const T x)
 }
 
 template <>
+static __inline__ __device__ Word32 reinterpret32(const Word32 x)
+{
+    return x;
+}
+
+template <>
 static __inline__ __device__ Word32 reinterpret32(const float x)
 {
     return __float_as_int(x);
@@ -134,6 +140,12 @@ static __inline__ __device__ Word64 reinterpret64(const T x)
 
     u.a = x;
     return u.b;
+}
+
+template <>
+static __inline__ __device__ Word64 reinterpret64(const Word64 x)
+{
+    return x;
 }
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 130
