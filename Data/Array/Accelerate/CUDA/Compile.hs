@@ -41,9 +41,10 @@ import Prelude                                                  hiding ( exp, sc
 import Control.Applicative                                      hiding ( Const )
 import Control.Exception
 import Control.Monad
-import Control.Monad.Trans
+import Control.Monad.Reader                                     ( asks )
+import Control.Monad.State                                      ( gets )
+import Control.Monad.Trans                                      ( liftIO, MonadIO )
 import Crypto.Hash.MD5                                          ( hashlazy )
-import Data.Label.PureM
 import Data.List                                                ( intercalate )
 import Data.Maybe
 import Data.Monoid
@@ -296,7 +297,7 @@ build :: (KernelTable -> DeviceProperties -> CIO (String, KernelKey))
       -> (DeviceProperties -> CUDA.Fun -> Int -> IO Occupancy)
       -> CIO (AccKernel a)
 build compile' launchConfig determineOccupancy = do
-  dev           <- gets deviceProps
+  dev           <- asks deviceProps
   table         <- gets kernelTable
   (entry,key)   <- compile' table dev
   let (cta,blocks,smem) = launchConfig dev occ
@@ -423,7 +424,7 @@ waitFor pid = do
 --
 compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
-  CUDA.Compute m n      <- CUDA.computeCapability `fmap` gets deviceProps
+  CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProps
   ddir                  <- liftIO getDataDir
   return                $  filter (not . null) $
     [ "-I", ddir </> "cubits"

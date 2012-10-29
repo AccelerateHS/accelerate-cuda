@@ -30,9 +30,10 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 
 -- libraries
 import Prelude                                          hiding ( fst, snd )
-import Data.Label.PureM
 import Control.Applicative
-import Control.Monad.Trans
+import Control.Monad.Reader                             ( asks )
+import Control.Monad.State                              ( gets )
+import Control.Monad.Trans                              ( liftIO )
 
 -- friends
 import Data.Array.Accelerate.Array.Data
@@ -68,9 +69,9 @@ snd = sndArrayData
 --
 run :: (Context -> MemoryTable -> IO a) -> CIO a
 run f = do
-  ctx   <- gets activeContext
-  mt    <- gets memoryTable
-  liftIO $ f ctx mt
+  ctx    <- asks activeContext
+  mt     <- gets memoryTable
+  liftIO $! f ctx mt
 
 -- CPP hackery to generate the cases where we dispatch to the worker function handling
 -- elementary types.

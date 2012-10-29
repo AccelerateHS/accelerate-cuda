@@ -1,8 +1,4 @@
-{-# LANGUAGE CPP             #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TupleSections   #-}
-{-# LANGUAGE TypeOperators   #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}   -- Eq CUDA.Context
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -35,10 +31,13 @@ import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
-import Data.Label
-import Control.Exception
+import Control.Applicative                              ( Applicative )
+import Control.Exception                                ( bracket )
 import Control.Concurrent                               ( forkIO, threadDelay )
-import Control.Monad.State.Strict                       ( StateT(..), evalStateT )
+import Control.Monad                                    ( when )
+import Control.Monad.Trans                              ( MonadIO )
+import Control.Monad.Reader                             ( MonadReader, ReaderT(..), runReaderT )
+import Control.Monad.State.Strict                       ( MonadState, StateT(..), evalStateT )
 import System.Mem                                       ( performGC )
 import System.Mem.Weak                                  ( mkWeakPtr, addFinalizer )
 import System.IO.Unsafe                                 ( unsafePerformIO )
@@ -47,30 +46,37 @@ import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device 
 import qualified Foreign.CUDA.Driver.Context            as CUDA
 
 
--- The state token for CUDA accelerated array operations
---
-type CIO        = StateT CUDAState IO
-data CUDAState  = CUDAState
-  {
-    _deviceProps        :: !CUDA.DeviceProperties,
-    _activeContext      :: {-# UNPACK #-} !Context,
-    _kernelTable        :: {-# UNPACK #-} !KernelTable,
-    _memoryTable        :: {-# UNPACK #-} !MemoryTable
-  }
-
-instance Eq CUDA.Context where
-  CUDA.Context p1 == CUDA.Context p2    = p1 == p2
-
-$(mkLabels [''CUDAState])
-
-
 -- Execution State
 -- ---------------
 
+-- The state token for CUDA accelerated array operations. This is a stack of
+-- (read only) device properties and context, and mutable state for tracking
+-- device memory and kernel object code.
+--
+data Config = Config {
+    deviceProps         :: !CUDA.DeviceProperties,              -- information on hardware resources
+    activeContext       :: {-# UNPACK #-} !Context              -- device execution context
+  }
+
+data State = State {
+    memoryTable         :: {-# UNPACK #-} !MemoryTable,         -- host/device memory associations
+    kernelTable         :: {-# UNPACK #-} !KernelTable          -- compiled kernel object code
+  }
+
+newtype CIO a = CIO {
+    runCIO              :: ReaderT Config (StateT State IO) a
+  }
+  deriving ( Functor, Applicative, Monad, MonadIO
+           , MonadReader Config, MonadState State )
+
+
 -- |Evaluate a CUDA array computation
 --
+{-# NOINLINE evalCUDA #-}
 evalCUDA :: CUDA.Context -> CIO a -> IO a
-evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
+evalCUDA ctx acc
+  = bracket setup teardown
+  $ \config -> evalStateT (runReaderT (runCIO acc) config) theState
   where
     teardown _  = CUDA.pop >> performGC
     setup       = do
@@ -78,7 +84,7 @@ evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
       dev       <- CUDA.device
       prp       <- CUDA.props dev
       weak_ctx  <- mkWeakPtr ctx Nothing
-      return $! CUDAState prp (Context ctx weak_ctx) theKernelTable theMemoryTable
+      return    $! Config prp (Context ctx weak_ctx)
 
 
 -- Top-level mutable state
@@ -88,19 +94,14 @@ evalCUDA ctx acc = bracket setup teardown $ evalStateT acc
 -- program, not just a single execution. These tokens use unsafePerformIO to
 -- ensure they are executed only once, and reused for subsequent invocations.
 --
-
-{-# NOINLINE theMemoryTable #-}
-theMemoryTable :: MemoryTable
-theMemoryTable = unsafePerformIO $ do
-  message dump_gc "gc: initialise memory table"
-  keepAlive =<< MT.new
-
-
-{-# NOINLINE theKernelTable #-}
-theKernelTable :: KernelTable
-theKernelTable = unsafePerformIO $ do
-  message dump_gc "gc: initialise kernel table"
-  keepAlive =<< KT.new
+{-# NOINLINE theState #-}
+theState :: State
+theState
+  = unsafePerformIO
+  $ do  message dump_gc "gc: initialise CUDA state"
+        mtb     <- keepAlive =<< MT.new
+        ktb     <- keepAlive =<< KT.new
+        return  $! State mtb ktb
 
 
 -- Select and initialise a default CUDA device, and create a new execution
@@ -112,16 +113,24 @@ defaultContext :: CUDA.Context
 defaultContext = unsafePerformIO $ do
   CUDA.initialise []
   (dev,prp)     <- selectBestDevice
-  ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
+  ctx           <- CUDA.create dev [CUDA.SchedAuto]
+
+  -- Generated code does not take particular advantage of shared memory, so
+  -- for devices that support it use those banks as an L1 cache instead. Perhaps
+  -- make this a command line switch: -fprefer-[l1,shared]
   --
-  message dump_gc $ "gc: initialise context"
-  message verbose $ deviceInfo dev prp
+  when (CUDA.computeCapability prp >= CUDA.Compute 2 0)
+       (CUDA.setCacheConfig CUDA.PreferL1)
+
+  -- Debugging information
   --
+  message dump_gc "gc: initialise context"
+  message verbose (deviceInfo dev prp)
   addFinalizer ctx $ do
-    message dump_gc $ "gc: finalise context"    -- should never happen!
+    message dump_gc "gc: finalise context"      -- should never happen!
     CUDA.destroy ctx
-  --
-  keepAlive ctx
+
+  CUDA.pop >> keepAlive ctx
 
 
 -- Make sure the GC knows that we want to keep this thing alive past the end of
