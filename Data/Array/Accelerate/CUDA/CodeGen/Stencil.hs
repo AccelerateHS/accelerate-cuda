@@ -2,9 +2,8 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
--- Module      : Data.Array.Accelerate.CUDA.CodeGen.Mapping
+-- Module      : Data.Array.Accelerate.CUDA.CodeGen.Stencil
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
 --               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
@@ -20,26 +19,28 @@ module Data.Array.Accelerate.CUDA.CodeGen.Stencil (
 
 ) where
 
-import Language.C.Syntax
+import Control.Applicative
+import Control.Monad.State.Strict
+import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
+import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.AST                        ( OpenAcc, Fun, Stencil )
-import Data.Array.Accelerate.Array.Sugar                ( Array, Elt, shapeToList )
+import Data.Array.Accelerate.Type                       ( Boundary(..) )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, shapeToList )
+import Data.Array.Accelerate.Analysis.Shape
+import Data.Array.Accelerate.Analysis.Stencil
+import Data.Array.Accelerate.CUDA.AST                   hiding ( stencil, stencilAccess )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
-
-import qualified Data.Array.Accelerate.Analysis.Stencil as Stencil
-import qualified Data.Array.IArray                      as IArray
 
 
 -- Map a stencil over an array.  In contrast to 'map', the domain of a stencil
 -- function is an entire /neighbourhood/ of each array element.  Neighbourhoods
 -- are sub-arrays centred around a focal point.  They are not necessarily
--- rectangular, but they are symmetric in each dimension and have an extent of
--- at least three in each dimensions — due to the symmetry requirement, the
--- extent is necessarily odd.  The focal point is the array position that is
--- determined by the stencil.
+-- rectangular, but they are symmetric and have an extent of at least three in
+-- each dimensions. Due to this symmetry requirement, the extent is necessarily
+-- odd.  The focal point is the array position that determines the single output
+-- element for each application of the stencil.
 --
 -- For those array positions where the neighbourhood extends past the boundaries
 -- of the source array, a boundary condition determines the contents of the
@@ -51,52 +52,59 @@ import qualified Data.Array.IArray                      as IArray
 --         -> Acc (Array ix a)                   -- source array
 --         -> Acc (Array ix b)                   -- destination array
 --
--- To improve performance, the input array(s) are read through the texture
--- cache.
+-- To improve performance on older (1.x series) devices, the input array(s) are
+-- read through the texture cache.
 --
-mkStencil :: forall sh stencil a b. (Stencil sh a stencil, Elt b)
-          => Int
-          -> CUFun (stencil -> b)
-          -> Boundary (CUExp a)
-          -> Array sh b                 {- dummy -}
-          -> CUTranslSkel
-mkStencil dim (CULam use0 (CUBody (CUExp env stencil))) boundary _ =
-  CUTranslSkel "stencil" [cunit|
-    $edecl:(cdim "Shape" dim)
-    $edecls:arrIn0
+mkStencil
+    :: forall aenv sh stencil a b. (Stencil sh a stencil, Elt b)
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun1 aenv (stencil -> b)
+    -> Boundary (CUExp aenv a)
+    -> [CUTranslSkel aenv (Array sh b)]
+mkStencil dev aenv (CUFun1 f) boundary
+  = return
+  $ CUTranslSkel "stencil" [cunit|
 
-    extern "C"
-    __global__ void
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecl:(cdim "Shape" dim)
+    $edecls:texIn
+    $edecls:texStencil
+
+    extern "C" __global__ void
     stencil
     (
+        $params:argIn,
         $params:argOut,
-        const typename Shape shIn0
+        $params:argStencil
     )
     {
-        const int shapeSize = size(shIn0);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
-              int i;
+        const int shapeSize     = size(shOut);
+        const int gridSize      = $exp:(gridSize dev);
+              int ix;
 
-        for ( i =  __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; i <  shapeSize
-            ; i += gridSize )
+        for ( ix =  $exp:(threadIdx dev)
+            ; ix <  shapeSize
+            ; ix += gridSize )
         {
-            const typename Shape ix = fromIndex(shIn0, i);
-            $decls:(getIn0 "ix")
-            $items:env
-            $stms:(setOut "i" stencil)
+            const typename Shape sh = fromIndex( shOut, ix );
+            $items:(xs          .=. stencil sh)
+            $items:(setOut "ix" .=. f xs)
         }
     }
   |]
   where
-    tyOut               = eltType    (undefined :: b)
-    stencilIn0          = eltTypeTex (undefined :: a)
-    (argOut, _, setOut) = setters tyOut
-    (arrIn0, getIn0)    = stencilAccess 0 dim stencilIn0 use0 boundary offsets
-    --
-    offsets             = map shapeToList p0
-    p0                  = Stencil.offsets (undefined :: Fun aenv (stencil -> b))
-                                          (undefined :: OpenAcc aenv (Array sh a))
+    dim                 = expDim (undefined :: Exp aenv sh)
+    (texIn,  argIn)     = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
+    ix                  = cvar "ix"
+    sh                  = cvar "sh"
+    dx                  = offsets (undefined :: Fun aenv (stencil -> b)) (undefined :: OpenAcc aenv (Array sh a))
+
+    xs                  = let n = length dx
+                          in  concatMap (\i -> let (l,_,_) = locals ('x':show i) (undefined :: a) in l) [n-1, n-2 .. 0]
+
+    (texStencil, argStencil, stencil) = stencilAccess True "Stencil" "w" dev dx ix boundary
 
 
 -- Map a binary stencil of an array.  The extent of the resulting array is the
@@ -112,112 +120,146 @@ mkStencil dim (CULam use0 (CUBody (CUExp env stencil))) boundary _ =
 --          -> Acc (Array ix b)                 -- source array #2
 --          -> Acc (Array ix c)                 -- destination array
 --
-mkStencil2 :: forall sh stencil1 stencil0 a b c.
-              (Stencil sh a stencil1, Stencil sh b stencil0, Elt c)
-           => Int
-           -> CUFun (stencil1 -> stencil0 -> c)
-           -> Boundary (CUExp a)
-           -> Boundary (CUExp b)
-           -> Array sh c                        {- dummy -}
-           -> CUTranslSkel
-mkStencil2 dim (CULam use1 (CULam use0 (CUBody (CUExp env stencil)))) boundary1 boundary0 _ =
-  CUTranslSkel "stencil2" [cunit|
-    $edecl:(cdim "Shape" dim)
-    $edecls:arrIn0
-    $edecls:arrIn1
+mkStencil2
+    :: forall aenv sh stencil1 stencil2 a b c.
+       (Stencil sh a stencil1, Stencil sh b stencil2, Elt c)
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (stencil1 -> stencil2 -> c)
+    -> Boundary (CUExp aenv a)
+    -> Boundary (CUExp aenv b)
+    -> [CUTranslSkel aenv (Array sh c)]
+mkStencil2 dev aenv (CUFun2 f) boundary1 boundary2
+  = return
+  $ CUTranslSkel "stencil2" [cunit|
 
-    extern "C"
-    __global__ void
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecl:(cdim "Shape" dim)
+    $edecls:texIn
+    $edecls:texS1
+    $edecls:texS2
+
+    extern "C" __global__ void
     stencil2
     (
+        $params:argIn,
         $params:argOut,
-        const typename Shape shOut,
-        const typename Shape shIn1,
-        const typename Shape shIn0
+        $params:argS1,
+        $params:argS2
     )
     {
-        const int shapeSize = size(shOut);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
-              int i;
+        const int shapeSize     = size(shOut);
+        const int gridSize      = $exp:(gridSize dev);
+              int ix;
 
-        for ( i =  __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; i <  shapeSize
-            ; i += gridSize )
+        for ( ix =  $exp:(threadIdx dev)
+            ; ix <  shapeSize
+            ; ix += gridSize )
         {
-            const typename Shape ix = fromIndex(shOut, i);
-            $decls:(getIn0 "ix")
-            $decls:(getIn1 "ix")
-            $items:env
-            $stms:(setOut "i" stencil)
+            const typename Shape sh = fromIndex( shOut, ix );
+
+            $items:(xs          .=. stencil1 sh)
+            $items:(ys          .=. stencil2 sh)
+            $items:(setOut "ix" .=. f xs ys)
         }
     }
   |]
   where
-    tyOut               = eltType    (undefined :: c)
-    stencilIn0          = eltTypeTex (undefined :: b)
-    stencilIn1          = eltTypeTex (undefined :: a)
-    (argOut, _, setOut) = setters tyOut
-    (arrIn0, getIn0)    = stencilAccess 0 dim stencilIn0 use0 boundary0 offsets0
-    (arrIn1, getIn1)    = stencilAccess 1 dim stencilIn1 use1 boundary1 offsets1
-    --
-    offsets0            = map shapeToList p0
-    offsets1            = map shapeToList p1
-    (p1, p0)            = Stencil.offsets2 (undefined :: Fun aenv (stencil1 -> stencil0 -> c))
-                                           (undefined :: OpenAcc aenv (Array sh a))
-                                           (undefined :: OpenAcc aenv (Array sh b))
+    dim                 = expDim (undefined :: Exp aenv sh)
+    (texIn,  argIn)     = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Array sh c)
+    ix                  = cvar "ix"
+    sh                  = cvar "sh"
+
+    (dx1, dx2)          = offsets2 (undefined :: Fun aenv (stencil1 -> stencil2 -> c))
+                                   (undefined :: OpenAcc aenv (Array sh a))
+                                   (undefined :: OpenAcc aenv (Array sh b))
+
+    xs                  = let n = length dx1 in concatMap (\i -> let (l,_,_) = locals ('x':show i) (undefined :: a) in l) [n-1, n-2 .. 0]
+    ys                  = let n = length dx2 in concatMap (\i -> let (l,_,_) = locals ('y':show i) (undefined :: b) in l) [n-1, n-2 .. 0]
+
+    (texS1, argS1, stencil1) = stencilAccess False "Stencil1" "w" dev dx1 ix boundary1
+    (texS2, argS2, stencil2) = stencilAccess False "Stencil2" "z" dev dx2 ix boundary2
 
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------
-
+-- Generate declarations for reading in a stencil pattern surrounding a given
+-- focal point. The first parameter determines whether it is safe to use linear
+-- indexing at the centroid position. This is true for:
+--
+--  * stencil1
+--  * stencil2 if both input stencil have the same dimensionality
+--
 stencilAccess
-    :: Int                              -- array de Bruijn index
-    -> Int                              -- array dimensionality
-    -> [Type]                           -- array type (texture memory)
-    -> [(Int, Type, Exp)]               -- the variables used in the scalar expression
-    -> Boundary (CUExp a)               -- how to handle boundary array access
-    -> [[Int]]                          -- all stencil index offsets, top left to bottom right
-    -> ( [Definition]                   -- texture-reference definitions
-       , String -> [InitGroup] )        -- array indexing
-stencilAccess base dim stencil subs boundary shx =
-  ( textures
-  , \ix -> concatMap (get ix) subs )
+    :: forall aenv sh e. (Shape sh, Elt e)
+    => Bool                                     -- linear indexing at centroid?
+    -> Name                                     -- array group name
+    -> Name                                     -- secondary group name, for fresh variables
+    -> DeviceProperties                         -- properties of currently executing device
+    -> [sh]                                     -- list of offset indices
+    -> C.Exp                                    -- linear index of the centroid
+    -> Boundary (CUExp aenv e)
+    -> ( [C.Definition]                         -- input arrays as texture references; or
+       , [C.Param]                              -- function arguments
+       , (C.Exp -> ([C.BlockItem], [C.Exp])) )  -- read data at a given shape centroid
+stencilAccess linear grp x dev shx centroid boundary
+  = (texStencil, argStencil, stencil)
   where
-    n           = length stencil
-    sh          = "shIn" ++ show  base
-    arr x       = "arrIn" ++ shows base "_a" ++ show (x `mod` n)
-    textures    = zipWith cglobal stencil (map arr [n-1, n-2 .. 0])
-    --
-    offsets     :: IArray.Array Int [Int]
-    offsets     =  IArray.listArray (0, length shx-1) shx
-    --
-    get ix (i,t,v) = case boundary of
-      Clamp                -> bounded "clamp"
-      Mirror               -> bounded "mirror"
-      Wrap                 -> bounded "wrap"
-      Constant (CUExp _ c) -> inRange c
+    stencil ix = flip evalState 0 $ do
+      (envs, xs) <- mapAndUnzipM (access ix . shapeToList) shx
+      return ( concat envs, concat xs )
+
+    access :: C.Exp -> [Int] -> State Int ([C.BlockItem], [C.Exp])
+    access ix dx = case boundary of
+      Clamp                     -> bounded "clamp"
+      Mirror                    -> bounded "mirror"
+      Wrap                      -> bounded "wrap"
+      Constant (CUExp (_,c))    -> inrange c            -- constant value: no environment possible
+
       where
-        j       = 'j':shows base "_a" ++ show i
-        k       = 'k':shows base "_a" ++ show i
-        --
+        focus                   = all (==0) dx
+        dim                     = expDim (undefined :: Exp aenv sh)
+        cursor
+          | all (==0) dx        = ix
+          | otherwise           = ccall "shape"
+                                $ zipWith (\a b -> [cexp| $exp:a + $int:b |]) (cshape dim ix) (reverse dx)
+
         bounded f
-          = [cdecl| const int $id:j = $exp:ix'; |]
-          : [cdecl| const $ty:t $id:(show v) = $exp:(indexArray t (cvar (arr i)) (cvar j)); |]
-          : []
-          where
-            ix'  = case offsets IArray.! div i n of
-              ks | all (== 0) ks        -> [cexp| toIndex( $id:sh, ix ) |]
-                 | otherwise            -> [cexp| toIndex( $id:sh, $exp:(ccall f [cvar sh, cursor ks]) ) |]
-        --
-        inRange c = case offsets IArray.! div i n of
-          ks | all (== 0) ks    -> let f = indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar "ix"])
-                                   in  [[cdecl| const $ty:t $id:(show v) = $exp:f; |]]
-             | otherwise        -> [cdecl| const typename Shape $id:j = $exp:(cursor ks); |]
-                                 : [cdecl| const typename bool  $id:k = inRange( $id:sh, $id:j ); |]
-                                 : [cdecl| const $ty:t $id:(show v) = $id:k ? $exp:(indexArray t (cvar (arr i)) (ccall "toIndex" [cvar sh, cvar j]))
-                                                                            : $exp:(reverse c !! mod i n); |]
-                                 : []
-        --
-        cursor [c] = [cexp| $id:ix + $int:c |]
-        cursor cs  = ccall "shape" $ zipWith (\a c -> [cexp| $id:ix . $id:('a':show a) + $int:c |]) [dim-1,dim-2..0] cs
+          | focus && linear     = return $ ( [], getStencil centroid )
+          | otherwise           = do
+              j <- fresh
+              return ( if focus then [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:ix ); |]]
+                                else [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:(ccall f [cvar shIn, cursor]) ); |]]
+                     , getStencil (cvar j) )
+
+        inrange cs
+          | focus && linear     = return ( [], getStencil centroid )
+          | focus               = do
+              j <- fresh
+              return ( [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:ix ); |]]
+                     , getStencil (cvar j) )
+
+          | otherwise           = do
+              j     <- fresh
+              i     <- fresh
+              p     <- fresh
+              return $ ( [ C.BlockDecl [cdecl| const typename Shape $id:j = $exp:cursor; |]
+                         , C.BlockDecl [cdecl| const typename bool  $id:p = inRange( $id:shIn, $id:j ); |]
+                         , C.BlockDecl [cdecl| const int            $id:i = toIndex( $id:shIn, $id:j ); |] ]
+                       , zipWith (\a c -> [cexp| $id:p ? $exp:a : $exp:c |]) (getStencil (cvar i)) cs )
+
+    -- Extra parameters for accessing the stencil data. We are doing things a
+    -- little out of the ordinary, so don't get this "for free". sadface.
+    --
+    getStencil ix       = zipWith (\t a -> indexArray dev t a ix) (eltType (undefined :: e)) (map cvar stencilIn)
+    (shIn, stencilIn)   = namesOfArray grp (undefined :: e)
+    (texStencil, argStencil)
+      | computeCapability dev < Compute 2 0 = (arrayAsTex (undefined :: Array sh e) grp, [])
+      | otherwise                           = ([], arrayAsArg (undefined :: Array sh e) grp)
+
+    -- Generate a fresh variable name
+    --
+    fresh :: State Int Name
+    fresh = do
+      n <- get <* modify (+1)
+      return $ x ++ show n
 

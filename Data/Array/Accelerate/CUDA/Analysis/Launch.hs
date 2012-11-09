@@ -115,8 +115,8 @@ blockSize dev acc lim regs smem =
 gridSize :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
 gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
 gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
-gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim accDim acc == 0 then split acc size cta else size
-gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim accDim acc == 0 then split acc size cta else size
+gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim accDim acc == 0 then split acc size cta else max 1 size
+gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim accDim acc == 0 then split acc size cta else max 1 size
 gridSize _ acc                   size cta = split acc size cta
 
 split :: PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
@@ -163,7 +163,7 @@ sharedMem _ (Scanr' _ x _)       blockDim = sizeOf (expType x) * blockDim
 sharedMem _ (Scanl1 _ a)         blockDim = sizeOf (accType a) * blockDim
 sharedMem _ (Scanr1 _ a)         blockDim = sizeOf (accType a) * blockDim
 sharedMem p (FoldSeg _ _ a _)    blockDim =
-  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)
+  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)
 

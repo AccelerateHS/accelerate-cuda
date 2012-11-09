@@ -1,6 +1,12 @@
-{-# LANGUAGE UndecidableInstances, OverlappingInstances, IncoherentInstances #-}
-{-# LANGUAGE BangPatterns, CPP, GADTs, ScopedTypeVariables, FlexibleInstances #-}
-{-# LANGUAGE RankNTypes, TupleSections, TypeOperators, TypeSynonymInstances #-}
+{-# LANGUAGE BangPatterns         #-}
+{-# LANGUAGE CPP                  #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE IncoherentInstances  #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeOperators        #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
@@ -20,36 +26,39 @@ module Data.Array.Accelerate.CUDA.Execute (
 
 ) where
 
-
 -- friends
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Array.Representation               hiding ( Shape, sliceIndex )
-import qualified Data.Array.Accelerate.Interpreter              as I
-import qualified Data.Array.Accelerate.Array.Data               as AD
-import qualified Data.Array.Accelerate.Array.Representation     as R
-
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
-import Data.Array.Accelerate.CUDA.Array.Sugar                   hiding
-   (dim, size, intersect, toIndex, fromIndex, shapeToList, sliceIndex)
-import qualified Data.Array.Accelerate.CUDA.Array.Sugar         as Sugar
-import qualified Data.Array.Accelerate.CUDA.Debug               as D ( message, dump_exec )
+import Data.Array.Accelerate.CUDA.Array.Sugar
+import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
+import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
+import qualified Data.Array.Accelerate.CUDA.Debug               as D
+
+import Data.Array.Accelerate.Tuple
+import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
+import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
+import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
+import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
--- libraries
-import Prelude                                                  hiding ( sum, exp )
+-- standard library
+import Prelude                                                  hiding ( exp, sum )
 import Control.Applicative                                      hiding ( Const )
-import Control.Monad
-import Control.Monad.Trans
-import System.IO.Unsafe
-import qualified Data.HashSet                                   as Set
+import Control.Monad                                            ( join, when, liftM, forM_ )
+import Control.Monad.Reader                                     ( asks )
+import Control.Monad.Trans                                      ( liftIO )
+import System.IO.Unsafe                                         ( unsafeInterleaveIO )
+import Data.Int
+import Data.Word
 
-import Foreign                                                  ( Ptr, Storable )
-import qualified Foreign                                        as F
+import Foreign.Ptr                                              ( Ptr, castPtr )
+import Foreign.Storable                                         ( Storable(..) )
+import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
+import qualified Foreign.Marshal.Array                          as F
+import qualified Data.HashSet                                   as Set
 
 #include "accelerate.h"
 
@@ -70,818 +79,387 @@ import qualified Foreign.CUDA.Driver                            as CUDA
 --    memory allocated for the result, and the kernel(s) that implement the
 --    skeleton are invoked
 --
-
--- Evaluate a closed array expression
---
 executeAcc :: Arrays a => ExecAcc a -> CIO a
-executeAcc acc = executeOpenAcc acc Empty
-
--- Evaluate an expression with free array variables
---
-executeAfun1 :: forall a b. (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
-executeAfun1 (Alam (Abody f)) arrs = do
-  applyArraysR useArray (arrays (undefined::a)) (fromArr arrs)
-  executeOpenAcc f (Empty `Push` arrs)
-
-executeAfun1 _ _                   =
-  error "the sword comes out after you swallow it, right?"
-
-
--- Evaluate an open array expression
---
-executeOpenAcc :: ExecOpenAcc aenv a -> Val aenv -> CIO a
-executeOpenAcc (ExecAcc kernelList@(FL _ kernel _) bindings acc) aenv =
-  case acc of
-    --
-    -- (1) Array introduction
-    --
-    Use arr -> return (toArr arr)
-
-    --
-    -- (2) Environment manipulation
-    --
-    Avar ix  -> return (prj ix aenv)
-
-    Alet a b -> do
-      a0 <- executeOpenAcc a aenv
-      executeOpenAcc b (aenv `Push` a0)
-
-    Atuple tup  -> toTuple <$> executeAtuple tup aenv
-
-    Aprj ix tup -> do
-      arrs   <- executeOpenAcc tup aenv
-      return $! executeAprj ix (fromTuple arrs)
-
-    Apply (Alam (Abody f)) a -> do
-      a0 <- executeOpenAcc a aenv
-      executeOpenAcc f (Empty `Push` a0)
-    Apply _ _   -> error "Awww... the sky is crying"
-
-    Acond p t e -> do
-      cond <- executeExp p aenv
-      if cond then executeOpenAcc t aenv
-              else executeOpenAcc e aenv
-
-    Reshape e a -> do
-      ix <- executeExp e aenv
-      a0 <- executeOpenAcc a aenv
-      reshapeOp ix a0
-
-    Unit e ->
-      unitOp =<< executeExp e aenv
-
-    --
-    -- (3) Array computations
-    --
-    Generate e _        ->
-      generateOp kernel bindings aenv =<< executeExp e aenv
-
-    Transform e _ _ a   -> do
-      sh <- executeExp e aenv
-      a0 <- executeOpenAcc a aenv
-      transformOp kernel bindings aenv sh a0
-
-    Replicate sliceIndex e a -> do
-      slix <- executeExp e aenv
-      a0   <- executeOpenAcc a aenv
-      replicateOp kernel bindings aenv sliceIndex slix a0
-
-    Slice sliceIndex a e -> do
-      slix <- executeExp e aenv
-      a0   <- executeOpenAcc a aenv
-      sliceOp kernel bindings aenv sliceIndex a0 slix
-
-    Map _ a             -> do
-      a0 <- executeOpenAcc a aenv
-      mapOp kernel bindings aenv a0
-
-    ZipWith _ a b       -> do
-      a1 <- executeOpenAcc a aenv
-      a0 <- executeOpenAcc b aenv
-      zipWithOp kernel bindings aenv a1 a0
-
-    Fold _ _ a          -> do
-      a0 <- executeOpenAcc a aenv
-      foldOp kernel bindings aenv a0
-
-    Fold1 _ a           -> do
-      a0 <- executeOpenAcc a aenv
-      fold1Op kernel bindings aenv a0
-
-    FoldSeg _ _ a s     -> do
-      a0 <- executeOpenAcc a aenv
-      s0 <- executeOpenAcc s aenv
-      foldSegOp kernel bindings aenv a0 s0
-
-    Fold1Seg _ a s      -> do
-      a0 <- executeOpenAcc a aenv
-      s0 <- executeOpenAcc s aenv
-      fold1SegOp kernel bindings aenv a0 s0
-
-    Scanl _ _ a         -> do
-      a0 <- executeOpenAcc a aenv
-      scanOp L kernelList bindings aenv a0
-
-    Scanl' _ _ a        -> do
-      a0 <- executeOpenAcc a aenv
-      scan'Op kernelList bindings aenv a0
-
-    Scanl1 _ a          -> do
-      a0 <- executeOpenAcc a aenv
-      scan1Op kernelList bindings aenv a0
-
-    Scanr _ _ a         -> do
-      a0 <- executeOpenAcc a aenv
-      scanOp R kernelList bindings aenv a0
-
-    Scanr' _ _ a        -> do
-      a0 <- executeOpenAcc a aenv
-      scan'Op kernelList bindings aenv a0
-
-    Scanr1 _ a          -> do
-      a0 <- executeOpenAcc a aenv
-      scan1Op kernelList bindings aenv a0
-
-    Permute _ a _ b     -> do
-      a0 <- executeOpenAcc a aenv
-      a1 <- executeOpenAcc b aenv
-      permuteOp kernel bindings aenv a0 a1
-
-    Backpermute e _ a   -> do
-      sh <- executeExp e aenv
-      a0 <- executeOpenAcc a aenv
-      backpermuteOp kernel bindings aenv sh a0
-
-    Stencil _ _ a       -> do
-      a0 <- executeOpenAcc a aenv
-      stencilOp kernel bindings aenv a0
-
-    Stencil2 _ _ a _ b  -> do
-      a1 <- executeOpenAcc a aenv
-      a0 <- executeOpenAcc b aenv
-      stencil2Op kernel bindings aenv a1 a0
-
--- Tuples evaluation
---
-executeAtuple :: Atuple (ExecOpenAcc aenv) t -> Val aenv -> CIO t
-executeAtuple NilAtup        _    = return ()
-executeAtuple (SnocAtup t a) aenv = (,) <$> executeAtuple  t aenv
-                                        <*> executeOpenAcc a aenv
-
-executeAprj :: TupleIdx arrs a -> arrs -> a
-executeAprj ZeroTupIdx      (_, a) = a
-executeAprj (SuccTupIdx ix) (t, _) = executeAprj ix t
-
-
--- Implementation of primitive array operations
--- --------------------------------------------
-
-reshapeOp
-    :: Shape dim
-    => dim
-    -> Array dim' e
-    -> CIO (Array dim e)
-reshapeOp newShape (Array oldShape adata)
-  = BOUNDS_CHECK(check) "reshape" "shape mismatch" (Sugar.size newShape == size oldShape)
-  $ return $ Array (fromElt newShape) adata
-
-
-unitOp
-    :: Elt e
-    => e
-    -> CIO (Scalar e)
-unitOp v = newArray Z (const v)
-
-
-generateOp
-    :: (Shape dim, Elt e)
-    => AccKernel (Array dim e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> dim
-    -> CIO (Array dim e)
-generateOp kernel bindings aenv sh = do
-  res@(Array _ out) <- allocateArray sh
-  execute kernel bindings aenv (Sugar.size sh)
-    (((), out)
-        , sh)
+executeAcc acc = do
+  dev   <- asks deviceProps
+  res   <- executeOpenAcc dev acc Empty
   return res
 
+executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
+executeAfun1 afun arrs
+  | Alam (Abody f) <- afun
+  = do dev <- asks deviceProps
+       useArrays (arrays arrs) (fromArr arrs)
+       executeOpenAcc dev f (Empty `Push` arrs)
 
-transformOp
-    :: forall aenv sh sh' a b. (Shape sh', Elt b)
-    => AccKernel (Array sh' b)
-    -> AccBindings aenv
-    -> Val aenv
-    -> sh'
-    -> Array sh a
-    -> CIO (Array sh' b)
-transformOp kernel bindings aenv dim' (Array sh0 in0) = do
-  res@(Array sh' out) <- allocateArray dim'
-  execute kernel bindings aenv (size sh')
-    (((((), out)
-          , in0)
-          , dim')
-          , toElt sh0 :: sh)
-  return res
+  | otherwise
+  = error "the sword comes out after you swallow it, right?"
 
-
-replicateOp
-    :: forall aenv e dim sl co slix. (Shape dim, Elt slix)
-    => AccKernel (Array dim e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
-    -> slix
-    -> Array sl e
-    -> CIO (Array dim e)
-replicateOp kernel bindings aenv sliceIndex slix (Array sh0 in0) = do
-  let sh                = toElt $ extend sliceIndex (fromElt slix) sh0
-      sl                = toElt sh0 :: sl
-  res@(Array _ out)     <- allocateArray sh
-  execute kernel bindings aenv (Sugar.size sh)
-    (((((), out)
-          , in0)
-          , sl)
-          , sh)
-  return res
   where
-    extend :: SliceIndex slix' sl' co' dim' -> slix' -> sl' -> dim'
-    extend (SliceNil)            ()       ()      = ()
-    extend (SliceAll sliceIdx)   (slx,()) (sl,sz) = (extend sliceIdx slx sl, sz)
-    extend (SliceFixed sliceIdx) (slx,sz) sl      = (extend sliceIdx slx sl, sz)
+    useArrays :: ArraysR arrs -> arrs -> CIO ()
+    useArrays ArraysRunit         ()       = return ()
+    useArrays (ArraysRpair r1 r0) (a1, a0) = useArrays r1 a1 >> useArrays r0 a0
+    useArrays ArraysRarray        arr      = useArray arr
 
 
-sliceOp
-    :: forall sl co slix aenv dim e. (Shape sl, Elt slix)
-    => AccKernel (Array sl e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
-    -> Array dim e
-    -> slix
-    -> CIO (Array sl e)
-sliceOp kernel bindings aenv sliceIndex (Array sh0 in0) slix = do
-  let sz                = toElt sh0                                                 :: dim
-      sh                = toElt $ restrict sliceIndex (fromElt slix) sh0            :: sl
-      sl                = Sugar.listToShape $ convertSlix sliceIndex (fromElt slix) :: sl
-  res@(Array _ out)     <- allocateArray sh
-  execute kernel bindings aenv (Sugar.size sh)
-    ((((((), out)
-           , in0)
-           , sh)
-           , sl)
-           , sz)
-  return res
-  where
-    restrict :: SliceIndex slix' sl' co' dim' -> slix' -> dim' -> sl'
-    restrict (SliceNil)            ()       ()      = ()
-    restrict (SliceAll sliceIdx)   (slx,()) (sh,sz) = (restrict sliceIdx slx sh, sz)
-    restrict (SliceFixed sliceIdx) (slx,i)  (sh,sz)
-      = BOUNDS_CHECK(checkIndex) "slice" i sz $ restrict sliceIdx slx sh
-    --
-    convertSlix :: SliceIndex slix' sl' co' dim' -> slix' -> [Int]
-    convertSlix (SliceNil)            ()     = []
-    convertSlix (SliceAll   sliceIdx) (s,()) = convertSlix sliceIdx s
-    convertSlix (SliceFixed sliceIdx) (s,i)  = i : convertSlix sliceIdx s
-
-
-mapOp
-    :: Elt e
-    => AccKernel (Array dim e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array dim e'
-    -> CIO (Array dim e)
-mapOp kernel bindings aenv (Array sh0 in0) = do
-  res@(Array _ out) <- allocateArray (toElt sh0)
-  execute kernel bindings aenv (size sh0)
-    ((((), out)
-         , in0)
-         , convertIx (size sh0))
-  return res
-
-zipWithOp
-    :: forall aenv dim a b c. Elt c
-    => AccKernel (Array dim c)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array dim a
-    -> Array dim b
-    -> CIO (Array dim c)
-zipWithOp kernel bindings aenv (Array sh1 in1) (Array sh0 in0) = do
-  res@(Array sh out) <- allocateArray $ toElt (sh1 `intersect` sh0)
-  execute kernel bindings aenv (size sh)
-    (((((((), out)
-            , in1)
-            , in0)
-            , toElt sh  :: dim)
-            , toElt sh1 :: dim)
-            , toElt sh0 :: dim)
-  return res
-
-foldOp, fold1Op
-    :: forall dim e aenv. Shape dim
-    => AccKernel (Array dim e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array (dim:.Int) e
-    -> CIO (Array dim e)
-fold1Op kernel bindings aenv in0@(Array (_,sz) _)
-  = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
-  $ foldOp kernel bindings aenv in0
-
-foldOp kernel bindings aenv (Array sh0 in0)
-  -- A recursive multi-block reduction when collapsing to a single value
-  --
-  | dim sh0 == 1 = do
-      let numElements           = size sh0
-          (_,numBlocks,_)       = configure kernel (size sh0)
-      res@(Array _ out)         <- allocateArray (toElt (fst sh0,numBlocks)) :: CIO (Array (dim:.Int) e)
-      execute kernel bindings aenv numElements
-        ((((), out)
-             , in0)
-             , convertIx numElements)
-      if numBlocks > 1 then foldOp kernel bindings aenv res
-                       else return (Array (fst sh0) out)
-  --
-  -- Reduction over the innermost dimension of an array (single pass operation)
-  --
-  | otherwise    = do
-      let (sh, sz)              = sh0
-          interval_size         = sz
-          num_intervals         = size sh
-          num_elements          = size sh0
-      res@(Array _ out)         <- allocateArray $ toElt sh
-      execute kernel bindings aenv (num_intervals `max` 1)
-        ((((((), out)
-               , in0)
-               , convertIx interval_size)
-               , convertIx num_intervals)
-               , convertIx num_elements)
-      return res
-
-foldSegOp, fold1SegOp
-    :: forall aenv dim e i. Shape dim
-    => AccKernel (Array (dim:.Int) e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array (dim:.Int) e
-    -> Segments i
-    -> CIO (Array (dim:.Int) e)
-fold1SegOp kernel bindings aenv in0 seg =
-  foldSegOp kernel bindings aenv in0 seg
-
-foldSegOp kernel bindings aenv (Array sh0 in0) (Array shs seg) = do
-  res@(Array sh out) <- allocateArray $ toElt (fst sh0, size shs-1)
-  --
-  message $ "foldSeg: shOut = (" ++ showShape (toElt sh  :: dim :. Int) ++ ")"
-                ++ ", shIn0 = (" ++ showShape (toElt sh0 :: dim :. Int) ++ ")"
-  execute kernel bindings aenv (size sh)
-    ((((((), out)
-           , in0)
-           , seg)
-           , toElt sh  :: dim :. Int)
-           , toElt sh0 :: dim :. Int)
-  return res
-
-
-data ScanDirection = L | R
-
-scanOp
-    :: forall aenv e. Elt e
-    => ScanDirection
-    -> FullList () (AccKernel (Vector e))
-    -> AccBindings aenv
-    -> Val aenv
-    -> Vector e
-    -> CIO (Vector e)
-scanOp dir (FL _ kupsweep (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
-  let num_elements              = size sh0
-      (_,num_intervals,_)       = configure kscan num_elements
-  --
-  a_out@(Array _ out)           <- allocateArray (Z :. num_elements + 1)
-  (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
-  d_out                         <- devicePtrsOfArrayData out
-  --
-  -- depending on whether we are a left or right scan, we need to manipulate the
-  -- pointers that specify the final element and main scan body
-  --
-  let interval_size             = (num_elements + num_intervals - 1) `div` num_intervals
-      body                      = marshalDevicePtrs out d_body
-      sum                       = marshalDevicePtrs out d_sum
-      (d_body, d_sum)           =
-        case dir of
-          L -> (d_out, advancePtrsOfArrayData out num_elements d_out)
-          R -> (advancePtrsOfArrayData out 1 d_out, d_out)
-  --
-  -- If the array is sized such that there is only a single interval, the first
-  -- phase of calculating a per-interval carry-in value can be skipped
-  --
-  when (num_intervals > 1) $ do
-    -- Compute the interval sum. Since we use associative operations, this can
-    -- be done as a reduction instead of requiring a full left-/right-scan.
-    message $ "scan phase 1: interval_size = " ++ shows interval_size
-                ", num_intervals = " ++ shows num_intervals
-                ", num_elements = " ++ show num_elements
-    execute kupsweep bindings aenv num_elements
-      ((((((), blk)
-             , in0)
-             , convertIx interval_size)
-             , convertIx num_intervals)
-             , convertIx num_elements)
-
-    --
-    -- Inclusive scan of the per-interval results to compute each segment's
-    -- carry-in value.
-    execute kscan bindings aenv 1
-      (((((((), blk)
-              , sum)
-              , blk)
-              , blk)    -- not used, just need the right number of arguments
-              , convertIx num_intervals)
-              , convertIx num_intervals)
-
-  --
-  -- Prefix-sum of the input array, using interval carry-in values.
-  message $ "scan phase 2: interval_size = " ++ shows interval_size
-              ", num_elements = " ++ show num_elements
-  execute kscan bindings aenv num_elements
-    (((((((), body)
-            , sum)
-            , in0)
-            , blk)
-            , convertIx interval_size)
-            , convertIx num_elements)
-  return a_out
-
-scanOp _ _ _ _ _ = error "I'll just pretend to hug you until you get here."
-
-
-scan'Op
-    :: forall aenv e. Elt e
-    => FullList () (AccKernel (Vector e, Scalar e))
-    -> AccBindings aenv
-    -> Val aenv
-    -> Vector e
-    -> CIO (Vector e, Scalar e)
-scan'Op (FL _ kupsweep (Cons _ kscan Nil)) bindings aenv (Array sh0 in0) = do
-  let num_elements              = size sh0
-      (_,num_intervals,_)       = configure kscan num_elements
-  --
-  (Array _ blk)                 <- allocateArray (Z :. num_intervals) :: CIO (Vector e)
-  a_out@(Array _ out)           <- allocateArray (Z :. num_elements)
-  a_sum@(Array _ sum)           <- allocateArray Z
-  let interval_size             = (num_elements + num_intervals - 1) `div` num_intervals
-  --
-  -- see comments in 'scanOp'
-  when (num_intervals > 1) $ do
-    message $ "scan phase 1: interval_size = " ++ shows interval_size
-                ", num_intervals = " ++ shows num_intervals
-                ", num_elements = " ++ show num_elements
-    execute kupsweep bindings aenv num_elements
-      ((((((), blk)
-             , in0)
-             , convertIx interval_size)
-             , convertIx num_intervals)
-             , convertIx num_elements)
-    --
-    execute kscan bindings aenv 1
-      (((((((), blk)
-              , sum)
-              , blk)
-              , blk)    -- not used
-              , convertIx num_intervals)
-              , convertIx num_intervals)
-  --
-  message $ "scan phase 2: interval_size = " ++ shows interval_size
-              ", num_elements = " ++ show num_elements
-  execute kscan bindings aenv num_elements
-    (((((((), out)
-            , sum)
-            , in0)
-            , blk)
-            , convertIx interval_size)
-            , convertIx num_elements)
-  return (a_out, a_sum)
-
-scan'Op _ _ _ _ = error "If I promise not to kill you, can I have a hug?"
-
-
-scan1Op
-    :: forall aenv e. Elt e
-    => FullList () (AccKernel (Vector e))
-    -> AccBindings aenv
-    -> Val aenv
-    -> Vector e
-    -> CIO (Vector e)
-scan1Op (FL _ kupsweep (Cons _ kscan1 Nil)) bindings aenv (Array sh0 in0) = do
-  let num_elements              = size sh0
-      (_,num_intervals,_)       = configure kscan1 num_elements
-  --
-  (Array _ sum)                 <- allocateArray Z                      :: CIO (Scalar e)
-  (Array _ blk)                 <- allocateArray (Z :. num_intervals)   :: CIO (Vector e)
-  a_out@(Array _ out)           <- allocateArray (Z :. num_elements)
-  let interval_size             = (num_elements + num_intervals - 1) `div` num_intervals
-  --
-  -- see comments in 'scanOp'
-  when (num_intervals > 1) $ do
-    message $ "scan phase 1: interval_size = " ++ shows interval_size
-                ", num_intervals = " ++ shows num_intervals
-                ", num_elements = " ++ show num_elements
-    execute kupsweep bindings aenv num_elements
-      ((((((), blk)
-             , in0)
-             , convertIx interval_size)
-             , convertIx num_intervals)
-             , convertIx num_elements)
-    --
-    execute kscan1 bindings aenv 1
-      (((((((), blk)
-              , sum)
-              , blk)
-              , blk)   -- not used
-              , convertIx num_intervals)
-              , convertIx num_intervals)
-  --
-  message $ "scan phase 2: interval_size = " ++ shows interval_size
-              ", num_elements = " ++ show num_elements
-  execute kscan1 bindings aenv num_elements
-    (((((((), out)
-            , sum)
-            , in0)
-            , blk)
-            , convertIx interval_size)
-            , convertIx num_elements)
-  return a_out
-  where
-
-scan1Op _ _ _ _ = error "If you get wet, you'll get sick."
-
-
-permuteOp
-    :: forall aenv dim dim' e. Elt e
-    => AccKernel (Array dim' e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array dim' e             -- default values
-    -> Array dim e              -- permuted array
-    -> CIO (Array dim' e)
-permuteOp kernel bindings aenv in0@(Array sh0 _) (Array sh1 in1) = do
-  res@(Array _ out) <- allocateArray (toElt sh0)
-  copyArray in0 res
-  execute kernel bindings aenv (size sh0)
-    (((((), out)
-          , in1)
-          , toElt sh0 :: dim')
-          , toElt sh1 :: dim)
-  return res
-
-backpermuteOp
-    :: forall aenv dim dim' e. (Shape dim', Elt e)
-    => AccKernel (Array dim' e)
-    -> AccBindings aenv
-    -> Val aenv
-    -> dim'
-    -> Array dim e
-    -> CIO (Array dim' e)
-backpermuteOp kernel bindings aenv dim' (Array sh0 in0) = do
-  res@(Array sh out) <- allocateArray dim'
-  execute kernel bindings aenv (size sh)
-    (((((), out)
-          , in0)
-          , toElt sh  :: dim')
-          , toElt sh0 :: dim)
-  return res
-
-stencilOp
-    :: forall aenv dim a b. Elt b
-    => AccKernel (Array dim b)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array dim a
-    -> CIO (Array dim b)
-stencilOp kernel bindings aenv in0@(Array sh0 _) = do
-  res@(Array _ out)     <- allocateArray (toElt sh0)
-  bindAcc 0 kernel in0
-  execute kernel bindings aenv (size sh0)
-    (((), out)
-        , toElt sh0 :: dim)
-  return res
-
-stencil2Op
-    :: forall aenv dim a b c. Elt c
-    => AccKernel (Array dim c)
-    -> AccBindings aenv
-    -> Val aenv
-    -> Array dim a
-    -> Array dim b
-    -> CIO (Array dim c)
-stencil2Op kernel bindings aenv in1@(Array sh1 _) in0@(Array sh0 _) = do
-  res@(Array sh out)    <- allocateArray $ toElt (sh1 `intersect` sh0)
-  bindAcc 1 kernel in1
-  bindAcc 0 kernel in0
-  execute kernel bindings aenv (size sh)
-    (((((), out)
-          , toElt sh  :: dim)
-          , toElt sh1 :: dim)
-          , toElt sh0 :: dim)
-  return res
-
-
--- Expression evaluation
--- ---------------------
-
--- Evaluate an open expression
+-- Evaluate an open array computation
 --
-executeOpenExp :: PreOpenExp ExecOpenAcc env aenv t -> Val env -> Val aenv -> CIO t
-executeOpenExp exp env aenv = do
-  case exp of
-    -- Local binders and variable indices, ranging over tuples and scalars
-    Var ix              -> return $! prj ix env
-    Let x e             -> do
-      x'                <- executeOpenExp x env aenv
-      executeOpenExp e (env `Push` x') aenv
+executeOpenAcc
+    :: forall aenv arrs.
+       DeviceProperties
+    -> ExecOpenAcc aenv arrs
+    -> Val aenv
+    -> CIO arrs
+executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
+  = case pacc of
 
-    -- Constant values
-    Const c             -> return $! toElt c
-    PrimConst c         -> return $! I.evalPrimConst c
+      -- Array introduction
+      Use arr                   -> return (toArr arr)
+      Unit x                    -> newArray Z . const =<< travE x
 
-    -- Primitive scalar operations
-    PrimApp fun arg     -> do
-      x                 <- executeOpenExp arg env aenv
-      return            $! I.evalPrim fun x
+      -- Environment manipulation
+      Avar ix                   -> return (prj ix aenv)
+      Alet bnd body             -> executeOpenAcc dev body . (aenv `Push`) =<< travA bnd
+      Atuple tup                -> toTuple <$> travT tup
+      Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
+      Apply f a                 -> executeAfun1 f =<< travA a
+      Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
 
-    -- Tuples
-    Tuple tup           -> do
-      t                 <- executeTuple tup env aenv
-      return            $! toTuple t
+      -- Producers
+      Map _ a                   -> executeOp =<< extent a
+      Generate sh _             -> executeOp =<< travE sh
+      Transform sh _ _ _        -> executeOp =<< travE sh
+      Backpermute sh _ _        -> executeOp =<< travE sh
 
-    Prj ix e            -> do
-      t                 <- executeOpenExp e env aenv
-      return            $! I.evalPrj ix (fromTuple t)
+      -- Consumers
+      Fold _ _ a                -> foldOp  =<< extent a
+      Fold1 _ a                 -> fold1Op =<< extent a
+      FoldSeg _ _ a s           -> join $ foldSegOp <$> extent a <*> extent s
+      Fold1Seg _ a s            -> join $ foldSegOp <$> extent a <*> extent s
+      Scanl1 _ a                -> scan1Op =<< extent a
+      Scanr1 _ a                -> scan1Op =<< extent a
+      Scanl' _ _ a              -> scan'Op =<< extent a
+      Scanr' _ _ a              -> scan'Op =<< extent a
+      Scanl _ _ a               -> scanOp True  =<< extent a
+      Scanr _ _ a               -> scanOp False =<< extent a
+      Permute _ d _ _           -> permuteOp =<< travA d
+      Stencil _ _ a             -> stencilOp =<< travA a
+      Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
-    -- Conditional expression
-    Cond p t e          -> do
-      p'                <- executeOpenExp p env aenv
-      case p' of
-        True            -> executeOpenExp t env aenv
-        False           -> executeOpenExp e env aenv
+      -- Removed by fusion
+      Reshape _ _               -> fusionError
+      Replicate _ _ _           -> fusionError
+      Slice _ _ _               -> fusionError
+      ZipWith _ _ _             -> fusionError
 
-    Iterate lIMIT (Lam (Body f)) x ->
-      let loop !i !acc
-            | i >= lIMIT = return acc
-            | otherwise  = loop (i+1) =<< executeOpenExp f (env `Push` acc) aenv
-      in do
-      x'                <- executeOpenExp x env aenv
-      loop 0 x'
+  where
+    fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
+
+    -- term traversals
+    travA :: ExecOpenAcc aenv a -> CIO a
+    travA acc = executeOpenAcc dev acc aenv
+
+    travE :: ExecExp aenv t -> CIO t
+    travE exp = executeExp exp aenv
+
+    travT :: Atuple (ExecOpenAcc aenv) t -> CIO t
+    travT NilAtup        = return ()
+    travT (SnocAtup t a) = (,) <$> travT t <*> travA a
+
+    -- get the extent of a fused array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent (ExecAcc _ _ acc)
+      = case acc of
+          Avar ix               -> return $ shape (prj ix aenv)
+          Map _ a               -> extent a     -- must be an Avar
+          Generate sh _         -> travE sh
+          Backpermute sh _ _    -> travE sh
+          Transform sh _ _ _    -> travE sh
+          _                     -> fusionError
+
+
+    -- Skeleton implementation
+    -- -----------------------
+
+    -- Execute a skeleton that has no special requirements: thread decomposition
+    -- is based on the given shape.
     --
-    Iterate _ _ _       -> error "impossible evaluation"
+    executeOp :: (Shape sh, Elt e) => sh -> CIO (Array sh e)
+    executeOp sh = do
+      out       <- allocateArray sh
+      execute kernel gamma aenv (size sh) out
+      return out
 
-    -- Array indices and shapes
-    IndexAny            -> return Sugar.Any
-    IndexNil            -> return Z
-    IndexCons sh sz     -> do
-      sh'               <- executeOpenExp sh env aenv
-      sz'               <- executeOpenExp sz env aenv
-      return            $! sh' :. sz'
+    -- Executing fold operations depend on whether we are recursively collapsing
+    -- to a single value using multiple thread blocks, or a multidimensional
+    -- single-pass reduction where there is one block per inner dimension.
+    --
+    fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
+    fold1Op sh@(_ :. sz)
+      = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
+      $ foldOp sh
 
-    IndexHead sh        -> do
-      (_ :. ix)         <- executeOpenExp sh env aenv
-      return            $! ix
+    foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
+    foldOp (sh :. sz)
+      | dim sh > 0              = executeOp sh
+      | otherwise
+      = let numElements         = size sh * sz
+            (_,numBlocks,_)     = configure kernel numElements
+        in do
+          out   <- allocateArray (sh :. numBlocks)
+          execute kernel gamma aenv numElements out
+          foldRec out
 
-    IndexTail sh        -> do
-      (ix :. _)         <- executeOpenExp sh env aenv
-      return            $! ix
+    -- Recursive step(s) of a multi-block reduction
+    --
+    foldRec :: (Shape sh, Elt e) => Array (sh:.Int) e -> CIO (Array sh e)
+    foldRec arr@(Array _ adata)
+      | Cons _ rec _ <- more
+      = let sh :. sz            = shape arr
+            numElements         = size sh * sz
+            (_,numBlocks,_)     = configure rec numElements
+        in if sz <= 1
+              then return $ Array (fromElt sh) adata
+              else do
+                out     <- allocateArray (sh :. numBlocks)
+                execute rec gamma aenv numElements (out, arr)
+                foldRec out
 
-    IndexSlice sliceIndex slix sh -> do
-      slix'             <- executeOpenExp slix env aenv
-      sh'               <- executeOpenExp sh env aenv
-      return . toElt    $! restrict sliceIndex (fromElt slix') (fromElt sh')
+      | otherwise
+      = INTERNAL_ERROR(error) "foldRec" "missing phase-2 kernel module"
+
+    -- Segmented reduction. Subtract one from the size of the segments vector as
+    -- this is the result of an exclusive scan to calculate segment offsets.
+    --
+    foldSegOp :: (Shape sh, Elt e) => (sh :. Int) -> (Z :. Int) -> CIO (Array (sh :. Int) e)
+    foldSegOp (sh :. _) (Z :. sz) = executeOp (sh :. sz - 1)
+
+    -- Scans, all variations on a theme.
+    --
+    scanOp :: Elt e => Bool -> (Z :. Int) -> CIO (Vector e)
+    scanOp left (Z :. numElements) = do
+      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
+      out                       <- devicePtrsOfArrayData adata
+      let (body, sum)
+            | left      = (out, advancePtrsOfArrayData adata numElements out)
+            | otherwise = (advancePtrsOfArrayData adata 1 out, out)
+      --
+      scanCore numElements arr body sum
+      return arr
+
+    scan1Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e)
+    scan1Op (Z :. numElements) = do
+      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
+      body                      <- devicePtrsOfArrayData adata
+      let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
+      --
+      scanCore numElements arr body sum
+      return (Array ((),numElements) adata)
+
+    scan'Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e, Scalar e)
+    scan'Op (Z :. numElements) = do
+      vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
+      sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
+      d_vec                     <- devicePtrsOfArrayData ad_vec
+      d_sum                     <- devicePtrsOfArrayData ad_sum
+      --
+      scanCore numElements vec d_vec d_sum
+      return (vec, sum)
+
+    scanCore
+        :: forall e. Elt e
+        => Int
+        -> Vector e                     -- to fix Elt vs. EltRepr
+        -> Prim.DevicePtrs (EltRepr e)
+        -> Prim.DevicePtrs (EltRepr e)
+        -> CIO ()
+    scanCore numElements (Array _ adata) body sum
+      | Cons _ upsweep1 (Cons _ upsweep2 _) <- more
+      = let (_,numIntervals,_)  = configure kernel numElements
+            d_body              = marshalDevicePtrs adata body
+            d_sum               = marshalDevicePtrs adata sum
+        in do
+          blk   <- allocateArray (Z :. numIntervals) :: CIO (Vector e)
+
+          -- Phase 1: Split the array over multiple thread blocks and calculate
+          --          the final scan result from each interval.
+          --
+          when (numIntervals > 1) $ do
+            execute upsweep1 gamma aenv numElements blk
+            execute upsweep2 gamma aenv numIntervals (blk, blk, d_sum)
+
+          -- Phase 2: Re-scan the input using the carry-in value from each
+          --          interval sum calculated in phase 1.
+          --
+          execute kernel gamma aenv numElements (Z :. numElements, d_body, blk, d_sum)
+
+      | otherwise
+      = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
+
+    -- Forward permutation
+    --
+    permuteOp :: (Shape sh, Elt e) => Array sh e -> CIO (Array sh e)
+    permuteOp dfs
+      = let sh  = shape dfs
+        in do
+          out   <- allocateArray sh
+          copyArray dfs out
+          execute kernel gamma aenv (size sh) out
+          return out
+
+    -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the
+    -- same as those given in the function 'mkStencil[2]'.
+    --
+    stencilOp :: forall sh a b. (Shape sh, Elt a, Elt b) => Array sh a -> CIO (Array sh b)
+    stencilOp arr = do
+      let sh    =  shape arr
+      out       <- allocateArray sh
+
+      if computeCapability dev < Compute 2 0
+         then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
+              execute kernel gamma aenv (size sh) out
+         else execute kernel gamma aenv (size sh) (out, arr)
+      --
+      return out
+
+    stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
+               => Array sh a -> Array sh b -> CIO (Array sh c)
+    stencil2Op arr1 arr2 = do
+      let sh    =  shape arr1 `intersect` shape arr2
+      out       <- allocateArray sh
+
+      if computeCapability dev < Compute 2 0
+         then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
+              marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) kernel arr2 >>
+              execute kernel gamma aenv (size sh) out
+         else execute kernel gamma aenv (size sh) (out, arr1, arr2)
+      --
+      return out
+
+
+-- Scalar expression evaluation
+-- ----------------------------
+
+executeExp :: ExecExp aenv t -> Val aenv -> CIO t
+executeExp exp aenv = executeOpenExp exp Empty aenv
+
+executeOpenExp :: forall env aenv exp. ExecOpenExp env aenv exp -> Val env -> Val aenv -> CIO exp
+executeOpenExp rootExp env aenv = travE rootExp
+  where
+    travE :: ExecOpenExp env aenv t -> CIO t
+    travE exp = case exp of
+      Var ix                    -> return (prj ix env)
+      Let bnd body              -> travE bnd >>= \x -> executeOpenExp body (env `Push` x) aenv
+      Const c                   -> return (toElt c)
+      PrimConst c               -> return (evalPrimConst c)
+      PrimApp f x               -> evalPrim f <$> travE x
+      Tuple t                   -> toTuple <$> travT t
+      Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
+      Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
+      Iterate n f x             -> loop n f =<< travE x
+      IndexAny                  -> return Any
+      IndexNil                  -> return Z
+      IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
+      IndexHead sh              -> (\(_  :. ix) -> ix) <$> travE sh
+      IndexTail sh              -> (\(ix :.  _) -> ix) <$> travE sh
+      IndexSlice ix slix sh     -> indexSlice ix <$> travE slix <*> travE sh
+      IndexFull ix slix sl      -> indexFull  ix <$> travE slix <*> travE sl
+      ToIndex sh ix             -> toIndex   <$> travE sh  <*> travE ix
+      FromIndex sh ix           -> fromIndex <$> travE sh  <*> travE ix
+      Intersect sh1 sh2         -> intersect <$> travE sh1 <*> travE sh2
+      ShapeSize sh              -> size  <$> travE sh
+      Shape acc                 -> shape <$> travA acc
+      Index acc ix              -> join $ index      <$> travA acc <*> travE ix
+      LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
+
+    -- Helpers
+    -- -------
+
+    travT :: Tuple (ExecOpenExp env aenv) t -> CIO t
+    travT tup = case tup of
+      NilTup            -> return ()
+      SnocTup t e       -> (,) <$> travT t <*> travE e
+
+    travA :: ExecOpenAcc aenv a -> CIO a
+    travA acc = asks deviceProps >>= \dev -> executeOpenAcc dev acc aenv
+
+    loop :: Int -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
+    loop limit fun x
+      | Lam (Body f) <- fun
+      = let go !i !acc
+              | i >= limit      = return acc
+              | otherwise       = go (i+1) =<< executeOpenExp f (env `Push` acc) aenv
+        in go 0 x
+
+      | otherwise
+      = error "puny god"
+
+    indexSlice :: (Elt slix, Elt sh, Elt sl)
+               => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
+               -> slix
+               -> sh
+               -> sl
+    indexSlice ix slix sh = toElt $ restrict ix (fromElt slix) (fromElt sh)
       where
         restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
         restrict SliceNil              ()        ()       = ()
-        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)
-          = let sl' = restrict sliceIdx slx sl
-            in  (sl', sz)
-        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz)
-          = restrict sliceIdx slx sl
+        restrict (SliceAll   sliceIdx) (slx, ()) (sl, sz) = (restrict sliceIdx slx sl, sz)
+        restrict (SliceFixed sliceIdx) (slx,  _) (sl,  _) = restrict sliceIdx slx sl
 
-    IndexFull sliceIndex slix sh -> do
-      slix'             <- executeOpenExp slix env aenv
-      sh'               <- executeOpenExp sh env aenv
-      return . toElt    $! extend sliceIndex (fromElt slix') (fromElt sh')
+    indexFull :: (Elt slix, Elt sh, Elt sl)
+              => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
+              -> slix
+              -> sl
+              -> sh
+    indexFull ix slix sl = toElt $ extend ix (fromElt slix) (fromElt sl)
       where
         extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
         extend SliceNil              ()        ()       = ()
-        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz)
-          = let sh' = extend sliceIdx slx sl
-            in  (sh', sz)
-        extend (SliceFixed sliceIdx) (slx, sz) sl
-          = let sh' = extend sliceIdx slx sl
-            in  (sh', sz)
+        extend (SliceAll sliceIdx)   (slx, ()) (sh, sz) = (extend sliceIdx slx sh, sz)
+        extend (SliceFixed sliceIdx) (slx, sz) sh       = (extend sliceIdx slx sh, sz)
 
-    ToIndex sh ix       -> do
-      sh'               <- executeOpenExp sh env aenv
-      ix'               <- executeOpenExp ix env aenv
-      return            $! Sugar.toIndex sh' ix'
-
-    FromIndex sh ix     -> do
-      sh'               <- executeOpenExp sh env aenv
-      ix'               <- executeOpenExp ix env aenv
-      return            $! Sugar.fromIndex sh' ix'
-
-    -- Array shape and element indexing
-    Index acc ix        -> do
-      arr'@(Array sh _) <- executeOpenAcc acc aenv
-      ix'               <- executeOpenExp ix env aenv
-      indexArray arr' (toIndex sh (fromElt ix'))
-
-    LinearIndex acc i   -> do
-      arr'              <- executeOpenAcc acc aenv
-      i'                <- executeOpenExp i env aenv
-      indexArray arr' i'
-
-    Shape acc           -> do
-      (Array sh _)      <- executeOpenAcc acc aenv
-      return            $! toElt sh
-
-    ShapeSize e         -> do
-      sh                <- executeOpenExp e env aenv
-      return            $! size (fromElt sh)
-
-    Intersect sh1 sh2   -> do
-      sh1'              <- executeOpenExp sh1 env aenv
-      sh2'              <- executeOpenExp sh2 env aenv
-      return            $! Sugar.intersect sh1' sh2'
+    index :: (Shape sh, Elt e) => Array sh e -> sh -> CIO e
+    index arr ix = indexArray arr (toIndex (shape arr) ix)
 
 
--- Evaluate a closed expression
---
-executeExp :: PreExp ExecOpenAcc aenv t -> Val aenv -> CIO t
-executeExp e = executeOpenExp e Empty
-
-
--- Tuple evaluation
---
-executeTuple :: Tuple (PreOpenExp ExecOpenAcc env aenv) t -> Val env -> Val aenv -> CIO t
-executeTuple NilTup          _   _    = return ()
-executeTuple (t `SnocTup` e) env aenv = (,) <$> executeTuple   t env aenv
-                                            <*> executeOpenExp e env aenv
-
-
--- Array references in scalar code
--- -------------------------------
-
--- All CUDA devices have between 6-8KB of read-only texture memory per
--- multiprocessor. Since all arrays in Accelerate are immutable, we can always
--- access input arrays through the texture cache to reduce global memory demand
--- when accesses do not follow the regular patterns required for coalescing.
---
--- This is great for older 1.x series devices, but compute 2.x devices have a
--- dedicated 768KB L2 cache, as well as a configurable L1 cache of 16/48KB
--- (combined with shared memory). What we really want is for the code generator
--- to pass all inputs either as textures or global arrays, depending on what
--- device we are currently targeting.
---
-
-bindAcc :: Int -> AccKernel a -> Array dim a' -> CIO ()
-bindAcc base (AccKernel _ _ mdl _ _ _ _) (Array sh ad) =
-  let arr n     = "arrIn" ++ show base ++ "_a" ++ show (n::Int)
-      tex       = CUDA.getTex mdl . arr
-  in
-  marshalTextureData ad (size sh) =<< liftIO (sequence' $ map tex [0..])
-
-
-bindAccEnv :: AccKernel a -> Val aenv -> AccBindings aenv -> CIO ()
-bindAccEnv (AccKernel _ _ mdl _ _ _ _) aenv (AccBindings vars) =
-  mapM_ bindAvar (Set.toList vars)
-  where
-    bindAvar (ArrayVar idx) =
-      let idx'          = show $ idxToInt idx
-          Array sh ad   = prj idx aenv
-          --
-          bindDim       = liftIO $
-            CUDA.getPtr mdl ("sh" ++ idx') >>=
-            CUDA.pokeListArray (convertSh sh) . fst
-          --
-          arr n         = "avar" ++ idx' ++ "_a" ++ show (n::Int)
-          tex           = CUDA.getTex mdl . arr
-          bindTex       = marshalTextureData ad (size sh) =<< liftIO (sequence' $ map tex [0..])
-      in
-      bindDim >> bindTex
-
-
--- Kernel execution
+-- Marshalling data
 -- ----------------
 
--- Data which can be marshalled as arguments to a kernel invocation.
+-- Data which can be marshalled as function arguments to a kernel invocation.
 --
 class Marshalable a where
   marshal :: a -> CIO [CUDA.FunParam]
 
 instance Marshalable () where
   marshal _ = return []
+
+instance Marshalable CUDA.FunParam where
+  marshal x = return [x]
+
+instance ArrayElt e => Marshalable (ArrayData e) where
+  marshal = marshalArrayData
+
+instance Shape sh => Marshalable sh where
+  marshal sh = return [CUDA.VArg sh]
+
+instance Marshalable a => Marshalable [a] where
+  marshal = concatMapM marshal
+
+instance (Marshalable sh, Elt e) => Marshalable (Array sh e) where
+  marshal (Array sh ad) = (++) <$> marshal (toElt sh :: sh) <*> marshal ad
+
+instance (Marshalable a, Marshalable b) => Marshalable (a, b) where
+  marshal (a, b) = (++) <$> marshal a <*> marshal b
+
+instance (Marshalable a, Marshalable b, Marshalable c) => Marshalable (a, b, c) where
+  marshal (a, b, c)
+    = concat <$> sequence [marshal a, marshal b, marshal c]
+
+instance (Marshalable a, Marshalable b, Marshalable c, Marshalable d)
+      => Marshalable (a, b, c, d) where
+  marshal (a, b, c, d)
+    = concat <$> sequence [marshal a, marshal b, marshal c, marshal d]
+
 
 #define primMarshalable(ty)                                                    \
 instance Marshalable (ty) where {                                              \
@@ -902,36 +480,95 @@ primMarshalable(Double)
 primMarshalable(Ptr a)
 primMarshalable(CUDA.DevicePtr a)
 
-instance Marshalable CUDA.FunParam where
-  marshal x = return [x]
-
-instance AD.ArrayElt e => Marshalable (AD.ArrayData e) where
-  marshal = marshalArrayData
-
-instance Marshalable a => Marshalable [a] where
-  marshal = concatMapM marshal
-
-instance (Marshalable a, Marshalable b) => Marshalable (a,b) where
-  marshal (a,b) = (++) <$> marshal a <*> marshal b
+instance Shape sh => Storable sh where  -- undecidable, incoherent
+  sizeOf sh     = sizeOf    (undefined :: Int32) * (dim sh)
+  alignment _   = alignment (undefined :: Int32)
+  poke p sh     = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
 
 
--- This requires incoherent instances \=
+-- Convert shapes into 32-bit integers for marshalling onto the device
 --
-instance Shape sh => Storable sh where
-  sizeOf sh     = F.sizeOf    (undefined::Int32) * (1 `max` Sugar.dim sh)
-  alignment _   = F.alignment (undefined::Int32)
-  poke p sh     = F.pokeArray (F.castPtr p) (convertSh (fromElt sh))
+convertShape :: [Int] -> [Int32]
+convertShape [] = [1]
+convertShape sh = reverse (map convertIx sh)
 
-instance Shape sh => Marshalable sh where
-  marshal sh = return [CUDA.VArg sh]
+convertIx :: Int -> Int32
+convertIx ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
+             $ fromIntegral ix
 
+
+-- Note [Array references in scalar code]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- All CUDA devices have between 6-8KB of read-only texture memory per
+-- multiprocessor. Since all arrays in Accelerate are immutable, we can always
+-- access input arrays through the texture cache to reduce global memory demand
+-- when accesses do not follow the regular patterns required for coalescing.
+--
+-- This is great for older 1.x series devices, but newer devices have a
+-- dedicated L2 cache (device dependent, 256KB-1.5MB), as well as a configurable
+-- L1 cache combined with shared memory (16-48KB).
+--
+-- For older 1.x series devices, we pass free array variables as texture
+-- references, but for new devices we pass them as standard array arguments so
+-- as to use the larger available caches.
+--
+
+marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO ()
+marshalAccEnvTex kernel aenv (Gamma gamma)
+  = forM_ (Set.toList gamma)
+  $ \(Idx_ idx) -> marshalAccTex (namesOfAvar idx) kernel (prj idx aenv)
+
+marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
+marshalAccTex (shIn, arrIn) (AccKernel _ _ mdl _ _ _ _) (Array sh adata)
+  = let sh'     = convertShape (R.shapeToList sh)
+        tex     = map (CUDA.getTex mdl) (reverse arrIn)
+    in do
+      liftIO $ CUDA.pokeListArray sh' . fst =<< CUDA.getPtr mdl shIn
+      marshalTextureData adata (R.size sh)  =<< liftIO (sequence' tex)
+
+marshalAccEnvArg :: Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
+marshalAccEnvArg aenv (Gamma gamma)
+  = concatMapM (\(Idx_ idx) -> marshal (prj idx aenv)) (Set.toList gamma)
+
+
+-- A lazier version of 'Control.Monad.sequence'
+--
+sequence' :: [IO a] -> IO [a]
+sequence' = foldr k (return [])
+  where k m ms = do { x <- m; xs <- unsafeInterleaveIO ms; return (x:xs) }
+
+-- Generalise concatMap for teh monadz
+--
+concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
+concatMapM f xs = concat `liftM` mapM f xs
+
+
+-- Kernel execution
+-- ----------------
 
 -- What launch parameters should we use to execute the kernel with a number of
 -- array elements?
 --
-{-# INLINE configure #-}
 configure :: AccKernel a -> Int -> (Int, Int, Int)
 configure (AccKernel _ _ _ _ !cta !smem !grid) !n = (cta, grid n, smem)
+
+
+-- Marshal the kernel arguments. For older 1.x devices this binds free arrays to
+-- texture references, and for newer devices adds the parameters to the front of
+-- the argument list
+--
+arguments :: Marshalable args
+          => AccKernel a
+          -> Val aenv
+          -> Gamma aenv
+          -> args
+          -> CIO [CUDA.FunParam]
+arguments !kernel !aenv !gamma !a = do
+  dev <- asks deviceProps
+  if computeCapability dev < Compute 2 0
+     then marshalAccEnvTex kernel aenv gamma >> marshal a
+     else (++) <$> marshalAccEnvArg aenv gamma <*> marshal a
 
 
 -- Link the binary object implementing the computation, configure the kernel
@@ -940,75 +577,27 @@ configure (AccKernel _ _ _ _ !cta !smem !grid) !n = (cta, grid n, smem)
 --
 execute :: Marshalable args
         => AccKernel a                  -- The binary module implementing this kernel
-        -> AccBindings aenv             -- Array variables embedded in scalar expressions
-        -> Val aenv
-        -> Int
-        -> args
+        -> Gamma aenv                   -- variables of arrays embedded in scalar expressions
+        -> Val aenv                     -- the environment
+        -> Int                          -- a "size" parameter, typically number of elements in the output
+        -> args                         -- arguments to marshal to the kernel function
         -> CIO ()
-execute !kernel !bindings !aenv !n !args = do
-  bindAccEnv kernel aenv bindings
+execute !kernel !gamma !aenv !n !a = do
+  args <- arguments kernel aenv gamma a
   launch kernel (configure kernel n) args
 
 
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
-launch :: Marshalable args => AccKernel a -> (Int,Int,Int) -> args -> CIO ()
-launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !a = do
+launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> CIO ()
+launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args = do
   message $ entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
-  --
-  args  <- marshal a
-  liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
+  liftIO  $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
 
 
--- Auxiliary functions
--- -------------------
-
--- Generalise concatMap for teh monadz
---
-{-# INLINE concatMapM #-}
-concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
-concatMapM f xs = concat `liftM` mapM f xs
-
--- A lazier version of 'Control.Monad.sequence'
---
-{-# INLINE sequence' #-}
-sequence' :: [IO a] -> IO [a]
-sequence' = foldr k (return [])
-  where k m ms = do { x <- m; xs <- unsafeInterleaveIO ms; return (x:xs) }
-
--- Extract shape dimensions as a list of integers. Singleton dimensions are
--- considered to be of unit size.
---
--- Internally, Accelerate uses snoc-based tuple projection, while the data
--- itself is stored in reading order. Ensure we match the behaviour of regular
--- tuples and code generation thereof.
---
-convertSh :: R.Shape sh => sh -> [Int32]
-convertSh = post . shapeToList
-  where
-    post [] = [1]
-    post xs = reverse (map convertIx xs)
-
-convertIx :: Int -> Int32
-convertIx ix   = INTERNAL_ASSERT "convertIx" (ix <= intmax) (fromIntegral ix)
-  where intmax = fromIntegral (maxBound :: Int32)
-
-
--- Apply a function to all components of an Arrays structure
---
-applyArraysR
-    :: (forall sh e. (Shape sh, Elt e) => Array sh e -> CIO ())
-    -> ArraysR arrs
-    -> arrs
-    -> CIO ()
-applyArraysR _ ArraysRunit         ()       = return ()
-applyArraysR f (ArraysRpair r1 r0) (a1, a0) = applyArraysR f r1 a1 >> applyArraysR f r0 a0
-applyArraysR f ArraysRarray        arr      = f arr
-
-
--- Debug
--- -----
+-- Debugging
+-- ---------
 
 {-# INLINE trace #-}
 trace :: String -> CIO a -> CIO a

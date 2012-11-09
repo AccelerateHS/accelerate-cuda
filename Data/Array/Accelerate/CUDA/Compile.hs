@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Compile
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -23,16 +24,14 @@ module Data.Array.Accelerate.CUDA.Compile (
 #include "accelerate.h"
 
 -- friends
-import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
-
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
+import Data.Array.Accelerate.CUDA.Analysis.Launch
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
-import qualified Data.Array.Accelerate.CUDA.Analysis.Launch     as Analysis
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
@@ -56,14 +55,12 @@ import System.IO.Error
 import System.IO.Unsafe
 import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
-import qualified Data.HashSet                                   as Set
 import qualified Data.ByteString                                as B
 import qualified Data.Text.Lazy                                 as T
 import qualified Data.Text.Lazy.IO                              as T
 import qualified Data.Text.Lazy.Encoding                        as T
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
-import Foreign.CUDA.Analysis                                    ( DeviceProperties, Occupancy )
 
 #ifdef VERSION_unix
 import System.Posix.Process
@@ -76,6 +73,13 @@ import Foreign.Storable
 #endif
 
 import Paths_accelerate_cuda                                    ( getDataDir )
+
+
+-- Keep track of which kernels have been linked into which contexts. We use the
+-- context as a lookup key, which requires equality.
+--
+instance Eq CUDA.Context where
+  CUDA.Context c1 == CUDA.Context c2 = c1 == c2
 
 
 -- | Initiate code generation, compilation, and data transfer for an array
@@ -107,123 +111,99 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
     -- around the AST nodes together with a set of free variable indices that
     -- are merged at every step.
     --
-    traverseAcc :: forall aenv a. OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-    traverseAcc acc@(OpenAcc pacc) = do
-
-      let exec :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
-          exec (var, eacc) = do
-            kernel      <- buildOpenAcc acc var
-            return      $  ExecAcc (FL.singleton () kernel) var eacc
-
-          node :: (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a) -> CIO (ExecOpenAcc aenv a)
-          node (_, eacc) = return $ ExecAcc noKernel mempty eacc
-
+    traverseAcc :: forall aenv arrs. OpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
+    traverseAcc acc@(OpenAcc pacc) =
       case pacc of
-        -- Environment manipulations
-        --
+        -- Environment and control flow
         Avar ix                 -> node $ pure (Avar ix)
-
-        -- Let bindings
-        --
         Alet a b                -> node . pure =<< Alet         <$> traverseAcc a <*> traverseAcc b
         Apply f a               -> node . pure =<< Apply        <$> compileAfun f <*> traverseAcc a
         Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
-
-        -- Tuples
-        --
         Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
         -- Array injection
-        --
-        Use arrs                -> use (arrays (undefined::a)) arrs >> node (pure $ Use arrs)
-          where
-            use :: ArraysR a' -> a' -> CIO ()
-            use ArraysRunit         ()       = return ()
-            use ArraysRarray        arr      = useArray arr
-            use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
+        Unit e                  -> node =<< liftA  Unit         <$> travE e
+        Use arrs                -> use (arrays (undefined::arrs)) arrs >> node (pure $ Use arrs)
 
-        -- Computation nodes
-        --
+        -- Index space transforms
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
-        Unit e                  -> node =<< liftA  Unit                 <$> travE e
-        Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
-        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travA a
         Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
         Slice slix a e          -> exec =<< liftA2 (Slice slix)         <$> travA a <*> travE e
-        Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a
-        ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travA a <*> travA b
-        Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travA a
-        Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travA a
-        FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travA a <*> travA (segments s)
-        Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travA a <*> travA (segments s)
-        Scanl f e a             -> scanl f =<< liftA3 Scanl             <$> travF f <*> travE e <*> travA a
-        Scanl' f e a            -> scanl f =<< liftA3 Scanl'            <$> travF f <*> travE e <*> travA a
-        Scanl1 f a              -> scanl f =<< liftA2 Scanl1            <$> travF f <*> travA a
-        Scanr f e a             -> scanr f =<< liftA3 Scanr             <$> travF f <*> travE e <*> travA a
-        Scanr' f e a            -> scanr f =<< liftA3 Scanr'            <$> travF f <*> travE e <*> travA a
-        Scanr1 f a              -> scanr f =<< liftA2 Scanr1            <$> travF f <*> travA a
-        Permute f a g b         -> exec =<< liftA4 Permute              <$> travF f <*> travA a <*> travF g <*> travA b
-        Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travA a
+        Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travD a
+
+        -- Producers
+        Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
+        Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travD a
+        ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travD a <*> travD b
+        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travD a
+
+        -- Consumers
+        Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travD a
+        Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travD a
+        FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travD a <*> travD s
+        Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travD a <*> travD s
+        Scanl f e a             -> exec =<< liftA3 Scanl                <$> travF f <*> travE e <*> travD a
+        Scanl' f e a            -> exec =<< liftA3 Scanl'               <$> travF f <*> travE e <*> travD a
+        Scanl1 f a              -> exec =<< liftA2 Scanl1               <$> travF f <*> travD a
+        Scanr f e a             -> exec =<< liftA3 Scanr                <$> travF f <*> travE e <*> travD a
+        Scanr' f e a            -> exec =<< liftA3 Scanr'               <$> travF f <*> travE e <*> travD a
+        Scanr1 f a              -> exec =<< liftA2 Scanr1               <$> travF f <*> travD a
+        Permute f d g a         -> exec =<< liftA4 Permute              <$> travF f <*> travA d <*> travF g <*> travD a
         Stencil f b a           -> exec =<< liftA2 (flip Stencil b)     <$> travF f <*> travA a
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
       where
-        travA :: OpenAcc aenv' a' -> CIO (AccBindings aenv', ExecOpenAcc aenv' a')
+        use :: ArraysR a -> a -> CIO ()
+        use ArraysRunit         ()       = return ()
+        use ArraysRarray        arr      = useArray arr
+        use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
+
+        exec :: (Gamma aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
+        exec (aenv, eacc) = do
+          kernel <- build acc aenv
+          return $! ExecAcc (fullOfList kernel) aenv eacc
+
+        node :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (ExecOpenAcc aenv' arrs')
+        node = fmap snd . wrap
+
+        wrap :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (Gamma aenv', ExecOpenAcc aenv' arrs')
+        wrap = return . liftA (ExecAcc noKernel mempty)
+
+        travA :: OpenAcc aenv' a' -> CIO (Gamma aenv', ExecOpenAcc aenv' a')
         travA a = pure <$> traverseAcc a
 
-        travAtup :: Atuple (OpenAcc aenv') a' -> CIO (AccBindings aenv', Atuple (ExecOpenAcc aenv') a')
+        travD :: (Shape sh, Elt e) => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
+        travD (OpenAcc delayed) =
+          case delayed of
+            Avar ix             -> wrap (freevar ix, Avar ix)
+            Map f a             -> wrap =<< liftA2 Map                  <$> travF f <*> travD a
+            Generate e f        -> wrap =<< liftA2 Generate             <$> travE e <*> travF f
+            Backpermute e f a   -> wrap =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travD a
+            Transform e p f a   -> wrap =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travD a
+            _                   -> INTERNAL_ERROR(error) "compile" "expected fused/delayable array"
+
+        travAtup :: Atuple (OpenAcc aenv) a -> CIO (Gamma aenv, Atuple (ExecOpenAcc aenv) a)
         travAtup NilAtup        = return (pure NilAtup)
         travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
 
-        travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
-
-        segments :: forall i. (Elt i, IsIntegral i)
-                 => OpenAcc aenv (Segments i) -> OpenAcc aenv (Segments i)
-        segments = OpenAcc . Scanl plus (Const (fromElt (0::i)))
-
-        plus :: (Elt i, IsIntegral i) => PreOpenFun OpenAcc () aenv (i -> i -> i)
-        plus = Lam (Lam (Body (PrimAdd numType
-                              `PrimApp`
-                              Tuple (NilTup `SnocTup` Var (SuccIdx ZeroIdx)
-                                            `SnocTup` Var ZeroIdx))))
-
-        -- Special versions of 'exec' for left and right scans, which include
-        -- the first phase upsweep kernel required for multi-block scans.
-        --
-        -- Using 'acc' for the launch and occupancy configuration of the upsweep
-        -- operation, which is similar to an inclusive scan, is close enough.
-        --
-        scanl :: Fun aenv (e -> e -> e)         -- hmm?
-              -> (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a)
-              -> CIO (ExecOpenAcc aenv a)
-        scanl f (var, eacc) = do
-          scan          <- buildOpenAcc acc var
-          upsweep       <- build (\k d -> compile k d (codegenScanlIntervals d f var))
-                                 (Analysis.launchConfig acc)
-                                 (Analysis.determineOccupancy acc)
-          return        $! ExecAcc (FL.cons () upsweep $ FL.singleton () scan) var eacc
-
-        scanr :: Fun aenv (e -> e -> e)
-              -> (AccBindings aenv, PreOpenAcc ExecOpenAcc aenv a)
-              -> CIO (ExecOpenAcc aenv a)
-        scanr f (var, eacc) = do
-          scan          <- buildOpenAcc acc var
-          upsweep       <- build (\k d -> compile k d (codegenScanrIntervals d f var))
-                                 (Analysis.launchConfig acc)
-                                 (Analysis.determineOccupancy acc)
-          return        $! ExecAcc (FL.cons () upsweep $ FL.singleton () scan) var eacc
 
         noKernel :: FL.FullList () (AccKernel a)
         noKernel =  FL.FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") FL.Nil
 
+        fullOfList :: [a] -> FL.FullList () a
+        fullOfList []       = INTERNAL_ERROR(error) "fullList" "empty list"
+        fullOfList [x]      = FL.singleton () x
+        fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
+
     -- Traverse a scalar expression
     --
     travE :: OpenExp env aenv e
-          -> CIO (AccBindings aenv, PreOpenExp ExecOpenAcc env aenv e)
+          -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv e)
     travE exp =
       case exp of
         Var ix                  -> return $ pure (Var ix)
@@ -252,22 +232,22 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
       where
         travA :: (Shape sh, Elt e)
-              => OpenAcc aenv (Array sh e) -> CIO (AccBindings aenv, ExecOpenAcc aenv (Array sh e))
+              => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
 
-        travF :: OpenFun env aenv t -> CIO (AccBindings aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
         travT :: Tuple (OpenExp env aenv) t
-              -> CIO (AccBindings aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
+              -> CIO (Gamma aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
         travT NilTup        = return (pure NilTup)
         travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
 
-        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> AccBindings aenv
-        bind (ExecAcc _ _ (Avar ix)) = AccBindings ( Set.singleton (ArrayVar ix) )
+        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Gamma aenv
+        bind (ExecAcc _ _ (Avar ix)) = freevar ix
         bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
 
 
@@ -286,26 +266,22 @@ liftA4 f a b c d = f <$> a <*> b <*> c <*> d
 -- evaluates and blocks on the external compiler only once the compiled object
 -- is truly needed.
 --
-buildOpenAcc :: OpenAcc aenv a -> AccBindings aenv -> CIO (AccKernel a)
-buildOpenAcc acc fvar =
-  build (\table dev -> compileOpenAcc table dev acc fvar)
-        (Analysis.launchConfig acc)
-        (Analysis.determineOccupancy acc)
+build :: OpenAcc aenv a -> Gamma aenv -> CIO [AccKernel a]
+build acc aenv = do
+  dev   <- asks deviceProps
+  mapM (build1 acc) (codegenAcc dev acc aenv)
 
-build :: (KernelTable -> DeviceProperties -> CIO (String, KernelKey))
-      -> (DeviceProperties -> Occupancy -> (Int, Int -> Int, Int))
-      -> (DeviceProperties -> CUDA.Fun -> Int -> IO Occupancy)
-      -> CIO (AccKernel a)
-build compile' launchConfig determineOccupancy = do
+build1 :: OpenAcc aenv a -> CUTranslSkel aenv a -> CIO (AccKernel a)
+build1 acc code = do
   dev           <- asks deviceProps
   table         <- gets kernelTable
-  (entry,key)   <- compile' table dev
-  let (cta,blocks,smem) = launchConfig dev occ
+  (entry,key)   <- compile table dev code
+  let (cta,blocks,smem) = launchConfig acc dev occ
       (mdl,fun,occ)     = unsafePerformIO $ do
         m <- link table key
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
-        o <- determineOccupancy dev f l
+        o <- determineOccupancy acc dev f l
         D.when D.dump_cc (stats entry f o)
         return (m,f,o)
   --
@@ -383,11 +359,7 @@ link table key =
 
 -- Generate and compile code for a single open array expression
 --
-compileOpenAcc :: KernelTable -> CUDA.DeviceProperties -> OpenAcc aenv a -> AccBindings aenv -> CIO (String, KernelKey)
-compileOpenAcc table dev acc fvar
-  = compile table dev (codegenAcc dev acc fvar)
-
-compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel -> CIO (String, KernelKey)
+compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel aenv a -> CIO (String, KernelKey)
 compile table dev cunit = do
   exists        <- isJust `fmap` liftIO (KT.lookup table key)
   unless exists $ do
@@ -461,6 +433,7 @@ openTemporaryFile template = liftIO $ do
 getProcessID :: ProcessHandle -> IO ProcessId
 getProcessID = getProcessId
 #endif
+
 
 -- Debug
 -- -----

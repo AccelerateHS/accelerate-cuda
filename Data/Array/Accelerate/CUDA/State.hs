@@ -139,10 +139,12 @@ defaultContext = unsafePerformIO $ do
 -- We may want to introduce some way to actually shut this down if, for example,
 -- the object has not been accessed in a while, and so let it be collected.
 --
+-- Broken in ghci-7.6.1 Mac OS X due to bug #7299.
+--
 keepAlive :: a -> IO a
 keepAlive x = forkIO (caffeine x) >> return x
   where
-    caffeine hit = do threadDelay 5000000 -- microseconds = 5 seconds
+    caffeine hit = do threadDelay (5 * 1000 * 1000) -- microseconds = 5 seconds
                       caffeine hit
 
 

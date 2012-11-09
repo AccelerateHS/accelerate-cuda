@@ -1,8 +1,6 @@
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -20,129 +18,132 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
   mkGenerate,
 
   -- Permutations
-  mkTransform, mkPermute, mkBackpermute,
-
-  -- Multidimensional index and replicate
-  mkSlice, mkReplicate
+  mkTransform, mkPermute,
 
 ) where
 
 import Data.List
-import Language.C.Syntax
 import Language.C.Quote.CUDA
-import Foreign.CUDA.Analysis
+import Foreign.CUDA.Analysis.Device
+import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Array.Sugar                ( Array, Elt )
-import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+import Data.Array.Accelerate.Analysis.Shape
+import Data.Array.Accelerate.CUDA.AST                   ( Gamma, Exp )
 import Data.Array.Accelerate.CUDA.CodeGen.Type
-
-#ifndef SIZEOF_HSINT
-import Foreign.Storable
-#endif
+import Data.Array.Accelerate.CUDA.CodeGen.Base
 
 
 -- Construct a new array by applying a function to each index. Each thread
 -- processes multiple elements, striding the array by the grid size.
 --
 -- generate :: (Shape ix, Elt e)
---          => Exp ix
---          -> (Exp ix -> Exp a)
+--          => Exp ix                           -- dimension of the result
+--          -> (Exp ix -> Exp a)                -- function to apply at each index
 --          -> Acc (Array ix a)
 --
-mkGenerate :: forall sh e. Elt e => Int -> CUFun (sh -> e) -> CUTranslSkel
-mkGenerate dimOut (CULam _ (CUBody (CUExp env fn))) =
-  CUTranslSkel "generate" [cunit|
-    $edecl:(cdim "DimOut" dimOut)
+mkGenerate
+    :: forall aenv sh e. (Shape sh, Elt e)
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun1 aenv (sh -> e)
+    -> [CUTranslSkel aenv (Array sh e)]
+mkGenerate dev aenv (CUFun1 f)
+  = return
+  $ CUTranslSkel "generate" [cunit|
 
-    extern "C"
-    __global__ void
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecl:(cdim "DimOut" dim)
+    $edecls:texIn
+
+    extern "C" __global__ void
     generate
     (
-        $params:args,
-        const typename DimOut shOut
+        $params:argIn,
+        $params:argOut
     )
     {
-        const int n        = size(shOut);
-        const int gridSize = __umul24(blockDim.x, gridDim.x);
+        const int shapeSize     = size(shOut);
+        const int gridSize      = $exp:(gridSize dev);
               int ix;
 
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < n
-            ; ix += gridSize)
+        for ( ix =  $exp:(threadIdx dev)
+            ; ix <  shapeSize
+            ; ix += gridSize )
         {
-            $decls:shape
-            $items:env
-            $stms:(set "ix" fn)
+            const typename DimOut sh = fromIndex(shOut, ix);
+
+            $items:(setOut "ix" .=. f sh)
         }
     }
   |]
   where
-    (args, _, set)      = setters tyOut
-    tyOut               = eltType (undefined :: e)
-    shape               = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
+    dim                 = expDim (undefined :: Exp aenv sh)
+    sh                  = cshape dim (cvar "sh")
+    (texIn, argIn)      = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Array sh e)
 
 
 -- A combination map/backpermute, where the index and value transformations have
 -- been separated.
 --
--- transform   :: (Elt a, Elt b, Shape sh, Shape sh')
---             => PreExp     acc aenv sh'               -- dimension of the result
---             -> PreFun     acc aenv (sh' -> sh)       -- index permutation function
---             -> PreFun     acc aenv (a   -> b)        -- function to apply at each element
---             ->            acc aenv (Array sh  a)     -- source array
---             -> PreOpenAcc acc aenv (Array sh' b)
+-- transform :: (Elt a, Elt b, Shape sh, Shape sh')
+--           => PreExp     acc aenv sh'                 -- dimension of the result
+--           -> PreFun     acc aenv (sh' -> sh)         -- index permutation function
+--           -> PreFun     acc aenv (a   -> b)          -- function to apply at each element
+--           ->            acc aenv (Array sh  a)       -- source array
+--           -> PreOpenAcc acc aenv (Array sh' b)
 --
-mkTransform :: forall sh sh' a b. Elt b
-            => Int                              -- result shape: sh'
-            -> Int                              -- source shape: sh
-            -> CUFun (sh' -> sh)
-            -> CUFun (a -> b)
-            -> CUTranslSkel
-mkTransform dimOut dimIn0
-    (CULam _    (CUBody (CUExp envprj prj)))
-    (CULam use0 (CUBody (CUExp envfun fun))) =
-  CUTranslSkel "transform" [cunit|
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn0" dimIn0)
+mkTransform
+    :: forall aenv sh sh' a b. (Shape sh, Shape sh', Elt a, Elt b)
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun1 aenv (sh' -> sh)
+    -> CUFun1 aenv (a -> b)
+    -> CUDelayedAcc aenv sh a
+    -> [CUTranslSkel aenv (Array sh' b)]
+mkTransform dev aenv perm fun arr
+  | CUFun1 p                    <- perm
+  , CUFun1 f                    <- fun
+  , CUDelayed _ (CUFun1 get) _  <- arr
+  = return
+  $ CUTranslSkel "transform" [cunit|
 
-    extern "C"
-    __global__ void
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecl:(cdim "DimOut" dimOut)
+    $edecl:(cdim "DimIn"  dimIn)
+    $edecls:texIn
+
+    extern "C" __global__ void
     transform
     (
-        $params:argOut,
-        $params:argIn0,
-        const typename DimOut shOut,
-        const typename DimIn0 shIn0
+        $params:argIn,
+        $params:argOut
     )
     {
-        const int shapeSize = size(shOut);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
+        const int shapeSize     = size(shOut);
+        const int gridSize      = $exp:(gridSize dev);
               int ix;
 
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shapeSize
-            ; ix += gridSize)
+        for ( ix =  $exp:(threadIdx dev)
+            ; ix <  shapeSize
+            ; ix += gridSize )
         {
-            typename DimIn0 src;
-            $decls:dst
-            $items:envprj
-            $stms:src
-            {
-                const int jx = toIndex(shIn0, src);
-                $decls:(getIn0 "jx")
-                $items:envfun
-                $stms:(setOut "ix" fun)
-            }
+            const typename DimOut sh_ = fromIndex(shOut, ix);
+            $items:(sh          .=. p sh_)
+            $items:(x0          .=. get sh)
+            $items:(setOut "ix" .=. f x0)
         }
     }
   |]
   where
-    tyIn0                       = eltType (undefined :: a)
-    tyOut                       = eltType (undefined :: b)
-    (argIn0, _, _, _, getIn0)   = getters 0 tyIn0 use0
-    (argOut, _, setOut)         = setters tyOut
-    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
-    src                         = project dimIn0 "src" prj
+    dimIn               = expDim (undefined :: Exp aenv sh)
+    dimOut              = expDim (undefined :: Exp aenv sh')
+    sh_                 = cshape dimOut (cvar "sh_")
+    (texIn, argIn)      = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Array sh' b)
+    (x0, _, _)          = locals "x"  (undefined :: a)
+    (sh, _, _)          = locals "sh" (undefined :: sh)
 
 
 -- Forward permutation specified by an index mapping that determines for each
@@ -161,66 +162,75 @@ mkTransform dimOut dimIn0
 --         -> Acc (Array ix  a)                 -- permuted array
 --         -> Acc (Array ix' a)
 --
-mkPermute :: forall a ix ix'.
-             DeviceProperties
-          -> Int                                -- dimensionality ix'
-          -> Int                                -- dimensionality ix
-          -> CUFun (a -> a -> a)
-          -> CUFun (ix -> ix')
-          -> CUTranslSkel
-mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine)))) (CULam _ (CUBody (CUExp envIx prj))) =
-  CUTranslSkel "permute" [cunit|
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn0" dimIn0)
+mkPermute
+    :: forall aenv sh sh' e. (Shape sh, Shape sh', Elt e)
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> CUFun1 aenv (sh -> sh')
+    -> CUDelayedAcc aenv sh e
+    -> [CUTranslSkel aenv (Array sh' e)]
+mkPermute dev aenv (CUFun2 combine) (CUFun1 prj) arr
+  | CUDelayed (CUExp shIn) _ (CUFun1 get) <- arr
+  = return
+  $ CUTranslSkel "permute" [cunit|
 
-    extern "C"
-    __global__ void
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecl:(cdim "DimOut" dimOut)
+    $edecl:(cdim "DimIn"  dimIn)
+    $edecls:texIn
+
+    extern "C" __global__ void
     permute
     (
-        $params:argOut,
-        $params:argIn0,
-        const typename DimOut shOut,
-        const typename DimIn0 shIn0
+        $params:argIn,
+        $params:argOut
     )
     {
-        const int shapeSize = size(shIn0);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
+        $items:(sh .=. shIn)
+        const typename DimIn shIn       = $exp:(ccall "shape" (map rvalue sh));
+        const int shapeSize             = $exp:(shapeSize sh);
+        const int gridSize              = $exp:(gridSize dev);
               int ix;
 
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shapeSize
-            ; ix += gridSize)
+        for ( ix =  $exp:(threadIdx dev)
+            ; ix <  shapeSize
+            ; ix += gridSize )
         {
             typename DimOut dst;
-            $decls:src
-            $items:envIx
-            $stms:dst
 
-            if (!ignore(dst))
+            const int src = fromIndex( shIn, ix );
+            $items:(dst .=. prj src)
+
+            if ( !ignore(dst) )
             {
+                $decls:decly
+                $decls:decly'
+
                 const int jx = toIndex(shOut, dst);
-                $decls:decl1
-                $decls:temps
-                $items:env
-                $stms:(x1 .=. getIn0 "ix")
-                $stms:write
+                $items:(x .=. get ix)
+                $items:(y .=. arrOut "jx")
+
+                $items:write
             }
         }
     }
   |]
   where
-    elt                         = eltType   (undefined :: a)
-    sizeof                      = eltSizeOf (undefined :: a)
-    (argIn0, _, _, getIn0, _)   = getters 0 elt useFn
-    (_, x1, decl1, _, _)        = getters 1 elt useFn
-    (argOut, arrOut,  setOut)   = setters elt
-    (x0, _)                     = locals "x0" elt
-    src                         = fromIndex dimIn0 "DimIn0" "shIn0" "ix" "x0"
-    dst                         = project dimOut "dst" prj
-    sm                          = computeCapability dev
-    unsafe                      = setOut "jx" combine
-    (temps, write)              = unzip $ zipWith6 apply unsafe combine elt arrOut x0 sizeof
-    --
+    dimIn               = expDim (undefined :: Exp aenv sh)
+    dimOut              = expDim (undefined :: Exp aenv sh')
+    sizeof              = eltSizeOf (undefined::e)
+    (texIn, argIn)      = environment dev aenv
+    (argOut, arrOut)    = setters "Out" (undefined :: Array sh' e)
+    (sh, _, _)          = locals "sh" (undefined :: sh)
+    (x, _, _)           = locals "x"  (undefined :: e)
+    (_, y, decly)       = locals "y"  (undefined :: e)
+    (_, y', decly')     = locals "_y" (undefined :: e)
+    ix                  = [cvar "ix"]
+    src                 = cshape dimIn  (cvar "src")
+    dst                 = cshape dimOut (cvar "dst")
+    sm                  = computeCapability dev
+
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
     -- write-combining mechanism will accept one transaction and all other
@@ -234,239 +244,24 @@ mkPermute dev dimOut dimIn0 (CULam useFn (CULam _ (CUBody (CUExp env combine))))
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    apply set f t a z s
-      | Just atomicCAS <- reinterpret s
-      = let z'        = [cexp| $id:('_':show z) |]
-        in
-        ( [cdecl| $ty:t $id:(show z), $id:(show z') = $exp:a [ $id:("jx") ]; |]
-        , [cstm| do { $exp:z  = $exp:z';
-                      $exp:z' = $exp:atomicCAS ( & $exp:a [ $id:("jx") ], $exp:z, $exp:f );
-                    } while ( $exp:z != $exp:z' ); |]
-        )
+    write               = env ++ zipWith5 apply sizeof (arrOut "jx") fun y y'
+    (env, fun)          = combine x y
+
+    apply size out f x1 x1'
+      | Just atomicCAS <- reinterpret size
+      = C.BlockStm
+        [cstm| do {
+                      $exp:x1' = $exp:x1;
+                      $exp:x1  = $exp:atomicCAS ( & $exp:out, $exp:x1', $exp:f );
+
+                  } while ( $exp:x1 != $exp:x1' ); |]
 
       | otherwise
-      = ( [cdecl| const $ty:t $id:(show z) = $exp:a [ $id:("jx") ]; |]
-        , set
-        )
+      = C.BlockStm [cstm| $exp:out = $exp:x1; |]
+
     --
-    reinterpret :: Int -> Maybe Exp
+    reinterpret :: Int -> Maybe C.Exp
     reinterpret 4 | sm >= Compute 1 1   = Just [cexp| $id:("atomicCAS32") |]
     reinterpret 8 | sm >= Compute 1 2   = Just [cexp| $id:("atomicCAS64") |]
     reinterpret _                       = Nothing
-
-
--- Backwards permutation (gather) of an array according to a permutation
--- function.
---
--- backpermute :: (Shape ix, Shape ix', Elt a)
---             => Exp ix'                       -- shape of the result array
---             -> (Exp ix' -> Exp ix)           -- permutation
---             -> Acc (Array ix  a)             -- permuted array
---             -> Acc (Array ix' a)
---
-mkBackpermute :: forall ix ix' a. Elt a
-              => Int                            -- dimensionality ix'
-              -> Int                            -- dimensionality ix
-              -> CUFun (ix' -> ix)
-              -> Array ix' a                    -- dummy to fix type variables
-              -> CUTranslSkel
-mkBackpermute dimOut dimIn0 (CULam _ (CUBody (CUExp env prj))) _ =
-  CUTranslSkel "backpermute" [cunit|
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn0" dimIn0)
-
-    extern "C"
-    __global__ void
-    backpermute
-    (
-        $params:argOut,
-        $params:argIn0,
-        const typename DimOut shOut,
-        const typename DimIn0 shIn0
-    )
-    {
-        const int shapeSize = size(shOut);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
-              int ix;
-
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shapeSize
-            ; ix += gridSize)
-        {
-            typename DimIn0 src;
-            $decls:dst
-            $items:env
-            $stms:src
-            {
-                const int jx = toIndex(shIn0, src);
-                $decls:(getIn0 "jx")
-                $stms:(setOut "ix" (reverse x0))
-            }
-        }
-    }
-  |]
-  where
-    elt                         = eltType (undefined :: a)
-    (argOut, _, setOut)         = setters elt
-    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
-    dst                         = fromIndex dimOut "DimOut" "shOut" "ix" "x0"
-    src                         = project dimIn0 "src" prj
-
-
--- Index an array with a generalised, multidimensional array index. The result
--- is a new array (possibly a singleton) containing all dimensions in their
--- entirety.
---
--- slice :: (Slice slix, Elt e)
---       => Acc (Array (FullShape slix) e)
---       -> Exp slix
---       -> Acc (Array (SliceShape slix) e)
---
-mkSlice :: forall sl slix e. Elt e
-        => Int                  -- dimensionality sl
-        -> Int                  -- dimensionality co
-        -> Int                  -- dimensionality sh
-        -> CUExp slix
-        -> Array sl e           -- dummy
-        -> CUTranslSkel
-mkSlice dimSl dimCo dimIn0 (CUExp [] slix) _ =
-  CUTranslSkel "slice" [cunit|
-    $edecl:(cdim "Slice"    dimSl)
-    $edecl:(cdim "CoSlice"  dimCo)
-    $edecl:(cdim "SliceDim" dimIn0)
-
-    extern "C"
-    __global__ void
-    slice
-    (
-        $params:argOut,
-        $params:argIn0,
-        const typename Slice    slice,
-        const typename CoSlice  co,
-        const typename SliceDim sliceDim
-    )
-    {
-              int ix;
-        const int shapeSize = size(slice);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
-
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shapeSize
-            ; ix += gridSize)
-        {
-            typename Slice    sl  = fromIndex(slice, ix);
-            typename SliceDim src;
-            $stms:src
-            {
-                const int jx = toIndex(sliceDim, src);
-                $decls:(getIn0 "jx")
-                $stms:(setOut "ix" x0)
-            }
-        }
-    }
-  |]
-  where
-    elt                         = eltType (undefined :: e)
-    (argOut, _, setOut)         = setters elt
-    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
-    src                         = project dimIn0 "src" slix
-
-
--- Replicate an array across one or more dimensions as specified by the
--- generalised array index.
---
--- replicate :: (Slice slix, Elt e)
---           => Exp slix
---           -> Acc (Array (SliceShape slix) e)
---           -> Acc (Array (FullShape  slix) e)
---
-mkReplicate :: forall sh slix e. Elt e
-            => Int              -- dimensionality sl
-            -> Int              -- dimensionality sh
-            -> CUExp slix
-            -> Array sh e       -- dummy
-            -> CUTranslSkel
-mkReplicate dimSl dimOut (CUExp _ slix) _ =
-  CUTranslSkel "replicate" [cunit|
-    $edecl:(cdim "Slice"    dimSl)
-    $edecl:(cdim "SliceDim" dimOut)
-
-    extern "C"
-    __global__ void
-    replicate
-    (
-        $params:argOut,
-        $params:argIn0,
-        const typename Slice    slice,
-        const typename SliceDim sliceDim
-    )
-    {
-              int ix;
-        const int shapeSize = size(sliceDim);
-        const int gridSize  = __umul24(blockDim.x, gridDim.x);
-
-        for ( ix = __umul24(blockDim.x, blockIdx.x) + threadIdx.x
-            ; ix < shapeSize
-            ; ix += gridSize)
-        {
-            typename SliceDim dim = fromIndex(sliceDim, ix);
-            typename Slice    src;
-            $stms:src
-            {
-                const int jx = toIndex(slice, src);
-                $decls:(getIn0 "jx")
-                $stms:(setOut "ix" x0)
-            }
-        }
-    }
-  |]
-  where
-    elt                         = eltType (undefined :: e)
-    (argOut, _, setOut)         = setters elt
-    (argIn0, x0, _, _, getIn0)  = getters 0 elt (useAll 0 elt)
-    src                         = project dimSl "src" slix
-
-
-
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------
-
--- destruct shapes into separate components, since the code generator no
--- longer treats tuples as structs
---
-fromIndex :: Int -> String -> String -> String -> String -> [InitGroup]
-fromIndex n dim sh ix base
-  | n == 1      = [[cdecl| const $ty:int $id:(base ++ "_a0") = $id:ix; |]]
-  | otherwise   = sh0 : map (unsh . show) [0 .. n-1]
-    where
-#if   SIZEOF_HSINT == 4
-      int       = typename "Int32"
-#elif SIZEOF_HSINT == 8
-      int       = typename "Int64"
-#else
-      int       = typename $ case sizeOf (undefined::Int) of
-                    4 -> "Int32"
-                    8 -> "Int64"
-#endif
-      sh0       = [cdecl| const typename $id:dim $id:base = fromIndex( $id:sh , $id:ix ); |]
-      unsh c    = [cdecl| const int $id:(base ++ "_a" ++ c) = $id:base . $id:('a':c); |]
-
-
--- apply expressions to the components of a shape
---
-project :: Int -> String -> [Exp] -> [Stm]
-project n sh idx
-  | n   == 0    = [[cstm| $id:sh = 0; |]]
-  | [e] <- idx  = [[cstm| $id:sh = $exp:e; |]]
-  | otherwise   = zipWith (\i c -> [cstm| $id:sh . $id:('a':show c) = $exp:i; |]) idx [n-1,n-2..0]
-
-
--- tell the getters function that we will use all the scalar components
---
-useAll :: Int -> [Type] -> [(Int, Type, Exp)]
-useAll base elt =
-  let n   = length elt
-      x i = 'x' : shows base "_a" ++ show i
-  in
-  zipWith (\i t -> (i,t, cvar (x i))) [n-1, n-2 .. 0] elt
 

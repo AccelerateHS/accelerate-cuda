@@ -28,7 +28,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type (
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.CUDA.CodeGen.Base
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 
@@ -42,6 +41,9 @@ import Foreign.Storable
 
 #include "accelerate.h"
 
+
+typename :: String -> C.Type
+typename name = [cty| typename $id:name |]
 
 -- Surface element types
 -- ---------------------

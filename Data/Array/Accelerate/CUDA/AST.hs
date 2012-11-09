@@ -1,6 +1,7 @@
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE GADTs                #-}
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.AST
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -15,8 +16,11 @@
 module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
-  AccKernel(..), AccBindings(..), ArrayVar(..),
+
+  AccKernel(..), Gamma(..), Idx_(..),
   ExecAcc, ExecAfun, ExecOpenAcc(..),
+  ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
+  freevar,
 
 ) where
 
@@ -55,25 +59,26 @@ data AccKernel a where
 --
 -- data AccBarrier = AB !Stream !Event
 
--- Array computations that were embedded within scalar expressions, and will be
--- required to execute the kernel; i.e. bound to texture references or similar.
+-- The set of free array variables for array computations that were embedded
+-- within scalar expressions. This are required to execute the kernel, bi
+-- binding to texture references to similar.
 --
-newtype AccBindings aenv = AccBindings ( Set.HashSet (ArrayVar aenv) )
+newtype Gamma aenv = Gamma ( Set.HashSet (Idx_ aenv) )
+  deriving ( Monoid )
 
-instance Monoid (AccBindings aenv) where
-  mempty                                = AccBindings ( Set.empty )
-  AccBindings x `mappend` AccBindings y = AccBindings ( Set.union x y )
+freevar :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Gamma aenv
+freevar = Gamma . Set.singleton . Idx_
 
-data ArrayVar aenv where
-  ArrayVar :: (Shape sh, Elt e)
-           => Idx aenv (Array sh e)
-           -> ArrayVar aenv
+-- Opaque array environment indices
+--
+data Idx_ aenv where
+  Idx_ :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Idx_ aenv
 
-instance Eq (ArrayVar aenv) where
-  ArrayVar ix1 == ArrayVar ix2 = idxToInt ix1 == idxToInt ix2
+instance Eq (Idx_ aenv) where
+  Idx_ ix1 == Idx_ ix2 = idxToInt ix1 == idxToInt ix2
 
-instance Hashable (ArrayVar aenv) where
-  hash (ArrayVar ix) = hash (idxToInt ix)
+instance Hashable (Idx_ aenv) where
+  hash (Idx_ ix) = hash (idxToInt ix)
 
 
 -- Interleave compilation & execution state annotations into an open array
@@ -81,15 +86,25 @@ instance Hashable (ArrayVar aenv) where
 --
 data ExecOpenAcc aenv a where
   ExecAcc :: {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
-          -> !(AccBindings aenv)                                -- auxiliary arrays from the environment the kernel needs access to
+          -> !(Gamma aenv)                                      -- free array variables the kernel needs access to
           -> !(PreOpenAcc ExecOpenAcc aenv a)                   -- the actual computation
           -> ExecOpenAcc aenv a                                 -- the recursive knot
 
 
 -- An annotated AST suitable for execution in the CUDA environment
 --
-type ExecAcc  a = ExecOpenAcc () a
-type ExecAfun a = PreAfun ExecOpenAcc a
+type ExecAcc  a         = ExecOpenAcc () a
+type ExecAfun a         = PreAfun ExecOpenAcc a
+
+type ExecOpenExp        = PreOpenExp ExecOpenAcc
+type ExecOpenFun        = PreOpenFun ExecOpenAcc
+
+type ExecExp            = ExecOpenExp ()
+type ExecFun            = ExecOpenFun ()
+
+
+-- Display the annotated AST
+-- -------------------------
 
 instance Show (ExecOpenAcc aenv a) where
   show = render . prettyExecAcc 0 noParens
@@ -98,18 +113,15 @@ instance Show (ExecAfun a) where
   show = render . prettyExecAfun 0
 
 
--- Display the annotated AST
--- -------------------------
-
 prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
 prettyExecAcc :: PrettyAcc ExecOpenAcc
-prettyExecAcc alvl wrap (ExecAcc _ (AccBindings fv) pacc) =
+prettyExecAcc alvl wrap (ExecAcc _ (Gamma fv) pacc) =
   let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
       ann       = braces (freevars (Set.toList fv))
       freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
-                                  . map (\(ArrayVar ix) -> char 'a' <> int (idxToInt ix))
+                                  . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
   in case pacc of
        Avar _         -> base
        Alet  _ _      -> base

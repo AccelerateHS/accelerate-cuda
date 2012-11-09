@@ -1,7 +1,7 @@
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS -fno-warn-incomplete-patterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -16,22 +16,76 @@
 module  Data.Array.Accelerate.CUDA.CodeGen.PrefixSum (
 
   -- skeletons
-  mkScanl, mkScanr,
-  mkScanlIntervals, mkScanrIntervals,
-
-  -- closets
-  scanBlock,
+  mkScanl, mkScanl1, mkScanl',
+  mkScanr, mkScanr1, mkScanr',
 
 ) where
 
-import Language.C.Syntax
-import Language.C.Quote.CUDA
-import Foreign.CUDA.Analysis
 import Data.Maybe
+import Foreign.CUDA.Analysis
+import Language.C.Quote.CUDA
+import qualified Language.C.Syntax                      as C
 
+import Data.Array.Accelerate.Array.Sugar                ( Vector, Scalar, Elt, DIM1 )
+import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-import Data.Array.Accelerate.CUDA.CodeGen.Type
 
+
+-- Wrappers
+-- --------
+
+mkScanl, mkScanr
+    :: Elt e
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> CUExp aenv e
+    -> CUDelayedAcc aenv DIM1 e
+    -> [CUTranslSkel aenv (Vector e)]
+mkScanl dev aenv f z a =
+  [ mkScan    L dev aenv f (Just z) a
+  , mkScanUp1 L dev aenv f a
+  , mkScanUp2 L dev aenv f (Just z) ]
+
+mkScanr dev aenv f z a =
+  [ mkScan    R dev aenv f (Just z) a
+  , mkScanUp1 R dev aenv f a
+  , mkScanUp2 R dev aenv f (Just z) ]
+
+mkScanl1, mkScanr1
+    :: Elt e
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> CUDelayedAcc aenv DIM1 e
+    -> [CUTranslSkel aenv (Vector e)]
+mkScanl1 dev aenv f a =
+  [ mkScan    L dev aenv f Nothing a
+  , mkScanUp1 L dev aenv f a
+  , mkScanUp2 L dev aenv f Nothing ]
+
+mkScanr1 dev aenv f a =
+  [ mkScan    R dev aenv f Nothing a
+  , mkScanUp1 R dev aenv f a
+  , mkScanUp2 R dev aenv f Nothing ]
+
+mkScanl', mkScanr'
+    :: Elt e
+    => DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> CUExp aenv e
+    -> CUDelayedAcc aenv DIM1 e
+    -> [CUTranslSkel aenv (Vector e, Scalar e)]
+mkScanl' dev aenv f z = map cast . mkScanl dev aenv f z
+mkScanr' dev aenv f z = map cast . mkScanr dev aenv f z
+
+cast :: CUTranslSkel aenv a -> CUTranslSkel aenv b
+cast (CUTranslSkel entry code) = CUTranslSkel entry code
+
+
+-- Core implementation
+-- -------------------
 
 data Direction = L | R
   deriving Eq
@@ -39,15 +93,6 @@ data Direction = L | R
 instance Show Direction where
   show L = "l"
   show R = "r"
-
-
-mkScanl, mkScanr :: DeviceProperties -> CUFun (a -> a -> a) -> Maybe (CUExp a) -> CUTranslSkel
-mkScanl = mkScan L
-mkScanr = mkScan R
-
-mkScanlIntervals, mkScanrIntervals :: DeviceProperties -> CUFun (a -> a -> a) -> CUTranslSkel
-mkScanlIntervals = mkScanIntervals L
-mkScanrIntervals = mkScanIntervals R
 
 
 -- [OVERVIEW]
@@ -113,65 +158,80 @@ mkScanrIntervals = mkScanIntervals R
 --   * scanl1, scanr1 : no change (argSum is required, even though it will not be used Haskell-side)
 --   * scanl', scanr' : no change
 --
-mkScan :: forall a.
-          Direction
+mkScan :: forall aenv e. Elt e
+       => Direction
        -> DeviceProperties
-       -> CUFun (a -> a -> a)
-       -> Maybe (CUExp a)
-       -> CUTranslSkel
-mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
-  CUTranslSkel name [cunit|
-    extern "C"
-    __global__ void
-    $id:name
+       -> Gamma aenv
+       -> CUFun2 aenv (e -> e -> e)
+       -> Maybe (CUExp aenv e)
+       -> CUDelayedAcc aenv DIM1 e
+       -> CUTranslSkel aenv (Vector e)
+mkScan dir dev aenv fun@(CUFun2 combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 get)) =
+  CUTranslSkel scan [cunit|
+
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecls:texIn
+
+    extern "C" __global__ void
+    $id:scan
     (
+        $params:argIn,
         $params:argOut,
-        $params:argSum,
-        $params:argIn0,
         $params:argBlk,
-              typename Ix interval_size,
-        const typename Ix num_elements
+        $params:(tail argSum)           // just the pointers, no shape information
     )
     {
         $decls:smem
-        $decls:decl0
-        $decls:decl1
-        $decls:decl2
+        $decls:declx
+        $decls:decly
+        $decls:declz
+        $items:(sh .=. shIn)
+
+        const int shapeSize     = $exp:(shapeSize sh);
+        const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         /*
-         * Read in previous result partial sum. We store the carry value in x2
-         * and read new values from the input array into x0, since 'scanBlock'
-         * will store its results into x0 on completion.
+         * Read in previous result partial sum. We store the carry value in
+         * temporary value 'z' and read new values from the input array into
+         * 'x', since 'scanBlock' will store its results into 'y' on completion.
          */
-        int carry_in = 0;
+        int carryIn = 0;
 
         if ( threadIdx.x == 0 ) {
-            $stm:(initialise mseed)
+            $stm:initialise
         }
 
-        const int start = blockIdx.x * interval_size;
-        const int end   = min(start + interval_size, num_elements);
-        interval_size   = end - start;
+        const int start         = blockIdx.x * intervalSize;
+        const int end           = min(start + intervalSize, shapeSize);
+        const int numElements   = end - start;
+              int seg;
 
-        for (int i = threadIdx.x; i < interval_size; i += blockDim.x)
+        for ( seg = threadIdx.x
+            ; seg < numElements
+            ; seg += blockDim.x )
         {
-            const int j = $id:(if left then "start + i" else "end - i - 1");
-            $stms:(x0 .=. getIn0 "j")
+            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
 
-            if ( $exp:carry_in ) {
-                $stms:(x1 .=. x2)
-                $items:env
-                $stms:(x0 .=. combine)
+            /*
+             * Generate the next set of values
+             */
+            $items:(x .=. get ix)
+
+            /*
+             * Carry in the result from the privous segment
+             */
+            if ( $exp:carryIn ) {
+                $items:(x .=. combine z x)
             }
 
             /*
              * Store our input into shared memory and perform a cooperative
              * inclusive left scan.
              */
-            $stms:(sdata "threadIdx.x" .=. x0)
+            $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
+            $stms:(scanBlock dev fun x y sdata Nothing)
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -179,69 +239,75 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
              * is the result of the last thread from the previous interval, or
              * the carry-in/seed value for multi-block scans.
              */
-            if ( $exp:(cbool exclusive) ) {
+            if ( $exp:(cbool (isJust mseed)) ) {
                 if ( threadIdx.x == 0 ) {
-                    $stms:(x0 .=. x2)
+                    $items:(x .=. z)
                 } else {
-                    $stms:(x0 .=. sdata "threadIdx.x - 1")
+                    $items:(x .=. sdata "threadIdx.x - 1")
                 }
             }
-            $stms:(setOut "j" x0)
+            $items:(setOut "ix" .=. x)
 
             /*
-             * Carry the final result of this block through the set x2. If this
+             * Carry the final result of this block through the set 'z'. If this
              * is the final interval, this is the value to write out as the
              * reduction result
              */
             if ( threadIdx.x == 0 ) {
-                const int last = min(interval_size - i, blockDim.x) - 1;
-                $stms:(x2 .=. sdata "last")
+                const int last = min(numElements - seg, blockDim.x) - 1;
+                $items:(z .=. sdata "last")
             }
-            $id:( if not exclusive then "carry_in = 1" else [] ) ;
+            $id:( if isNothing mseed then "carryIn = 1" else [] ) ;
         }
 
         /*
-         * for exclusive scans, set the overall scan result (reduction value)
+         * Finally, exclusive scans set the overall scan result (reduction value)
          */
-        if ( $exp:(cbool exclusive) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
-            $stms:(setSum .=. x2)
+        if ( $exp:(cbool (isJust mseed)) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
+            $items:(setSum .=. z)
         }
     }
   |]
   where
-    name                                = "scan" ++ show dir ++ maybe "1" (const "") mseed
-    elt                                 = eltType (undefined :: a)
-    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt use0
-    (argOut, _, setOut)                 = setters elt
-    setSum                              = totalSum "0"
-    (argSum, totalSum)                  = arrays "d_sum" elt
-    (argBlk, blkSum)                    = arrays "d_blk" elt
-    (x1,   decl1)                       = locals "x1" elt
-    (x2,   decl2)                       = locals "x2" elt
-    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
-    --
-    carry_in
-      | exclusive                       = [cexp| threadIdx.x == 0 |]
-      | otherwise                       = [cexp| threadIdx.x == 0 && carry_in |]
-    exclusive                           = isJust mseed
-    left                                = dir == L
-    firstBlock                          = if     left then "0" else "gridDim.x - 1"
-    lastBlock                           = if not left then "0" else "gridDim.x - 1"
-    --
-    initialise Nothing                  = [cstm|
-        if ( blockIdx.x != $id:firstBlock ) {
-            $stms:(x2 .=. blkSum (if left then "blockIdx.x - 1" else "blockIdx.x + 1"))
-            carry_in = 1;
-        }
-      |]
-    initialise (Just (CUExp env' seed)) = [cstm|
-        if ( gridDim.x > 1 ) {
-            $stms:(x2 .=. blkSum "blockIdx.x")
-        } else {
-            $items:env'
-            $stms:(x2 .=. seed)
-        }
-      |]
+    scan                = "scan" ++ show dir ++ maybe "1" (const []) mseed
+    (texIn, argIn)      = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
+    (argSum, totalSum)  = setters "Sum" (undefined :: Vector e)
+    (argBlk, blkSum)    = setters "Blk" (undefined :: Vector e)
+    (_, x, declx)       = locals "x" (undefined :: e)
+    (_, y, decly)       = locals "y" (undefined :: e)
+    (_, z, declz)       = locals "z" (undefined :: e)
+    (sh, _, _)          = locals "sh" (undefined :: DIM1)
+    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                  = [cvar "ix"]
+    setSum              = totalSum "0"
+
+    -- accessing neighbouring blocks
+    firstBlock          = if dir == L then "0" else "gridDim.x - 1"
+    lastBlock           = if dir == R then "0" else "gridDim.x - 1"
+    prevBlock           = if dir == L then "blockIdx.x - 1" else "blockIdx.x + 1"
+
+    carryIn
+      | isJust mseed    = [cexp| threadIdx.x == 0 |]
+      | otherwise       = [cexp| threadIdx.x == 0 && carryIn |]
+
+    -- initialise the first thread with the results of the previous block sweep
+    -- or exclusive scan element
+    initialise
+      | Just (CUExp seed) <- mseed
+      = [cstm|  if ( gridDim.x > 1 ) {
+                    $items:(z .=. blkSum "blockIdx.x")
+                } else {
+                    $items:(z .=. seed)
+                }
+        |]
+
+      | otherwise
+      = [cstm|  if ( blockIdx.x != $id:firstBlock ) {
+                    $items:(z .=. blkSum prevBlock)
+                    carryIn = 1;
+                }
+        |]
 
 
 -- This computes the _upsweep_ phase of a multi-block scan. This is much like a
@@ -249,136 +315,198 @@ mkScan dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) mseed =
 -- output, rather than the entire body of the scan. Indeed, if the combination
 -- function were commutative, this is equivalent to a parallel tree reduction.
 --
-mkScanIntervals
-    :: forall a.
-       Direction
+mkScanUp1
+    :: forall aenv e. Elt e
+    => Direction
     -> DeviceProperties
-    -> CUFun (a -> a -> a)
-    -> CUTranslSkel
-mkScanIntervals dir dev (CULam _ (CULam use0 (CUBody (CUExp env combine)))) =
-  CUTranslSkel name [cunit|
-    extern "C"
-    __global__ void
-    $id:name
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> CUDelayedAcc aenv DIM1 e
+    -> CUTranslSkel aenv (Vector e)
+mkScanUp1 dir dev aenv fun@(CUFun2 combine) (CUDelayed (CUExp shIn) _ (CUFun1 get)) =
+  CUTranslSkel scan [cunit|
+
+    $esc:("#include <accelerate_cuda_extras.h>")
+    $edecls:texIn
+
+    extern "C" __global__ void
+    $id:scan
     (
-        $params:argOut,
-        $params:argIn0,
-              typename Ix interval_size,
-        const typename Ix num_intervals,
-        const typename Ix num_elements
+        $params:argIn,
+        $params:argOut
     )
     {
         $decls:smem
-        $decls:decl1
-        $decls:decl0
+        $decls:declx
+        $decls:decly
+        $items:(sh .=. shIn)
 
-        const int start = blockIdx.x * interval_size;
-        const int end   = min(start + interval_size, num_elements);
-        interval_size   = end - start;
+        const int shapeSize     = $exp:(shapeSize sh);
+        const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
-        int carry_in    = false;
+        const int start         = blockIdx.x * intervalSize;
+        const int end           = min(start + intervalSize, shapeSize);
+        const int numElements   = end - start;
+              int carryIn       = 0;
+              int seg;
 
-        for (int i = threadIdx.x; i < interval_size; i += blockDim.x)
+        for ( seg = threadIdx.x
+            ; seg < numElements
+            ; seg += blockDim.x )
         {
-            const int j = $id:(if dir == L then "start + i" else "end - i - 1");
-            $stms:(x0 .=. getIn0 "j")
+            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
 
             /*
-             * Carry in the result from the previous segment, stored in x1
+             * Read in new values, combine with carry-in
              */
-            if ( threadIdx.x == 0 && carry_in ) {
-                $items:env
-                $stms:(x0 .=. combine)
+            $items:(x .=. get ix)
+
+            if ( threadIdx.x == 0 && carryIn ) {
+                $items:(x .=. combine y x)
             }
 
             /*
-             * Store our input into shared memory and perform a cooperative
-             * inclusive left scan.
+             * Store in shared memory and cooperatively scan
              */
-            $stms:(sdata "threadIdx.x" .=. x0)
+            $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev elt Nothing (cvar "blockDim.x") sdata env combine)
+            $stms:(scanBlock dev fun x y sdata Nothing)
 
             /*
-             * Add the final result of this block to the set x1. If this is the
-             * final interval, this value is written out as the interval sum.
+             * Store the final result of the block to be carried in
              */
             if ( threadIdx.x == 0 ) {
-                const int last = min(interval_size - i, blockDim.x) - 1;
-                $stms:(x1 .=. sdata "last")
+                const int last = min(numElements - seg, blockDim.x) - 1;
+                $items:(y .=. sdata "last")
             }
-            carry_in = true;
+            carryIn = 1;
         }
 
         /*
-         * Finally, the first thread writes the result for this segment.
+         * Finally, the first thread writes the result of this interval
          */
         if ( threadIdx.x == 0 ) {
-            $stms:(setOut "blockIdx.x" x1)
+            $items:(setOut "blockIdx.x" .=. y)
         }
     }
   |]
   where
-    name                                = "scan" ++ show dir ++ "Itv"
-    elt                                 = eltType (undefined :: a)
-    (argIn0, x0, decl0, getIn0, _)      = getters 0 elt use0
-    (argOut, _, setOut)                 = setters elt
-    (x1,   decl1)                       = locals "x1" elt
-    (smem, sdata)                       = shared 0 Nothing [cexp| blockDim.x |] elt
+    scan                = "scan" ++ show dir ++ "Up"
+    (texIn, argIn)      = environment dev aenv
+    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
+    (_, x, declx)       = locals "x" (undefined :: e)
+    (_, y, decly)       = locals "y" (undefined :: e)
+    (sh, _, _)          = locals "sh" (undefined :: DIM1)
+    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                  = [cvar "ix"]
 
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------
-
--- Introduce some new array arguments and a way to index them
+-- Second step of the upsweep phase: scan the interval sums to produce carry-in
+-- values for each block of the final downsweep step
 --
-arrays :: String -> [Type] -> ([Param], String -> [Exp])
-arrays base elt =
-  ( zipWith (\t a -> [cparam| $ty:(cptr t) $id:a |]) elt arrs
-  , \ix -> map (\a -> [cexp| $id:a [$id:ix] |]) arrs
-  )
-  where
-    n           = length elt
-    arrs        = map (\x -> base ++ "_a" ++ show x) [n-1, n-2 .. 0]
+mkScanUp2
+    :: forall aenv e. Elt e
+    => Direction
+    -> DeviceProperties
+    -> Gamma aenv
+    -> CUFun2 aenv (e -> e -> e)
+    -> Maybe (CUExp aenv e)
+    -> CUTranslSkel aenv (Vector e)
+mkScanUp2 dir dev aenv f z
+  = let (_, get) = getters "Blk" (undefined :: Vector e)
+    in  mkScan dir dev aenv f z get
 
 
--- Scan a block of results in shared memory. We hijack the standard local
--- variables (x0 and x1) for the combination function. This thread must have
+-- Block scans
+-- ===========
+
+scanBlock
+    :: forall aenv e. Elt e
+    => DeviceProperties
+    -> CUFun2 aenv (e -> e -> e)
+    -> [C.Exp] -> [C.Exp]
+    -> (Name -> [C.Exp])
+    -> Maybe C.Exp
+    -> [C.Stm]
+scanBlock dev f x0 x1 sdata mlim
+  | shflOK dev (undefined :: e) = error "shfl-scan"
+  | otherwise                   = scanBlockTree dev f x0 x1 sdata mlim
+
+
+-- Use a thread block to scan values in shared memory. Each thread must have
 -- already stored its initial value into shared memory. The final result for
 -- this thread will be stored in x0 as well as the appropriate place in shared
 -- memory.
 --
-scanBlock :: DeviceProperties
-          -> [Type]                     -- element type
-          -> Maybe Exp                  -- partially-full block bounds check?
-          -> Exp                        -- CTA size
-          -> (String -> [Exp])          -- index shared memory area
-          -> [BlockItem]                -- local environment for the..
-          -> [Exp]                      -- ..binary function
-          -> [Stm]
-scanBlock dev elt mlim cta sdata env combine = map (scan . pow2) [0 .. maxThreads]
+scanBlockTree
+    :: forall aenv e. Elt e
+    => DeviceProperties
+    -> CUFun2 aenv (e -> e -> e)
+    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> (Name -> [C.Exp])                -- index elements from shared memory
+    -> Maybe C.Exp                      -- partially full block bounds check?
+    -> [C.Stm]
+scanBlockTree dev (CUFun2 f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
-    maxThreads  = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double)) :: Int
-    (x0, _)     = locals "x0" elt
-    (x1, _)     = locals "x1" elt
-    pow2 x      = (2::Int) ^ x
-    scan n      =
-      let inrange = maybe [cexp| threadIdx.x >= $int:n|]
-                   (\m -> [cexp| threadIdx.x >= $int:n && threadIdx.x < $exp:m |]) mlim
-          ix      = "threadIdx.x - " ++ show n
-      in
-      [cstm|
-        if ( $exp:cta > $int:n ) {
-            if ( $exp:inrange ) {
-                $stms:(x1 .=. sdata ix)
-                $items:env
-                $stms:(x0 .=. combine)
-            }
-            __syncthreads();
-            $stms:(sdata "threadIdx.x" .=. x0)
-            __syncthreads();
-        }
+    pow2 :: Int -> Int
+    pow2 x      = 2 ^ x
+    maxThreads  = floor (logBase 2 (fromIntegral $ maxThreadsPerBlock dev :: Double))
+
+    inrange n
+      | Just m <- mlim  = [cexp| threadIdx.x >= $int:n && threadIdx.x < $exp:m |]
+      | otherwise       = [cexp| threadIdx.x >= $int:n |]
+
+    scan n = [cstm|
+      if ( blockDim.x > $int:n ) {
+          if ( $exp:(inrange n) ) {
+              $items:(x1 .=. sdata ("threadIdx.x - " ++ show n))
+              $items:(x0 .=. f x1 x0)
+          }
+          __syncthreads();
+          $items:(sdata "threadIdx.x" .=. x0)
+          __syncthreads();
+      }
       |]
 
+
+-- Shuffle scan
+-- ------------
+
+shflOK :: Elt e => DeviceProperties -> e -> Bool
+shflOK _dev _ = False
+-- shflOk dev dummy
+--   = computeCapability dev >= Compute 3 0 && all (`elem` [4,8]) (eltSizeOf dummy)
+
+{--
+scanWarpShfl
+    :: forall aenv e. Elt e
+    => DeviceProperties
+    -> CUFun2 aenv (e -> e -> e)
+    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> Maybe C.Exp                      -- partially full block bounds check
+    -> C.Exp                            -- thread identified, usually lane or thread ID
+    -> C.Stm
+scanWarpShfl _dev (CUFun2 f) x0 x1 mlim tid
+  = [cstm|
+      for ( int z = 1; z <= warpSize; z *= 2 ) {
+          $items:(x0 .=. shfl_up x1)
+
+          if ( $exp:inrange ) {
+              $items:(x1 .=. f x1 x0)
+          }
+      }
+    |]
+  where
+    inrange
+      | Just m <- mlim  = [cexp| $exp:tid >= z && $exp:tid < $exp:m |]
+      | otherwise       = [cexp| $exp:tid >= z |]
+
+    sizeof      = eltSizeOf (undefined :: e)
+    shfl_up     = zipWith (\s x -> ccall (shfl s) [ x, cvar "z" ]) sizeof
+      where
+        shfl 4  = "shfl_up32"
+        shfl 8  = "shfl_up64"
+        shfl _  = INTERNAL_ERROR(error) "shfl_up" "I only know about 32- and 64-bit types"
+--}
 

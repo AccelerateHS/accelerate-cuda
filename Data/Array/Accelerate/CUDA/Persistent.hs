@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}   -- CUDA.Context
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Persistent
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -36,8 +36,8 @@ import System.IO.Error
 import Control.Applicative
 import Control.Monad.Trans
 import Data.Version
-import Data.Hashable
 import Data.Binary
+import Data.Hashable
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
 import Data.ByteString.Internal                         ( w2c )
@@ -46,7 +46,6 @@ import qualified Data.ByteString.Lazy                   as L
 import qualified Data.HashTable.IO                      as HT
 
 import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Foreign.CUDA.Analysis                  as CUDA
 
 import Paths_accelerate_cuda
 
