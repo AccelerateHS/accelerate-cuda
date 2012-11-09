@@ -70,8 +70,8 @@ import Foreign.CUDA.Driver                              ( Context )
 import Foreign.CUDA.Driver.Error
 
 -- friends
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Smart                      ( Acc )
-import Data.Array.Accelerate.Trafo                      ( convertAcc, convertAccFun1 )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.State
@@ -139,7 +139,7 @@ runIn ctx a
 runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
   where
-    acc     = convertAcc a
+    acc     = convertAccWith config a
     execute = evalCUDA ctx (compileAcc acc >>= executeAcc >>= collect)
               `catch`
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
@@ -185,7 +185,7 @@ run1In ctx f = let go = run1AsyncIn ctx f
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
-    acc       = convertAccFun1 f
+    acc       = convertAccFun1With config f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc)
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
@@ -221,6 +221,19 @@ collect arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
     collectR ArraysRarray        arr            = peekArray arr >> return arr
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
+
+
+-- How the Accelerate program should be interpreted.
+-- TODO: make sharing/fusion runtime configurable via debug flags or otherwise.
+--
+config :: Phase
+config =  Phase
+  { recoverAccSharing      = True
+  , recoverExpSharing      = True
+  , floatOutAccFromExp     = True
+  , enableAccFusion        = True
+  , convertOffsetOfSegment = True
+  }
 
 
 -- Running asynchronously
