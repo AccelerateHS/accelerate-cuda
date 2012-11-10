@@ -48,7 +48,7 @@ mkGenerate
     -> Gamma aenv
     -> CUFun1 aenv (sh -> e)
     -> [CUTranslSkel aenv (Array sh e)]
-mkGenerate dev aenv (CUFun1 f)
+mkGenerate dev aenv (CUFun1 _ f)
   = return
   $ CUTranslSkel "generate" [cunit|
 
@@ -103,9 +103,9 @@ mkTransform
     -> CUDelayedAcc aenv sh a
     -> [CUTranslSkel aenv (Array sh' b)]
 mkTransform dev aenv perm fun arr
-  | CUFun1 p                    <- perm
-  , CUFun1 f                    <- fun
-  , CUDelayed _ (CUFun1 get) _  <- arr
+  | CUFun1 _ p                   <- perm
+  , CUFun1 dce f                 <- fun
+  , CUDelayed _ (CUFun1 _ get) _ <- arr
   = return
   $ CUTranslSkel "transform" [cunit|
 
@@ -131,7 +131,7 @@ mkTransform dev aenv perm fun arr
         {
             const typename DimOut sh_ = fromIndex(shOut, ix);
             $items:(sh          .=. p sh_)
-            $items:(x0          .=. get sh)
+            $items:(dce x0      .=. get sh)
             $items:(setOut "ix" .=. f x0)
         }
     }
@@ -170,8 +170,8 @@ mkPermute
     -> CUFun1 aenv (sh -> sh')
     -> CUDelayedAcc aenv sh e
     -> [CUTranslSkel aenv (Array sh' e)]
-mkPermute dev aenv (CUFun2 combine) (CUFun1 prj) arr
-  | CUDelayed (CUExp shIn) _ (CUFun1 get) <- arr
+mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
+  | CUDelayed (CUExp shIn) _ (CUFun1 _ get) <- arr
   = return
   $ CUTranslSkel "permute" [cunit|
 
@@ -208,8 +208,8 @@ mkPermute dev aenv (CUFun2 combine) (CUFun1 prj) arr
                 $decls:decly'
 
                 const int jx = toIndex(shOut, dst);
-                $items:(x .=. get ix)
-                $items:(y .=. arrOut "jx")
+                $items:(dcex x .=. get ix)
+                $items:(dcey y .=. arrOut "jx")
 
                 $items:write
             }
@@ -224,7 +224,7 @@ mkPermute dev aenv (CUFun2 combine) (CUFun1 prj) arr
     (argOut, arrOut)    = setters "Out" (undefined :: Array sh' e)
     (sh, _, _)          = locals "sh" (undefined :: sh)
     (x, _, _)           = locals "x"  (undefined :: e)
-    (_, y, decly)       = locals "y"  (undefined :: e)
+    (_, y,  decly)      = locals "y"  (undefined :: e)
     (_, y', decly')     = locals "_y" (undefined :: e)
     ix                  = [cvar "ix"]
     src                 = cshape dimIn  (cvar "src")
@@ -244,20 +244,21 @@ mkPermute dev aenv (CUFun2 combine) (CUFun1 prj) arr
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    write               = env ++ zipWith5 apply sizeof (arrOut "jx") fun y y'
+    write               = env ++ zipWith6 apply sizeof (arrOut "jx") fun x (dcey y) y'
     (env, fun)          = combine x y
 
-    apply size out f x1 x1'
-      | Just atomicCAS <- reinterpret size
+    apply size out f x1 (used,y1) y1'
+      | used
+      , Just atomicCAS <- reinterpret size
       = C.BlockStm
         [cstm| do {
-                      $exp:x1' = $exp:x1;
-                      $exp:x1  = $exp:atomicCAS ( & $exp:out, $exp:x1', $exp:f );
+                      $exp:y1' = $exp:y1;
+                      $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
 
-                  } while ( $exp:x1 != $exp:x1' ); |]
+                  } while ( $exp:y1 != $exp:y1' ); |]
 
       | otherwise
-      = C.BlockStm [cstm| $exp:out = $exp:x1; |]
+      = C.BlockStm [cstm| $exp:out = $exp:(rvalue x1); |]
 
     --
     reinterpret :: Int -> Maybe C.Exp

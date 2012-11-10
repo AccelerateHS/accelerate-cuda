@@ -108,7 +108,7 @@ mkFoldAll'
     -> Maybe (CUExp aenv e)
     -> CUDelayedAcc aenv (sh :. Int) e
     -> CUTranslSkel aenv (Array sh e)
-mkFoldAll' recursive dev aenv fun@(CUFun2 combine) mseed (CUDelayed (CUExp sh) _ (CUFun1 get))
+mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun1 _ get))
   = CUTranslSkel foldAll [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -209,7 +209,7 @@ mkFoldDim
     -> Maybe (CUExp aenv e)
     -> CUDelayedAcc aenv (sh :. Int) e
     -> [ CUTranslSkel aenv (Array sh e) ]
-mkFoldDim dev aenv fun@(CUFun2 combine) mseed (CUDelayed (CUExp sh) _ (CUFun1 get))
+mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun1 _ get))
   = return
   $ CUTranslSkel fold [cunit|
 
@@ -407,9 +407,9 @@ mkFoldSeg'
     -> CUDelayedAcc aenv (sh :. Int) e
     -> CUDelayedAcc aenv (Z  :. Int) i
     -> CUTranslSkel aenv (Array (sh :. Int) e)
-mkFoldSeg' dev aenv fun@(CUFun2 combine) mseed
-  (CUDelayed (CUExp shIn) _ (CUFun1 get))
-  (CUDelayed _            _ (CUFun1 offset))
+mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
+  (CUDelayed (CUExp shIn) _ (CUFun1 _ get))
+  (CUDelayed _            _ (CUFun1 _ offset))
   = CUTranslSkel foldSeg [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -597,7 +597,7 @@ reduceWarpTree
     -> C.Exp                            -- number of elements
     -> C.Exp                            -- thread identifier: usually lane or thread ID
     -> [C.Stm]
-reduceWarpTree dev (CUFun2 f) x0 x1 sdata n tid
+reduceWarpTree dev (CUFun2 _ _ f) x0 x1 sdata n tid
   = map (reduce . pow2) [v, v-1 .. 0]
   where
     v = floor (logBase 2 (fromIntegral $ warpSize dev :: Double))
@@ -626,7 +626,7 @@ reduceBlockTree
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> C.Exp                            -- number of elements
     -> [C.Stm]
-reduceBlockTree dev fun@(CUFun2 f) x0 x1 sdata n
+reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
   = flip (foldr1 (.)) []
   $ map (reduce . pow2) [u-1, u-2 .. v]
 
@@ -680,7 +680,7 @@ reduceWarpShfl
     -> C.Exp
     -> C.Exp
     -> C.Stm
-reduceWarpShfl _dev (CUFun2 f) x0 x1 n tid
+reduceWarpShfl _dev (CUFun2 _ _ f) x0 x1 n tid
   = [cstm| for ( int z = warpSize/2; z >= 1; z /= 2 ) {
                $items:(x0 .=. shfl_xor x1)
 

@@ -25,11 +25,13 @@ import Prelude                                                  hiding ( id, exp
 import Control.Applicative                                      ( (<$>), (<*>), (<*) )
 import Control.Monad
 import Control.Monad.State.Strict
-import Data.Char
 import Data.Loc
+import Data.Char
+import Data.HashSet                                             ( HashSet )
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
+import qualified Data.HashSet                                   as Set
 
 -- friends
 import Data.Array.Accelerate.Type
@@ -124,6 +126,9 @@ codegenAcc dev (OpenAcc pacc) aenv
       ZipWith _ _ _             -> fusionError
 
   where
+    codegen :: CUDA a -> a
+    codegen cuda = evalState cuda 0
+
     id :: Elt a => Fun aenv (a -> a)
     id = Lam (Body (Var ZeroIdx))
 
@@ -170,15 +175,19 @@ codegenAcc dev (OpenAcc pacc) aenv
 codegenFun1 :: forall aenv a b. DeviceProperties -> Fun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
 codegenFun1 dev fun
   | Lam (Body f) <- fun
-  = let go xs   = do code <- codegenOpenExp dev f (Empty `Push` xs)
-                     env  <- getEnv
-                     return (env, code)
+  = let
+        go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
+        go x = do
+          code  <- codegenOpenExp dev f (Empty `Push` map rvalue x)
+          env   <- getEnv
+          return (env, code)
 
-        (_,x,_) = locals "undefined" (undefined :: a)
+        (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
-      n <- get
-      put    $ execState (evalStateT (go x) []) n      -- derp
-      return $ CUFun1 $ \xs -> evalState (evalStateT (go (map rvalue xs)) []) n
+      n                 <- get
+      GenST _ used _    <- execCGM (mapM_ use . snd =<< go u)
+      return $ CUFun1 (mark used u)
+             $ \xs -> evalState (evalCGM (go xs)) n
   --
   | otherwise
   = INTERNAL_ERROR(error) "codegenFun1" "expected unary function"
@@ -186,19 +195,62 @@ codegenFun1 dev fun
 codegenFun2 :: forall aenv a b c. DeviceProperties -> Fun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
 codegenFun2 dev fun
   | Lam (Lam (Body f)) <- fun
-  = let go x y = do code  <- codegenOpenExp dev f (Empty `Push` x `Push` y)
-                    env   <- getEnv
-                    return (env, code)
+  = let
+        go :: (Rvalue x, Rvalue y) => [x] -> [y] -> Gen ([C.BlockItem], [C.Exp])
+        go x y = do
+          code  <- codegenOpenExp dev f (Empty `Push` map rvalue x `Push` map rvalue y)
+          env   <- getEnv
+          return (env, code)
 
         (_,u,_)  = locals "undefined_x" (undefined :: a)
         (_,v,_)  = locals "undefined_y" (undefined :: b)
     in do
-      n <- get
-      put    $ execState (evalStateT (go u v) []) n   -- derp derp
-      return $ CUFun2 $ \xs ys -> evalState (evalStateT (go (map rvalue xs) (map rvalue ys)) []) n
+      n                 <- get
+      GenST _ used _    <- execCGM (mapM_ use . snd =<< go u v)
+      return $ CUFun2 (mark used u) (mark used v)
+             $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
   | otherwise
   = INTERNAL_ERROR(error) "codegenFun2" "expected binary function"
+
+
+-- It is important to filter output terms of a function that will not be used.
+-- Consider this pattern from the map kernel:
+--
+--   items:(x      .=. get ix)
+--   items:(set ix .=. f x)
+--
+-- If this is applied to the following expression where we extract the first
+-- component of a 4-tuple:
+--
+--   map (\t -> let (x,_,_,_) = unlift t in x) vec4
+--
+-- Then the first line 'get ix' still reads all four components of the input
+-- vector, even though only one is used. Conversely, if we directly apply the
+-- data fetch to f, then the redundant reads are eliminated, but this is simply
+-- inlining the read into the function body, so if the argument is used multiple
+-- times so to is the data read multiple times.
+--
+-- The procedure for determining which variables are used is to record each
+-- singleton expression produced throughout code generation to a set. It doesn't
+-- matter if the expression is a variable (which we are interested in) or
+-- something else. Once generation completes, we can test which of the input
+-- variables also appear in the output set. Later, we integrate this information
+-- when assigning to l-values: if the variable is not in the set, simply elide
+-- that statement.
+--
+-- In the above map example, this means that the usage data is taken from 'f',
+-- but applies to which results of 'get ix' are committed to memory.
+--
+mark :: HashSet C.Exp -> [C.Exp] -> ([a] -> [(Bool,a)])
+mark used xs
+  = let flags = map (\x -> x `Set.member` used) xs
+    in  zipWith (,) flags
+
+visit :: [C.Exp] -> Gen [C.Exp]
+visit exp
+  | [x] <- exp  = use x >> return exp
+  | otherwise   =          return exp
 
 
 -- Delayed arrays
@@ -230,7 +282,7 @@ codegenDelayedAcc dev acc
 --
 codegenExp :: DeviceProperties -> Exp aenv t -> CUDA (CUExp aenv t)
 codegenExp dev exp =
-  flip evalStateT [] $ do
+  evalCGM $ do
     code        <- codegenOpenExp dev exp Empty
     env         <- getEnv
     return      $! CUExp (env,code)
@@ -246,7 +298,7 @@ codegenOpenExp dev = cvtE
     -- a monad that generates fresh names and keeps track of let bindings.
     --
     cvtE :: forall env aenv t. OpenExp env aenv t -> Val env -> Gen [C.Exp]
-    cvtE exp env =
+    cvtE exp env = visit =<<
       case exp of
         Let bnd body            -> elet bnd body env
         Var ix                  -> return $ prj ix env
@@ -291,7 +343,7 @@ codegenOpenExp dev = cvtE
     elet :: OpenExp env aenv bnd -> OpenExp (env, bnd) aenv body -> Val env -> Gen [C.Exp]
     elet bnd body env = do
       bnd'      <- cvtE bnd env
-      x         <- pushEnv bnd bnd'             -- TLM TODO: marking expressions as used or not
+      x         <- pushEnv bnd bnd'
       body'     <- cvtE body (env `Push` x)
       return body'
 
@@ -364,7 +416,7 @@ codegenOpenExp dev = cvtE
 
            -- generate the loop in a clean environment, so that the previous
            -- environment fragments are not included in the body
-           outer        <- get <* put []
+           outer        <- gets bindings <* modify (\st -> st { bindings = [] })
            body'        <- cvtE f (env `Push` acc)
            inner        <- getEnv
            i            <- lift fresh
@@ -376,7 +428,7 @@ codegenOpenExp dev = cvtE
                                   } |]
 
            -- restore the outer environment, plus the new loop
-           put $ go : map C.BlockDecl (reverse seed) ++ outer
+           modify (\st -> st { bindings = go : map C.BlockDecl (reverse seed) ++ outer })
            return acc
 
       | otherwise

@@ -62,7 +62,7 @@ mkStencil
     -> CUFun1 aenv (stencil -> b)
     -> Boundary (CUExp aenv a)
     -> [CUTranslSkel aenv (Array sh b)]
-mkStencil dev aenv (CUFun1 f) boundary
+mkStencil dev aenv (CUFun1 dce f) boundary
   = return
   $ CUTranslSkel "stencil" [cunit|
 
@@ -88,7 +88,7 @@ mkStencil dev aenv (CUFun1 f) boundary
             ; ix += gridSize )
         {
             const typename Shape sh = fromIndex( shOut, ix );
-            $items:(xs          .=. stencil sh)
+            $items:(dce xs      .=. stencil sh)
             $items:(setOut "ix" .=. f xs)
         }
     }
@@ -99,12 +99,10 @@ mkStencil dev aenv (CUFun1 f) boundary
     (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
     ix                  = cvar "ix"
     sh                  = cvar "sh"
+    (xs,_,_)            = locals "x" (undefined :: stencil)
     dx                  = offsets (undefined :: Fun aenv (stencil -> b)) (undefined :: OpenAcc aenv (Array sh a))
 
-    xs                  = let n = length dx
-                          in  concatMap (\i -> let (l,_,_) = locals ('x':show i) (undefined :: a) in l) [n-1, n-2 .. 0]
-
-    (texStencil, argStencil, stencil) = stencilAccess True "Stencil" "w" dev dx ix boundary
+    (texStencil, argStencil, stencil) = stencilAccess True "Stencil" "w" dev dx ix boundary dce
 
 
 -- Map a binary stencil of an array.  The extent of the resulting array is the
@@ -129,7 +127,7 @@ mkStencil2
     -> Boundary (CUExp aenv a)
     -> Boundary (CUExp aenv b)
     -> [CUTranslSkel aenv (Array sh c)]
-mkStencil2 dev aenv (CUFun2 f) boundary1 boundary2
+mkStencil2 dev aenv (CUFun2 dce1 dce2 f) boundary1 boundary2
   = return
   $ CUTranslSkel "stencil2" [cunit|
 
@@ -158,8 +156,8 @@ mkStencil2 dev aenv (CUFun2 f) boundary1 boundary2
         {
             const typename Shape sh = fromIndex( shOut, ix );
 
-            $items:(xs          .=. stencil1 sh)
-            $items:(ys          .=. stencil2 sh)
+            $items:(dce1 xs     .=. stencil1 sh)
+            $items:(dce2 ys     .=. stencil2 sh)
             $items:(setOut "ix" .=. f xs ys)
         }
     }
@@ -170,16 +168,15 @@ mkStencil2 dev aenv (CUFun2 f) boundary1 boundary2
     (argOut, setOut)    = setters "Out" (undefined :: Array sh c)
     ix                  = cvar "ix"
     sh                  = cvar "sh"
+    (xs,_,_)            = locals "x" (undefined :: stencil1)
+    (ys,_,_)            = locals "y" (undefined :: stencil2)
 
     (dx1, dx2)          = offsets2 (undefined :: Fun aenv (stencil1 -> stencil2 -> c))
                                    (undefined :: OpenAcc aenv (Array sh a))
                                    (undefined :: OpenAcc aenv (Array sh b))
 
-    xs                  = let n = length dx1 in concatMap (\i -> let (l,_,_) = locals ('x':show i) (undefined :: a) in l) [n-1, n-2 .. 0]
-    ys                  = let n = length dx2 in concatMap (\i -> let (l,_,_) = locals ('y':show i) (undefined :: b) in l) [n-1, n-2 .. 0]
-
-    (texS1, argS1, stencil1) = stencilAccess False "Stencil1" "w" dev dx1 ix boundary1
-    (texS2, argS2, stencil2) = stencilAccess False "Stencil2" "z" dev dx2 ix boundary2
+    (texS1, argS1, stencil1) = stencilAccess False "Stencil1" "w" dev dx1 ix boundary1 dce1
+    (texS2, argS2, stencil2) = stencilAccess False "Stencil2" "z" dev dx2 ix boundary2 dce2
 
 
 -- Generate declarations for reading in a stencil pattern surrounding a given
@@ -197,17 +194,43 @@ stencilAccess
     -> DeviceProperties                         -- properties of currently executing device
     -> [sh]                                     -- list of offset indices
     -> C.Exp                                    -- linear index of the centroid
-    -> Boundary (CUExp aenv e)
+    -> Boundary (CUExp aenv e)                  -- stencil boundary condition
+    -> ([C.Exp] -> [(Bool,C.Exp)])              -- dead code elimination flags for this var
     -> ( [C.Definition]                         -- input arrays as texture references; or
        , [C.Param]                              -- function arguments
        , (C.Exp -> ([C.BlockItem], [C.Exp])) )  -- read data at a given shape centroid
-stencilAccess linear grp x dev shx centroid boundary
+stencilAccess linear grp grp' dev shx centroid boundary dce
   = (texStencil, argStencil, stencil)
   where
     stencil ix = flip evalState 0 $ do
       (envs, xs) <- mapAndUnzipM (access ix . shapeToList) shx
-      return ( concat envs, concat xs )
 
+      let (envs', xs') = unzip
+                       $ eliminate
+                       $ zip envs
+                       $ unconcat (map length xs)
+                       $ dce (concat xs)
+
+      return ( concat envs', concat xs' )
+
+    -- Filter unused components of the stencil. Environment bindings are shared
+    -- between tuple components of each cursor position, so filter these out
+    -- only if all elements of that position are unused.
+    --
+    unconcat :: [Int] -> [a] -> [[a]]
+    unconcat []     _  = []
+    unconcat (n:ns) xs = let (h,t) = splitAt n xs in h : unconcat ns t
+
+    eliminate :: [ ([C.BlockItem], [(Bool, C.Exp)]) ] -> [ ([C.BlockItem], [C.Exp]) ]
+    eliminate []         = []
+    eliminate ((e,v):xs) = (e', x) : eliminate xs
+      where
+        (flags, x)      = unzip v
+        e' | or flags   = e
+           | otherwise  = []
+
+    -- Generate the entire stencil, including any local environment bindings
+    --
     access :: C.Exp -> [Int] -> State Int ([C.BlockItem], [C.Exp])
     access ix dx = case boundary of
       Clamp                     -> bounded "clamp"
@@ -261,5 +284,5 @@ stencilAccess linear grp x dev shx centroid boundary
     fresh :: State Int Name
     fresh = do
       n <- get <* modify (+1)
-      return $ x ++ show n
+      return $ grp' ++ show n
 

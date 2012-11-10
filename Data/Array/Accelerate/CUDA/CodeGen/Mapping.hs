@@ -41,8 +41,8 @@ mkMap :: forall aenv sh a b. (Shape sh, Elt a, Elt b)
       -> CUDelayedAcc aenv sh a
       -> [CUTranslSkel aenv (Array sh b)]
 mkMap dev aenv fun arr
-  | CUFun1 f                    <- fun
-  , CUDelayed _ _ (CUFun1 get)  <- arr
+  | CUFun1 dce f                 <- fun
+  , CUDelayed _ _ (CUFun1 _ get) <- arr
   = return
   $ CUTranslSkel "map" [cunit|
 
@@ -64,7 +64,7 @@ mkMap dev aenv fun arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            $items:(x           .=. get ix)
+            $items:(dce x       .=. get ix)
             $items:(setOut "ix" .=. f x)
         }
     }

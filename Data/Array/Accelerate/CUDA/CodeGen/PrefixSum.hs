@@ -166,7 +166,7 @@ mkScan :: forall aenv e. Elt e
        -> Maybe (CUExp aenv e)
        -> CUDelayedAcc aenv DIM1 e
        -> CUTranslSkel aenv (Vector e)
-mkScan dir dev aenv fun@(CUFun2 combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 get)) =
+mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -323,7 +323,7 @@ mkScanUp1
     -> CUFun2 aenv (e -> e -> e)
     -> CUDelayedAcc aenv DIM1 e
     -> CUTranslSkel aenv (Vector e)
-mkScanUp1 dir dev aenv fun@(CUFun2 combine) (CUDelayed (CUExp shIn) _ (CUFun1 get)) =
+mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -447,7 +447,7 @@ scanBlockTree
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
     -> [C.Stm]
-scanBlockTree dev (CUFun2 f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
+scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
     pow2 :: Int -> Int
     pow2 x      = 2 ^ x

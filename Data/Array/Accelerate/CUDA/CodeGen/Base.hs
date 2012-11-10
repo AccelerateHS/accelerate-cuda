@@ -95,11 +95,16 @@ data CUExp aenv a where
 -- Scalar functions of particular arity, with local bindings.
 --
 data CUFun1 aenv f where
-  CUFun1 :: (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
+  CUFun1 :: (Elt a, Elt b)
+         => (forall x. [x] -> [(Bool,x)])
+         -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
          -> CUFun1 aenv (a -> b)
 
 data CUFun2 aenv f where
-  CUFun2 :: (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
+  CUFun2 :: (Elt a, Elt b, Elt c)
+         => (forall x. [x] -> [(Bool,x)])
+         -> (forall y. [y] -> [(Bool,y)])
+         -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
          -> CUFun2 aenv (a -> b -> c)
 
 -- Delayed arrays
@@ -201,7 +206,7 @@ getters grp dummy
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
                                     (INTERNAL_ERROR(error) "getters" "linear indexing only")
-                                    (CUFun1 (get . rvalue . head))
+                                    (CUFun1 (zip (repeat True)) (get . rvalue . head))
     in ( args, manifest )
 
 
@@ -353,6 +358,11 @@ class Assign l r where
 
 instance (Lvalue l, Rvalue r) => Assign l r where
   assign lhs rhs = return $ lvalue lhs (rvalue rhs)
+
+instance Assign l r => Assign (Bool,l) r where
+  assign (used,lhs) rhs
+    | used      = assign lhs rhs
+    | otherwise = []
 
 instance Assign l r => Assign [l] [r] where
   assign []     []     = []
