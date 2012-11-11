@@ -91,7 +91,6 @@ Library
                         base                    == 4.*,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
-                        containers              >= 0.4,
                         cryptohash              >= 0.7,
                         cuda                    >= 0.5,
                         directory               >= 1.0,
@@ -159,10 +158,13 @@ Library
 
   Extensions:           BangPatterns,
                         CPP,
-                        ExistentialQuantification,
-                        FlexibleContexts,
+                        GADTs,
                         FlexibleInstances,
                         GADTs,
+                        GeneralizedNewtypeDeriving,
+                        IncoherentInstances,
+                        MultiParamTypeClasses,
+                        OverlappingInstances,
                         PatternGuards,
                         QuasiQuotes,
                         RankNTypes,
@@ -171,7 +173,8 @@ Library
                         TupleSections,
                         TypeFamilies,
                         TypeOperators,
-                        TypeSynonymInstances
+                        TypeSynonymInstances,
+                        UndecidableInstances
 
 source-repository head
   type:                 git
