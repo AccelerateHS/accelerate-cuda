@@ -111,10 +111,12 @@ bind t e = do
 -- output value(s). If the term exists in the reverse let-map, add that binding
 -- instead.
 --
-use :: C.Exp -> Gen ()
+use :: C.Exp -> Gen C.Exp
 use e = do
   m <- gets letterms
   case Map.lookup e m of
     Nothing     -> modify (\st -> st { terms = Set.insert e (terms st) })
     Just x      -> modify (\st -> st { terms = Set.insert x (terms st) })
+  --
+  return e
 

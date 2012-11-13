@@ -146,8 +146,8 @@ cshape dim sh
 
 -- Calculate the size of a shape from its component dimensions
 shapeSize :: Rvalue r => [r] -> C.Exp
-shapeSize = foldl (\a b -> [cexp| $exp:a * $exp:b |]) [cexp| 1 |]
-          . map rvalue
+shapeSize [] = [cexp| 1 |]
+shapeSize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
 
 indexHead :: Rvalue r => [r] -> C.Exp
 indexHead = rvalue . last

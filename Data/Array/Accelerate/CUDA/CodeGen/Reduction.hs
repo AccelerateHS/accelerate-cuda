@@ -231,7 +231,6 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun
 
         const int numIntervals  = size(shOut);
         const int intervalSize  = $exp:(indexHead shIn);
-        const int shapeSize     = $exp:(shapeSize shIn);
               int ix;
               int seg;
 
@@ -271,7 +270,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun
 
                 if ( ix >= start )
                 {
-                    $items:( y .=. get ix )
+                    $items:(y .=. get ix)
                 }
 
                 if ( ix + blockDim.x < end )
@@ -476,7 +475,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
 
                 if ( ix >= start )
                 {
-                    $items:( y .=. get ix)
+                    $items:(y .=. get ix)
                 }
 
                 /*

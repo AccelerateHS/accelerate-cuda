@@ -178,14 +178,14 @@ codegenFun1 dev fun
   = let
         go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
         go x = do
-          code  <- codegenOpenExp dev f (Empty `Push` map rvalue x)
+          code  <- mapM use =<< codegenOpenExp dev f (Empty `Push` map rvalue x)
           env   <- getEnv
           return (env, code)
 
         (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
       n                 <- get
-      GenST _ used _    <- execCGM (mapM_ use . snd =<< go u)
+      GenST _ used _    <- execCGM (go u)
       return $ CUFun1 (mark used u)
              $ \xs -> evalState (evalCGM (go xs)) n
   --
@@ -198,7 +198,7 @@ codegenFun2 dev fun
   = let
         go :: (Rvalue x, Rvalue y) => [x] -> [y] -> Gen ([C.BlockItem], [C.Exp])
         go x y = do
-          code  <- codegenOpenExp dev f (Empty `Push` map rvalue x `Push` map rvalue y)
+          code  <- mapM use =<< codegenOpenExp dev f (Empty `Push` map rvalue x `Push` map rvalue y)
           env   <- getEnv
           return (env, code)
 
@@ -206,7 +206,7 @@ codegenFun2 dev fun
         (_,v,_)  = locals "undefined_y" (undefined :: b)
     in do
       n                 <- get
-      GenST _ used _    <- execCGM (mapM_ use . snd =<< go u v)
+      GenST _ used _    <- execCGM (go u v)
       return $ CUFun2 (mark used u) (mark used v)
              $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
@@ -555,8 +555,10 @@ codegenOpenExp dev = cvtE
     --
     shapeSize :: OpenExp env aenv sh -> Val env -> Gen [C.Exp]
     shapeSize sh env =
-      let size ss = return $ foldl (\a b -> [cexp| $exp:a * $exp:b |]) [cexp| 1 |] ss
-      in  size <$> cvtE sh env
+      let size [] = return $ [cexp| 1 |]
+          size ss = return $ foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) ss
+      in
+      size <$> cvtE sh env
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --
