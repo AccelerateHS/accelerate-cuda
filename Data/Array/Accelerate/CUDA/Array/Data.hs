@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -67,6 +68,7 @@ snd = sndArrayData
 
 -- Extract the state information to pass along to the primitive data handlers
 --
+{-# INLINE run #-}
 run :: (Context -> MemoryTable -> IO a) -> CIO a
 run f = do
   ctx    <- asks activeContext
@@ -97,9 +99,9 @@ run f = do
 -- |Allocate a new device array to accompany the given host-side array.
 --
 mallocArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-mallocArray (Array sh adata) = run doMalloc
+mallocArray (Array !sh !adata) = run doMalloc
   where
-    doMalloc ctx mt = mallocR arrayElt adata
+    doMalloc !ctx !mt = mallocR arrayElt adata
       where
         mallocR :: ArrayEltR e -> ArrayData e -> IO ()
         mallocR ArrayEltRunit             _  = return ()
@@ -113,9 +115,9 @@ mallocArray (Array sh adata) = run doMalloc
 -- |Upload an existing array to the device
 --
 useArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-useArray (Array sh adata) = run doUse
+useArray (Array !sh !adata) = run doUse
   where
-    doUse ctx mt = useR arrayElt adata
+    doUse !ctx !mt = useR arrayElt adata
       where
         useR :: ArrayEltR e -> ArrayData e -> IO ()
         useR ArrayEltRunit             _  = return ()
@@ -126,9 +128,9 @@ useArray (Array sh adata) = run doUse
         mkPrimDispatch(usePrim,Prim.useArray)
 
 useArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> CIO ()
-useArrayAsync (Array sh adata) ms = run doUse
+useArrayAsync (Array !sh !adata) ms = run doUse
   where
-    doUse ctx mt = useR arrayElt adata
+    doUse !ctx !mt = useR arrayElt adata
       where
         useR :: ArrayEltR e -> ArrayData e -> IO ()
         useR ArrayEltRunit             _  = return ()
@@ -143,9 +145,9 @@ useArrayAsync (Array sh adata) ms = run doUse
 -- synchronous operation.
 --
 indexArray :: (Shape dim, Elt e) => Array dim e -> Int -> CIO e
-indexArray (Array _ adata) i = run doIndex
+indexArray (Array _ !adata) i = run doIndex
   where
-    doIndex ctx mt = toElt <$> indexR arrayElt adata
+    doIndex !ctx !mt = toElt <$> indexR arrayElt adata
       where
         indexR :: ArrayEltR e -> ArrayData e -> IO e
         indexR ArrayEltRunit             _  = return ()
@@ -175,11 +177,11 @@ indexArray (Array _ adata) i = run doIndex
 -- respect to the host, but will never overlap kernel execution.
 --
 copyArray :: (Shape dim, Elt e) => Array dim e -> Array dim e -> CIO ()
-copyArray (Array sh1 adata1) (Array sh2 adata2)
+copyArray (Array !sh1 !adata1) (Array !sh2 !adata2)
   = BOUNDS_CHECK(check) "copyArray" "shape mismatch" (sh1 == sh2)
   $ run doCopy
   where
-    doCopy ctx mt = copyR arrayElt adata1 adata2
+    doCopy !ctx !mt = copyR arrayElt adata1 adata2
       where
         copyR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
         copyR ArrayEltRunit             _   _   = return ()
@@ -194,9 +196,9 @@ copyArray (Array sh1 adata1) (Array sh2 adata2)
 -- Copy data from the device into the associated Accelerate host-side array
 --
 peekArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-peekArray (Array sh adata) = run doPeek
+peekArray (Array !sh !adata) = run doPeek
   where
-    doPeek ctx mt = peekR arrayElt adata
+    doPeek !ctx !mt = peekR arrayElt adata
       where
         peekR :: ArrayEltR e -> ArrayData e -> IO ()
         peekR ArrayEltRunit             _  = return ()
@@ -207,9 +209,9 @@ peekArray (Array sh adata) = run doPeek
         mkPrimDispatch(peekPrim,Prim.peekArray)
 
 peekArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> CIO ()
-peekArrayAsync (Array sh adata) ms = run doPeek
+peekArrayAsync (Array !sh !adata) !ms = run doPeek
   where
-    doPeek ctx mt = peekR arrayElt adata
+    doPeek !ctx !mt = peekR arrayElt adata
       where
         peekR :: ArrayEltR e -> ArrayData e -> IO ()
         peekR ArrayEltRunit             _  = return ()
@@ -223,9 +225,9 @@ peekArrayAsync (Array sh adata) ms = run doPeek
 -- Copy data from an Accelerate array into the associated device array
 --
 pokeArray :: (Shape dim, Elt e) => Array dim e -> CIO ()
-pokeArray (Array sh adata) = run doPoke
+pokeArray (Array !sh !adata) = run doPoke
   where
-    doPoke ctx mt = pokeR arrayElt adata
+    doPoke !ctx !mt = pokeR arrayElt adata
       where
         pokeR :: ArrayEltR e -> ArrayData e -> IO ()
         pokeR ArrayEltRunit             _  = return ()
@@ -236,9 +238,9 @@ pokeArray (Array sh adata) = run doPoke
         mkPrimDispatch(pokePrim,Prim.pokeArray)
 
 pokeArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> CIO ()
-pokeArrayAsync (Array sh adata) ms = run doPoke
+pokeArrayAsync (Array !sh !adata) !ms = run doPoke
   where
-    doPoke ctx mt = pokeR arrayElt adata
+    doPoke !ctx !mt = pokeR arrayElt adata
       where
         pokeR :: ArrayEltR e -> ArrayData e -> IO ()
         pokeR ArrayEltRunit             _  = return ()
@@ -253,7 +255,7 @@ pokeArrayAsync (Array sh adata) ms = run doPoke
 -- invocation
 --
 marshalDevicePtrs :: ArrayElt e => ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
-marshalDevicePtrs adata = marshalR arrayElt adata
+marshalDevicePtrs !adata = marshalR arrayElt adata
   where
     marshalR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
     marshalR ArrayEltRunit             _  _       = []
@@ -269,9 +271,9 @@ marshalDevicePtrs adata = marshalR arrayElt adata
 -- that can be passed to a kernel upon invocation.
 --
 marshalArrayData :: ArrayElt e => ArrayData e -> CIO [CUDA.FunParam]
-marshalArrayData adata = run doMarshal
+marshalArrayData !adata = run doMarshal
   where
-    doMarshal ctx mt = marshalR arrayElt adata
+    doMarshal !ctx !mt = marshalR arrayElt adata
       where
         marshalR :: ArrayEltR e -> ArrayData e -> IO [CUDA.FunParam]
         marshalR ArrayEltRunit             _  = return []
@@ -288,9 +290,9 @@ marshalArrayData adata = run doMarshal
 -- consumed, in projection index order --- i.e. right-to-left
 --
 marshalTextureData :: ArrayElt e => ArrayData e -> Int -> [CUDA.Texture] -> CIO ()
-marshalTextureData adata n texs = run doMarshal
+marshalTextureData !adata !n !texs = run doMarshal
   where
-    doMarshal ctx mt = marshalR arrayElt adata texs >> return ()
+    doMarshal !ctx !mt = marshalR arrayElt adata texs >> return ()
       where
         marshalR :: ArrayEltR e -> ArrayData e -> [CUDA.Texture] -> IO Int
         marshalR ArrayEltRunit             _  _ = return 0
@@ -309,9 +311,9 @@ marshalTextureData adata n texs = run doMarshal
 -- |Raw device pointers associated with a host-side array
 --
 devicePtrsOfArrayData :: ArrayElt e => ArrayData e -> CIO (Prim.DevicePtrs e)
-devicePtrsOfArrayData adata = run ptrs
+devicePtrsOfArrayData !adata = run ptrs
   where
-    ptrs ctx mt = ptrsR arrayElt adata
+    ptrs !ctx !mt = ptrsR arrayElt adata
       where
         ptrsR :: ArrayEltR e -> ArrayData e -> IO (Prim.DevicePtrs e)
         ptrsR ArrayEltRunit             _  = return ()
@@ -326,7 +328,7 @@ devicePtrsOfArrayData adata = run ptrs
 -- |Advance a set of device pointers by the given number of elements each
 --
 advancePtrsOfArrayData :: ArrayElt e => ArrayData e -> Int -> Prim.DevicePtrs e -> Prim.DevicePtrs e
-advancePtrsOfArrayData adata n = advanceR arrayElt adata
+advancePtrsOfArrayData !adata !n = advanceR arrayElt adata
   where
     advanceR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
     advanceR ArrayEltRunit             _  _       = ()
@@ -336,5 +338,4 @@ advancePtrsOfArrayData adata n = advanceR arrayElt adata
     --
     advancePrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
     mkPrimDispatch(advancePrim,Prim.advancePtrsOfArrayData n)
-
 

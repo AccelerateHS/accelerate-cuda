@@ -80,17 +80,13 @@ import qualified Data.HashSet                                   as Set
 --    skeleton are invoked
 --
 executeAcc :: Arrays a => ExecAcc a -> CIO a
-executeAcc acc = do
-  dev   <- asks deviceProps
-  res   <- executeOpenAcc dev acc Empty
-  return res
+executeAcc !acc = executeOpenAcc acc Empty
 
 executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
-executeAfun1 afun arrs
+executeAfun1 !afun !arrs
   | Alam (Abody f) <- afun
-  = do dev <- asks deviceProps
-       useArrays (arrays arrs) (fromArr arrs)
-       executeOpenAcc dev f (Empty `Push` arrs)
+  = do useArrays (arrays arrs) (fromArr arrs)
+       executeOpenAcc f (Empty `Push` arrs)
 
   | otherwise
   = error "the sword comes out after you swallow it, right?"
@@ -106,11 +102,10 @@ executeAfun1 afun arrs
 --
 executeOpenAcc
     :: forall aenv arrs.
-       DeviceProperties
-    -> ExecOpenAcc aenv arrs
+       ExecOpenAcc aenv arrs
     -> Val aenv
     -> CIO arrs
-executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
+executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
   = case pacc of
 
       -- Array introduction
@@ -119,7 +114,7 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
 
       -- Environment manipulation
       Avar ix                   -> return (prj ix aenv)
-      Alet bnd body             -> executeOpenAcc dev body . (aenv `Push`) =<< travA bnd
+      Alet bnd body             -> executeOpenAcc body . (aenv `Push`) =<< travA bnd
       Atuple tup                -> toTuple <$> travT tup
       Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
       Apply f a                 -> executeAfun1 f =<< travA a
@@ -157,20 +152,20 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
 
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
-    travA acc = executeOpenAcc dev acc aenv
+    travA !acc = executeOpenAcc acc aenv
 
     travE :: ExecExp aenv t -> CIO t
-    travE exp = executeExp exp aenv
+    travE !exp = executeExp exp aenv
 
     travT :: Atuple (ExecOpenAcc aenv) t -> CIO t
-    travT NilAtup        = return ()
-    travT (SnocAtup t a) = (,) <$> travT t <*> travA a
+    travT NilAtup          = return ()
+    travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
 
     -- get the extent of a fused array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent (ExecAcc _ _ acc)
       = case acc of
-          Avar ix               -> return $ shape (prj ix aenv)
+          Avar ix               -> return $! shape (prj ix aenv)
           Map _ a               -> extent a     -- must be an Avar
           Generate sh _         -> travE sh
           Backpermute sh _ _    -> travE sh
@@ -185,7 +180,7 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- is based on the given shape.
     --
     executeOp :: (Shape sh, Elt e) => sh -> CIO (Array sh e)
-    executeOp sh = do
+    executeOp !sh = do
       out       <- allocateArray sh
       execute kernel gamma aenv (size sh) out
       return out
@@ -195,16 +190,16 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- single-pass reduction where there is one block per inner dimension.
     --
     fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
-    fold1Op sh@(_ :. sz)
+    fold1Op !sh@(_ :. sz)
       = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
       $ foldOp sh
 
     foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
-    foldOp (sh :. sz)
+    foldOp !(!sh :. sz)
       | dim sh > 0              = executeOp sh
       | otherwise
-      = let numElements         = size sh * sz
-            (_,numBlocks,_)     = configure kernel numElements
+      = let !numElements        = size sh * sz
+            (_,!numBlocks,_)    = configure kernel numElements
         in do
           out   <- allocateArray (sh :. numBlocks)
           execute kernel gamma aenv numElements out
@@ -213,11 +208,11 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- Recursive step(s) of a multi-block reduction
     --
     foldRec :: (Shape sh, Elt e) => Array (sh:.Int) e -> CIO (Array sh e)
-    foldRec arr@(Array _ adata)
+    foldRec arr@(Array _ !adata)
       | Cons _ rec _ <- more
       = let sh :. sz            = shape arr
-            numElements         = size sh * sz
-            (_,numBlocks,_)     = configure rec numElements
+            !numElements        = size sh * sz
+            (_,!numBlocks,_)    = configure rec numElements
         in if sz <= 1
               then return $ Array (fromElt sh) adata
               else do
@@ -232,15 +227,15 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- this is the result of an exclusive scan to calculate segment offsets.
     --
     foldSegOp :: (Shape sh, Elt e) => (sh :. Int) -> (Z :. Int) -> CIO (Array (sh :. Int) e)
-    foldSegOp (sh :. _) (Z :. sz) = executeOp (sh :. sz - 1)
+    foldSegOp (!sh :. _) !(Z :. sz) = executeOp (sh :. sz - 1)
 
     -- Scans, all variations on a theme.
     --
     scanOp :: Elt e => Bool -> (Z :. Int) -> CIO (Vector e)
-    scanOp left (Z :. numElements) = do
+    scanOp !left !(Z :. numElements) = do
       arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
       out                       <- devicePtrsOfArrayData adata
-      let (body, sum)
+      let (!body, !sum)
             | left      = (out, advancePtrsOfArrayData adata numElements out)
             | otherwise = (advancePtrsOfArrayData adata 1 out, out)
       --
@@ -248,7 +243,7 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
       return arr
 
     scan1Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e)
-    scan1Op (Z :. numElements) = do
+    scan1Op !(Z :. numElements) = do
       arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
       body                      <- devicePtrsOfArrayData adata
       let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
@@ -257,7 +252,7 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
       return (Array ((),numElements) adata)
 
     scan'Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e, Scalar e)
-    scan'Op (Z :. numElements) = do
+    scan'Op !(Z :. numElements) = do
       vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
       sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
       d_vec                     <- devicePtrsOfArrayData ad_vec
@@ -273,11 +268,11 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
         -> Prim.DevicePtrs (EltRepr e)
         -> Prim.DevicePtrs (EltRepr e)
         -> CIO ()
-    scanCore numElements (Array _ adata) body sum
-      | Cons _ upsweep1 (Cons _ upsweep2 _) <- more
-      = let (_,numIntervals,_)  = configure kernel numElements
-            d_body              = marshalDevicePtrs adata body
-            d_sum               = marshalDevicePtrs adata sum
+    scanCore !numElements (Array _ !adata) !body !sum
+      | Cons _ !upsweep1 (Cons _ !upsweep2 _) <- more
+      = let (_,!numIntervals,_) = configure kernel numElements
+            !d_body             = marshalDevicePtrs adata body
+            !d_sum              = marshalDevicePtrs adata sum
         in do
           blk   <- allocateArray (Z :. numIntervals) :: CIO (Vector e)
 
@@ -299,7 +294,7 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- Forward permutation
     --
     permuteOp :: (Shape sh, Elt e) => Array sh e -> CIO (Array sh e)
-    permuteOp dfs
+    permuteOp !dfs
       = let sh  = shape dfs
         in do
           out   <- allocateArray sh
@@ -311,9 +306,10 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
     -- same as those given in the function 'mkStencil[2]'.
     --
     stencilOp :: forall sh a b. (Shape sh, Elt a, Elt b) => Array sh a -> CIO (Array sh b)
-    stencilOp arr = do
+    stencilOp !arr = do
       let sh    =  shape arr
       out       <- allocateArray sh
+      dev       <- asks deviceProps
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
@@ -324,9 +320,10 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
 
     stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
                => Array sh a -> Array sh b -> CIO (Array sh c)
-    stencil2Op arr1 arr2 = do
+    stencil2Op !arr1 !arr2 = do
       let sh    =  shape arr1 `intersect` shape arr2
       out       <- allocateArray sh
+      dev       <- asks deviceProps
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
@@ -341,10 +338,10 @@ executeOpenAcc dev (ExecAcc (FL () kernel more) gamma pacc) aenv
 -- ----------------------------
 
 executeExp :: ExecExp aenv t -> Val aenv -> CIO t
-executeExp exp aenv = executeOpenExp exp Empty aenv
+executeExp !exp !aenv = executeOpenExp exp Empty aenv
 
 executeOpenExp :: forall env aenv exp. ExecOpenExp env aenv exp -> Val env -> Val aenv -> CIO exp
-executeOpenExp rootExp env aenv = travE rootExp
+executeOpenExp !rootExp !env !aenv = travE rootExp
   where
     travE :: ExecOpenExp env aenv t -> CIO t
     travE exp = case exp of
@@ -378,13 +375,13 @@ executeOpenExp rootExp env aenv = travE rootExp
     travT :: Tuple (ExecOpenExp env aenv) t -> CIO t
     travT tup = case tup of
       NilTup            -> return ()
-      SnocTup t e       -> (,) <$> travT t <*> travE e
+      SnocTup !t !e     -> (,) <$> travT t <*> travE e
 
     travA :: ExecOpenAcc aenv a -> CIO a
-    travA acc = asks deviceProps >>= \dev -> executeOpenAcc dev acc aenv
+    travA !acc = executeOpenAcc acc aenv
 
     loop :: Int -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
-    loop limit fun x
+    loop !limit !fun !x
       | Lam (Body f) <- fun
       = let go !i !acc
               | i >= limit      = return acc
@@ -399,7 +396,7 @@ executeOpenExp rootExp env aenv = travE rootExp
                -> slix
                -> sh
                -> sl
-    indexSlice ix slix sh = toElt $ restrict ix (fromElt slix) (fromElt sh)
+    indexSlice !ix !slix !sh = toElt $! restrict ix (fromElt slix) (fromElt sh)
       where
         restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
         restrict SliceNil              ()        ()       = ()
@@ -411,7 +408,7 @@ executeOpenExp rootExp env aenv = travE rootExp
               -> slix
               -> sl
               -> sh
-    indexFull ix slix sl = toElt $ extend ix (fromElt slix) (fromElt sl)
+    indexFull !ix !slix !sl = toElt $! extend ix (fromElt slix) (fromElt sl)
       where
         extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
         extend SliceNil              ()        ()       = ()
@@ -419,7 +416,7 @@ executeOpenExp rootExp env aenv = travE rootExp
         extend (SliceFixed sliceIdx) (slx, sz) sh       = (extend sliceIdx slx sh, sz)
 
     index :: (Shape sh, Elt e) => Array sh e -> sh -> CIO e
-    index arr ix = indexArray arr (toIndex (shape arr) ix)
+    index !arr !ix = indexArray arr (toIndex (shape arr) ix)
 
 
 -- Marshalling data
@@ -431,39 +428,39 @@ class Marshalable a where
   marshal :: a -> CIO [CUDA.FunParam]
 
 instance Marshalable () where
-  marshal _ = return []
+  marshal () = return []
 
 instance Marshalable CUDA.FunParam where
-  marshal x = return [x]
+  marshal !x = return [x]
 
 instance ArrayElt e => Marshalable (ArrayData e) where
-  marshal = marshalArrayData
+  marshal !ad = marshalArrayData ad
 
 instance Shape sh => Marshalable sh where
-  marshal sh = return [CUDA.VArg sh]
+  marshal !sh = return [CUDA.VArg sh]
 
 instance Marshalable a => Marshalable [a] where
   marshal = concatMapM marshal
 
 instance (Marshalable sh, Elt e) => Marshalable (Array sh e) where
-  marshal (Array sh ad) = (++) <$> marshal (toElt sh :: sh) <*> marshal ad
+  marshal !(Array sh ad) = (++) <$> marshal (toElt sh :: sh) <*> marshal ad
 
 instance (Marshalable a, Marshalable b) => Marshalable (a, b) where
-  marshal (a, b) = (++) <$> marshal a <*> marshal b
+  marshal (!a, !b) = (++) <$> marshal a <*> marshal b
 
 instance (Marshalable a, Marshalable b, Marshalable c) => Marshalable (a, b, c) where
-  marshal (a, b, c)
+  marshal (!a, !b, !c)
     = concat <$> sequence [marshal a, marshal b, marshal c]
 
 instance (Marshalable a, Marshalable b, Marshalable c, Marshalable d)
       => Marshalable (a, b, c, d) where
-  marshal (a, b, c, d)
+  marshal (!a, !b, !c, !d)
     = concat <$> sequence [marshal a, marshal b, marshal c, marshal d]
 
 
 #define primMarshalable(ty)                                                    \
 instance Marshalable (ty) where {                                              \
-  marshal x = return [CUDA.VArg x] }
+  marshal !x = return [CUDA.VArg x] }
 
 primMarshalable(Int)
 primMarshalable(Int8)
@@ -483,7 +480,7 @@ primMarshalable(CUDA.DevicePtr a)
 instance Shape sh => Storable sh where  -- undecidable, incoherent
   sizeOf sh     = sizeOf    (undefined :: Int32) * (dim sh)
   alignment _   = alignment (undefined :: Int32)
-  poke p sh     = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
+  poke !p !sh   = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
 
 
 -- Convert shapes into 32-bit integers for marshalling onto the device
@@ -493,8 +490,8 @@ convertShape [] = [1]
 convertShape sh = reverse (map convertIx sh)
 
 convertIx :: Int -> Int32
-convertIx ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
-             $ fromIntegral ix
+convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
+              $ fromIntegral ix
 
 
 -- Note [Array references in scalar code]
@@ -515,12 +512,12 @@ convertIx ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int3
 --
 
 marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO ()
-marshalAccEnvTex kernel aenv (Gamma gamma)
+marshalAccEnvTex !kernel !aenv (Gamma !gamma)
   = forM_ (Set.toList gamma)
-  $ \(Idx_ idx) -> marshalAccTex (namesOfAvar idx) kernel (prj idx aenv)
+  $ \(Idx_ !idx) -> marshalAccTex (namesOfAvar idx) kernel (prj idx aenv)
 
 marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
-marshalAccTex (shIn, arrIn) (AccKernel _ _ mdl _ _ _ _) (Array sh adata)
+marshalAccTex (!shIn, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
   = let sh'     = convertShape (R.shapeToList sh)
         tex     = map (CUDA.getTex mdl) (reverse arrIn)
     in do
@@ -528,8 +525,8 @@ marshalAccTex (shIn, arrIn) (AccKernel _ _ mdl _ _ _ _) (Array sh adata)
       marshalTextureData adata (R.size sh)  =<< liftIO (sequence' tex)
 
 marshalAccEnvArg :: Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
-marshalAccEnvArg aenv (Gamma gamma)
-  = concatMapM (\(Idx_ idx) -> marshal (prj idx aenv)) (Set.toList gamma)
+marshalAccEnvArg !aenv (Gamma !gamma)
+  = concatMapM (\(Idx_ !idx) -> marshal (prj idx aenv)) (Set.toList gamma)
 
 
 -- A lazier version of 'Control.Monad.sequence'

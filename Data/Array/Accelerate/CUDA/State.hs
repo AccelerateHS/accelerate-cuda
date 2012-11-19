@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
@@ -54,13 +55,13 @@ import qualified Foreign.CUDA.Driver.Context            as CUDA
 -- device memory and kernel object code.
 --
 data Config = Config {
-    deviceProps         :: !CUDA.DeviceProperties,              -- information on hardware resources
-    activeContext       :: {-# UNPACK #-} !Context              -- device execution context
+    deviceProps         :: {-# UNPACK #-} !CUDA.DeviceProperties,       -- information on hardware resources
+    activeContext       :: {-# UNPACK #-} !Context                      -- device execution context
   }
 
 data State = State {
-    memoryTable         :: {-# UNPACK #-} !MemoryTable,         -- host/device memory associations
-    kernelTable         :: {-# UNPACK #-} !KernelTable          -- compiled kernel object code
+    memoryTable         :: {-# UNPACK #-} !MemoryTable,                 -- host/device memory associations
+    kernelTable         :: {-# UNPACK #-} !KernelTable                  -- compiled kernel object code
   }
 
 newtype CIO a = CIO {
@@ -74,7 +75,7 @@ newtype CIO a = CIO {
 --
 {-# NOINLINE evalCUDA #-}
 evalCUDA :: CUDA.Context -> CIO a -> IO a
-evalCUDA ctx acc
+evalCUDA !ctx !acc
   = bracket setup teardown
   $ \config -> evalStateT (runReaderT (runCIO acc) config) theState
   where

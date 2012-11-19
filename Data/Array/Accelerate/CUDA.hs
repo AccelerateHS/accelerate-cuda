@@ -139,7 +139,7 @@ runIn ctx a
 runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
   where
-    acc     = convertAccWith config a
+    !acc    = convertAccWith config a
     execute = evalCUDA ctx (compileAcc acc >>= executeAcc >>= collect)
               `catch`
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
@@ -185,7 +185,7 @@ run1In ctx f = let go = run1AsyncIn ctx f
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
-    acc       = convertAccFun1With config f
+    !acc      = convertAccFun1With config f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc)
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
@@ -214,11 +214,11 @@ streamIn ctx f arrs
 -- Copy arrays from device to host.
 --
 collect :: forall arrs. Arrays arrs => arrs -> CIO arrs
-collect arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
+collect !arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
   where
     collectR :: ArraysR a -> a -> CIO a
     collectR ArraysRunit         ()             = return ()
-    collectR ArraysRarray        arr            = peekArray arr >> return arr
+    collectR ArraysRarray        arr            = peekArray arr `seq` return arr
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
 
