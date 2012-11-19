@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MagicHash                  #-}
+{-# LANGUAGE UnboxedTuples              #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -33,14 +35,16 @@ import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
 import Control.Applicative                              ( Applicative )
-import Control.Exception                                ( bracket )
+import Control.Exception                                ( bracket, bracket_ )
 import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Monad                                    ( when )
 import Control.Monad.Trans                              ( MonadIO )
 import Control.Monad.Reader                             ( MonadReader, ReaderT(..), runReaderT )
 import Control.Monad.State.Strict                       ( MonadState, StateT(..), evalStateT )
+import GHC.Exts                                         ( Ptr(..), mkWeak# )
+import GHC.Base                                         ( IO(..) )
+import GHC.Weak                                         ( Weak(..) )
 import System.Mem                                       ( performGC )
-import System.Mem.Weak                                  ( mkWeakPtr, addFinalizer )
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
@@ -84,7 +88,7 @@ evalCUDA !ctx !acc
       CUDA.push ctx
       dev       <- CUDA.device
       prp       <- CUDA.props dev
-      weak_ctx  <- mkWeakPtr ctx Nothing
+      weak_ctx  <- mkWeakContext ctx (return ())
       return    $! Config prp (Context ctx weak_ctx)
 
 
@@ -114,24 +118,32 @@ defaultContext :: CUDA.Context
 defaultContext = unsafePerformIO $ do
   CUDA.initialise []
   (dev,prp)     <- selectBestDevice
-  ctx           <- CUDA.create dev [CUDA.SchedAuto]
+  message verbose (deviceInfo dev prp)
+
+  message dump_gc "gc: initialise context"
+  ctx           <- CUDA.create dev [CUDA.SchedAuto] >> CUDA.pop
+  _             <- mkWeakContext ctx $ do
+    message dump_gc "gc: finalise context"      -- should never happen!
+    CUDA.destroy ctx
 
   -- Generated code does not take particular advantage of shared memory, so
   -- for devices that support it use those banks as an L1 cache instead. Perhaps
   -- make this a command line switch: -fprefer-[l1,shared]
   --
   when (CUDA.computeCapability prp >= CUDA.Compute 2 0)
-       (CUDA.setCacheConfig CUDA.PreferL1)
+     $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.setCacheConfig CUDA.PreferL1)
 
-  -- Debugging information
-  --
-  message dump_gc "gc: initialise context"
-  message verbose (deviceInfo dev prp)
-  addFinalizer ctx $ do
-    message dump_gc "gc: finalise context"      -- should never happen!
-    CUDA.destroy ctx
+  keepAlive ctx
 
-  CUDA.pop >> keepAlive ctx
+
+-- Make a weak pointer to a CUDA context. We need to be careful to put the
+-- finaliser on the underlying pointer, rather than the box around it as
+-- 'mkWeak' will do, because unpacking the context will cause the finaliser to
+-- fire prematurely.
+--
+mkWeakContext :: CUDA.Context -> IO () -> IO (Weak CUDA.Context)
+mkWeakContext c@(CUDA.Context (Ptr c#)) f = IO $ \s ->
+  case mkWeak# c# c f s of (# s', w #) -> (# s', Weak w #)
 
 
 -- Make sure the GC knows that we want to keep this thing alive past the end of
