@@ -659,7 +659,7 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
 
 shflOK :: Elt e => DeviceProperties -> e -> Bool
 shflOK _dev _ = False
--- shflOk dev dummy
+-- shflOK dev dummy
 --   = computeCapability dev >= Compute 3 0 && all (`elem` [4,8]) (eltSizeOf dummy)
 
 
@@ -667,9 +667,6 @@ shflOK _dev _ = False
 -- threads of a without use of shared memory. The exchange occurs simultaneously
 -- for all active threads within the wrap, moving 4 bytes of data per thread.
 -- 8-byte quantities are broken into two separate transfers.
---
--- TLM: I think reduceWarpTree actually reduces (2 x warpSize) elements. Adjust
---      this to match.
 --
 reduceWarpShfl
     :: forall aenv e. Elt e
@@ -701,9 +698,6 @@ reduceWarpShfl _dev (CUFun2 _ _ f) x0 x1 n tid
 -- result into shared memory. The first warp then reduces these values to the
 -- final result.
 --
--- TODO: incorrect for inputs > warpSize
---       multi-block reductions??
---
 reduceBlockShfl
     :: forall aenv e. Elt e
     => DeviceProperties
@@ -714,12 +708,13 @@ reduceBlockShfl
     -> [C.Stm]
 reduceBlockShfl dev fun x0 x1 sdata n
   = reduceWarpShfl dev fun x0 x1 n (cvar "threadIdx.x")
-  : [cstm|  if ( threadIdx.x & (warpSize - 1) == 0 ) {
+  : [cstm|  if ( (threadIdx.x & warpSize - 1) == 0 ) {
                 $items:(sdata "threadIdx.x / warpSize" .=. x1)
             } |]
   : [cstm|  __syncthreads(); |]
   : [cstm|  if ( threadIdx.x < warpSize ) {
                 $items:(x1 .=. sdata "threadIdx.x")
+                $exp:n = ($exp:n + warpSize - 1) / warpSize;
                 $stm:(reduceWarpShfl dev fun x0 x1 n (cvar "threadIdx.x"))
             } |]
   : []
