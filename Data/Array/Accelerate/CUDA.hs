@@ -218,7 +218,7 @@ collect !arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
   where
     collectR :: ArraysR a -> a -> CIO a
     collectR ArraysRunit         ()             = return ()
-    collectR ArraysRarray        arr            = peekArray arr `seq` return arr
+    collectR ArraysRarray        arr            = peekArray arr >> return arr
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
 
