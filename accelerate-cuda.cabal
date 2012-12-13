@@ -98,7 +98,7 @@ Library
                         filepath                >= 1.0,
                         hashable                >= 1.1,
                         hashtables              >= 1.0.1,
-                        language-c-quote        >= 0.4,
+                        language-c-quote        >= 0.4.4,
                         mainland-pretty         >= 0.2,
                         mtl                     >= 2.0,
                         pretty                  >= 1.0,
