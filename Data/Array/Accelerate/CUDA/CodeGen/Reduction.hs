@@ -137,11 +137,24 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
          * a larger `gridSize', and hence fewer elements per thread
          *
          * The loop stride of `gridSize' is used to maintain coalescing.
+         *
+         * Note that we can't simply kill threads that won't participate in the
+         * reduction, as exclusive reductions of empty arrays then won't be
+         * initialised with their seed element.
          */
         if ( ix < shapeSize )
         {
+            /*
+             * Initialise the local sum, then ...
+             */
             $items:(y .=. get ix)
 
+            /*
+             * ... continue striding the array, reading new values into 'x' and
+             * combining into the local accumulator 'y'. The non-idiomatic
+             * structure of the loop below is because we have already
+             * initialised 'y' above.
+             */
             for ( ix += gridSize; ix < shapeSize; ix += gridSize )
             {
                 $items:(x .=. get ix)
