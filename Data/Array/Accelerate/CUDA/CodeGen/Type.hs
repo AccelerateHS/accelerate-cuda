@@ -1,6 +1,7 @@
-{-# LANGUAGE CPP         #-}
-{-# LANGUAGE GADTs       #-}
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE CPP           #-}
+{-# LANGUAGE GADTs         #-}
+{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE QuasiQuotes   #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
