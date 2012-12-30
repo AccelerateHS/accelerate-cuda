@@ -258,7 +258,7 @@ data Async a = Async {-# UNPACK #-} !ThreadId
 async :: IO a -> IO (Async a)
 async action = do
    var <- newEmptyMVar
-   tid <- forkIO $ (putMVar var . Right =<< action)
+   tid <- forkOS $ (putMVar var . Right =<< action)
                    `catch`
                    \e -> putMVar var (Left e)
    return (Async tid var)

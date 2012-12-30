@@ -43,6 +43,7 @@ import Control.Monad
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( liftIO, MonadIO )
+import Control.Concurrent
 import Crypto.Hash.MD5                                          ( hashlazy )
 import Data.List                                                ( intercalate )
 import Data.Maybe
@@ -59,8 +60,11 @@ import qualified Data.ByteString                                as B
 import qualified Data.Text.Lazy                                 as T
 import qualified Data.Text.Lazy.IO                              as T
 import qualified Data.Text.Lazy.Encoding                        as T
+import qualified Control.Concurrent.MSem                        as Q
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
+
+import GHC.Conc                                                 ( getNumProcessors )
 
 #ifdef VERSION_unix
 import System.Posix.Process
@@ -317,12 +321,17 @@ link table key =
     ctx         <- CUDA.get
     entry       <- fromMaybe intErr `fmap` KT.lookup table key
     case entry of
-      CompileProcess cufile pid -> do
+      CompileProcess cufile done -> do
         -- Wait for the compiler to finish and load the binary object into the
-        -- current context
+        -- current context.
+        --
+        -- A forked thread will fill the MVar once the external compilation
+        -- process completes, but only the main thread executes kernels. Hence,
+        -- only one thread will ever attempt to take the MVar in order to link
+        -- the binary object.
         --
         message "waiting for nvcc..."
-        waitFor pid
+        takeMVar done
         let cubin       =  replaceExtension cufile ".cubin"
         bin             <- B.readFile cubin
         mdl             <- CUDA.loadData bin
@@ -367,28 +376,18 @@ compile table dev cunit = do
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
     (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
-    (_,_,_,pid) <- liftIO $ do
+    done        <- liftIO $ do
       message $ "execute: " ++ nvcc ++ " " ++ unwords flags
-      T.hPutStr hdl code              `finally`     hClose hdl
-      createProcess (proc nvcc flags) `onException` removeFile file
+      T.hPutStr hdl code               `finally`     hClose hdl
+      enqueueProcess (proc nvcc flags) `onException` removeFile file
     --
-    liftIO $ KT.insert table key (CompileProcess file pid)
+    liftIO $ KT.insert table key (CompileProcess file done)
   --
   return (entry, key)
   where
     entry       = show cunit
     key         = (CUDA.computeCapability dev, hashlazy (T.encodeUtf8 code) )
     code        = displayLazyText . renderCompact $ ppr cunit
-
-
--- Wait for the compilation process to finish
---
-waitFor :: ProcessHandle -> IO ()
-waitFor pid = do
-  status <- waitForProcess pid
-  case status of
-    ExitSuccess   -> return ()
-    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
 
 
 -- Determine the appropriate command line flags to pass to the compiler process.
@@ -433,6 +432,45 @@ openTemporaryFile template = liftIO $ do
 getProcessID :: ProcessHandle -> IO ProcessId
 getProcessID = getProcessId
 #endif
+
+
+-- Worker pool
+-- -----------
+
+{-# NOINLINE pool #-}
+pool :: Q.MSem Int
+pool = unsafePerformIO $ Q.new =<< getNumProcessors
+
+-- Queue a system process to be executed and return an MVar flag that will be
+-- filled once the process completes. The task will only be launched once there
+-- is a worker available from the pool. This ensures we don't run out of process
+-- handles or flood the IO bus, degrading performance.
+--
+enqueueProcess :: CreateProcess -> IO (MVar ())
+enqueueProcess cp = do
+  mvar  <- newEmptyMVar
+  _     <- forkIO $ do
+
+    -- wait for a worker to become available
+    Q.wait pool
+    (_,_,_,pid) <- createProcess cp
+
+    -- asynchronously notify the queue when the compiler has completed
+    _           <- forkIO $ do finally (waitFor pid) (Q.signal pool)
+                               putMVar mvar ()
+    return ()
+  --
+  return mvar
+
+
+-- Wait for a (compilation) process to finish
+--
+waitFor :: ProcessHandle -> IO ()
+waitFor pid = do
+  status <- waitForProcess pid
+  case status of
+    ExitSuccess   -> return ()
+    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
 
 
 -- Debug

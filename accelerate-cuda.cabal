@@ -14,6 +14,8 @@ Description:
   .
   <http://developer.nvidia.com/cuda-downloads>
   .
+  Compile modules that use the CUDA backend with the @-threaded@ flag.
+  .
 
 License:                BSD3
 License-file:           LICENSE
@@ -103,14 +105,17 @@ Library
                         mtl                     >= 2.0,
                         pretty                  >= 1.0,
                         process                 >= 1.0,
+                        SafeSemaphore           >= 0.9,
                         srcloc                  >= 0.2,
                         text                    >= 0.11,
                         transformers            >= 0.2,
                         unordered-containers    >= 0.1.4
 
   if os(windows)
+    cpp-options:        -DWIN32
     build-depends:      Win32                   >= 2.2.1
   else
+    cpp-options:        -DUNIX
     build-depends:      unix                    >= 2.4
 
   Exposed-modules:      Data.Array.Accelerate.CUDA

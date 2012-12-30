@@ -31,9 +31,10 @@ import Data.Char
 import System.IO
 import System.FilePath
 import System.Directory
-import System.Process                                   ( ProcessHandle )
 import System.IO.Error
 import Control.Applicative
+import Control.Concurrent
+import Control.Exception
 import Control.Monad.Trans
 import Data.Version
 import Data.Binary
@@ -147,10 +148,11 @@ type ProgramCache = HT.BasicHashTable KernelKey KernelEntry
 
 type KernelKey    = (CUDA.Compute, ByteString)
 data KernelEntry
-  -- A currently compiling external process. We record the process ID and the
-  -- path of the .cu file being compiled
+  -- A currently compiling external process. We record the path of the .cu file
+  -- being compiled, and an MVar that will be filled upon completion.
   --
-  = CompileProcess !FilePath !ProcessHandle
+  = CompileProcess !FilePath
+                   {-# UNPACK #-} !(MVar ())
 
   -- The raw compiled data, and the list of contexts that the object has already
   -- been linked into. If we locate this entry in the ProgramCache, it may have
@@ -272,7 +274,7 @@ getMany n = go n []
 restore :: FilePath -> IO PersistentCache
 restore db = do
   D.when D.flush_cache $ do
-    message $ "deleting persistent cache"
+    message "deleting persistent cache"
     cacheDir <- cacheDirectory
     removeDirectoryRecursive cacheDir
     createDirectoryIfMissing True cacheDir
@@ -290,7 +292,7 @@ restore db = do
       --
       message $ "persist/restore: " ++ shows n " entries"
       go (runGet (getMany n) rest)
-      pt `seq` return pt
+      evaluate pt
 
 
 -- Append a single value to the persistent cache.
