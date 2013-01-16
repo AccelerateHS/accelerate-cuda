@@ -85,7 +85,8 @@ instance Eq HostArray where
     = maybe False (== a2) (gcast a1)
 
 instance Hashable HostArray where
-  hash (HostArray cid sn) = hashWithSalt cid sn
+  hashWithSalt salt (HostArray cid sn)
+    = salt `hashWithSalt` cid `hashWithSalt` sn
 
 instance Show HostArray where
   show (HostArray _ sn) = "Array #" ++ show (hashStableName sn)

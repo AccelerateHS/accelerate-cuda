@@ -34,7 +34,7 @@ import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 instance Hashable C.Exp where
-  hash  = hash . show
+  hashWithSalt salt = hashWithSalt salt . show
 
 
 -- The state of the code generator monad. The outer monad is used to generate

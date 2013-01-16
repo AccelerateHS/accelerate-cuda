@@ -51,8 +51,8 @@ import Paths_accelerate_cuda
 
 
 instance Hashable CUDA.Compute where
-  hash (CUDA.Compute major minor)
-    = hash major `hashWithSalt` minor
+  hashWithSalt salt (CUDA.Compute major minor)
+    = salt `hashWithSalt` major `hashWithSalt` minor
 
 instance Binary CUDA.Compute where
   put (CUDA.Compute major minor) = put major >> put minor

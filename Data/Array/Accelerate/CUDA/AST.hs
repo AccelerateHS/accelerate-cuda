@@ -78,7 +78,8 @@ instance Eq (Idx_ aenv) where
   Idx_ ix1 == Idx_ ix2 = idxToInt ix1 == idxToInt ix2
 
 instance Hashable (Idx_ aenv) where
-  hash (Idx_ ix) = hash (idxToInt ix)
+  hashWithSalt salt (Idx_ ix)
+    = salt `hashWithSalt` idxToInt ix
 
 
 -- Interleave compilation & execution state annotations into an open array
