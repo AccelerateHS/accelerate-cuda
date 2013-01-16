@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE GADTs                #-}
 {-# LANGUAGE IncoherentInstances  #-}
+{-# LANGUAGE PatternGuards        #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeOperators        #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -44,7 +45,7 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
 -- standard library
-import Prelude                                                  hiding ( exp, sum )
+import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM, forM_ )
 import Control.Monad.Reader                                     ( asks )
@@ -353,7 +354,8 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Tuple t                   -> toTuple <$> travT t
       Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
       Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
-      Iterate n f x             -> loop n f =<< travE x
+      Iterate n f x             -> join $ iterate f <$> travE n <*> travE x
+--      While p f x               -> while p f =<< travE x
       IndexAny                  -> return Any
       IndexNil                  -> return Z
       IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
@@ -380,16 +382,22 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv
 
-    loop :: Int -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
-    loop !limit !fun !x
-      | Lam (Body f) <- fun
+    iterate :: ExecOpenExp (env,a) aenv a -> Int -> a -> CIO a
+    iterate !f !limit !x
       = let go !i !acc
               | i >= limit      = return acc
               | otherwise       = go (i+1) =<< executeOpenExp f (env `Push` acc) aenv
-        in go 0 x
+        in
+        go 0 x
 
-      | otherwise
-      = error "puny god"
+    while :: ExecOpenExp (env,a) aenv Bool -> ExecOpenExp (env,a) aenv a -> a -> CIO a
+    while !p !f !x
+      = let go !acc = do
+              done <- executeOpenExp p (env `Push` acc) aenv
+              if done then return x
+                      else go =<< executeOpenExp f (env `Push` acc) aenv
+        in
+        go x
 
     indexSlice :: (Elt slix, Elt sh, Elt sl)
                => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)

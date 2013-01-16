@@ -227,7 +227,8 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Tuple t                 -> liftA  Tuple                 <$> travT t
         Prj ix e                -> liftA  (Prj ix)              <$> travE e
         Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
-        Iterate n f x           -> liftA2 (Iterate n)           <$> travF f <*> travE x
+        Iterate n f x           -> liftA3 Iterate               <$> travE n <*> travE f <*> travE x
+--        While p f x             -> liftA3 While                 <$> travE p <*> travE f <*> travE x
         PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
         Index a e               -> liftA2 Index                 <$> travA a <*> travE e
         LinearIndex a e         -> liftA2 LinearIndex           <$> travA a <*> travE e
@@ -240,10 +241,6 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
-
-        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
-        travF (Body b)  = liftA Body <$> travE b
-        travF (Lam  f)  = liftA Lam  <$> travF f
 
         travT :: Tuple (OpenExp env aenv) t
               -> CIO (Gamma aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
@@ -457,7 +454,7 @@ enqueueProcess cp = do
 
     -- asynchronously notify the queue when the compiler has completed
     _           <- forkIO $ do finally (waitFor pid) (Q.signal pool)
-                               putMVar mvar ()
+                               putMVar mvar ()  -- never executed if the compilation fails.
     return ()
   --
   return mvar

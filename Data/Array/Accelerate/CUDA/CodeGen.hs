@@ -21,9 +21,8 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
-import Prelude                                                  hiding ( id, exp, replicate )
+import Prelude                                                  hiding ( id, exp, replicate, iterate )
 import Control.Applicative                                      ( (<$>), (<*>), (<*) )
-import Control.Monad
 import Control.Monad.State.Strict
 import Data.Loc
 import Data.Char
@@ -308,7 +307,8 @@ codegenOpenExp dev = cvtE
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
-        Iterate n f x           -> loop n f x env
+        Iterate n f x           -> iterate n f x env
+--        While p f x             -> while p f x env
 
         -- Shapes and indices
         IndexNil                -> return []
@@ -399,40 +399,76 @@ codegenOpenExp dev = cvtE
       ok        <- single "Cond" <$> pushEnv p p'
       zipWith (\a b -> [cexp| $exp:ok ? $exp:a : $exp:b |]) <$> cvtE t env <*> cvtE e env
 
-    -- Value recursion.
+    -- Value recursion. Two flavours.
     --
-    -- Foolishly, TLM introduced lambda abstractions into the scalar language,
-    -- where previously these were always outermost. However, this was really
-    -- just a shortcut to not defining a new constructor. Although we do have to
-    -- be a little careful, full closure-conversion is not required.
-    --
-    loop :: Int -> OpenFun env aenv (a -> a) -> OpenExp env aenv a -> Val env -> Gen [C.Exp]
-    loop n fun x env
-      | Lam (Body f) <- fun
-      = do x'           <- cvtE x env
-           xn           <- replicateM (length x') (lift fresh)
-           let seed      = zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) xn x'
-               acc       = map cvar xn
+    iterate :: OpenExp env     aenv Int         -- fixed iteration depth
+            -> OpenExp (env,a) aenv a           -- loop body
+            -> OpenExp env     aenv a           -- initial value
+            -> Val env
+            -> Gen [C.Exp]
+    iterate n f x env
+      = do [n']         <- cvtE n env
+           x'           <- cvtE x env
+           var_x        <- mapM (\_ -> lift fresh) x'
+           var_n        <- lift fresh
+           let seed      = [cdecl| const int $id:var_n = $exp:n'; |]
+                         : zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) var_x x'
+               acc       = map cvar var_x
 
            -- generate the loop in a clean environment, so that the previous
            -- environment fragments are not included in the body
            outer        <- gets bindings <* modify (\st -> st { bindings = [] })
-           body'        <- cvtE f (env `Push` acc)
+           body         <- cvtE f (env `Push` acc)
            inner        <- getEnv
            i            <- lift fresh
 
            let go        = C.BlockStm
-                         $ [cstm| for (int $id:i = 0; $id:i < $int:n; ++ $id:i) {
+                         $ [cstm| for (int $id:i = 0; $id:i < $id:var_n; ++ $id:i) {
                                       $items:inner
-                                      $items:(acc .=. body')
+                                      $items:(acc .=. body)
                                   } |]
 
            -- restore the outer environment, plus the new loop
            modify (\st -> st { bindings = go : map C.BlockDecl (reverse seed) ++ outer })
            return acc
 
-      | otherwise
-      = INTERNAL_ERROR(error) "Iterate" "expected unary function"
+    while :: OpenExp (env,a) aenv Bool        -- continue while predicate returns true
+          -> OpenExp (env,a) aenv a           -- loop body
+          -> OpenExp env     aenv a           -- initial value
+          -> Val env
+          -> Gen [C.Exp]
+    while p f x env
+      = do x'           <- cvtE x env
+
+           var_x        <- mapM (\_ -> lift fresh) x'
+           var_ok       <- lift fresh
+
+           let seed      = [cdecl| int $id:var_ok; |]
+                         : zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) var_x x'
+               acc       = map cvar var_x
+               ok        = cvar var_ok
+
+           -- generate the loop functions in a clean environment
+           outer        <- gets bindings <* modify (\st -> st { bindings = [] })
+           [done]       <- cvtE p (env `Push` acc)
+           envP         <- getEnv <* modify (\st -> st { bindings = [] })
+           body         <- cvtE f (env `Push` acc)
+           envF         <- getEnv
+
+           let go        =  envP
+                         ++ (ok .=. done)
+                         ++ [C.BlockStm
+                            [cstm| while ( $exp:ok ) {
+                                       $items:envF
+                                       $items:(acc .=. body)
+                                       $items:envP
+                                       $items:(ok .=. done)
+                                   } |]]
+
+           -- restore the outer environment, plus the new loop
+           modify (\st -> st { bindings = reverse (map C.BlockDecl seed ++ go) ++ outer })
+           return acc
+
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
     -- elide the presence of IndexAny from the head of slx, as this is not
