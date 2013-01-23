@@ -23,7 +23,7 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 import Prelude                                          hiding ( lookup )
 import Data.IORef                                       ( IORef, newIORef, readIORef, mkWeakIORef )
 import Data.Maybe                                       ( isJust )
-import Data.Hashable                                    ( Hashable(..) )
+import Data.Hashable                                    ( Hashable(..), hash )
 import Data.Typeable                                    ( Typeable, gcast )
 import Control.Monad                                    ( unless )
 import Control.Exception                                ( bracket_ )
@@ -85,7 +85,7 @@ instance Eq HostArray where
     = maybe False (== a2) (gcast a1)
 
 instance Hashable HostArray where
-  hash (HostArray cid sn) = hashWithSalt cid sn
+  hashWithSalt i (HostArray cid sn) = hashWithSalt i $ hashWithSalt cid sn
 
 instance Show HostArray where
   show (HostArray _ sn) = "Array #" ++ show (hashStableName sn)
