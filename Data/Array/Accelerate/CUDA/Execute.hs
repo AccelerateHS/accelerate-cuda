@@ -64,6 +64,7 @@ import qualified Data.HashSet                                   as Set
 #ifdef ACCELERATE_DEBUG
 import Control.Monad                                            ( void )
 import Control.Concurrent                                       ( forkIO )
+import System.CPUTime
 import qualified Foreign.CUDA.Driver.Event                      as Event
 #endif
 
@@ -606,13 +607,13 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
 #ifdef ACCELERATE_DEBUG
   | D.mode D.dump_exec
   = liftIO $ do
-      gpuBegin    <- Event.create []
-      gpuEnd      <- Event.create []
-      --cpuBegin    <- getCPUTime
+      gpuBegin  <- Event.create []
+      gpuEnd    <- Event.create []
+      cpuBegin  <- getCPUTime
       Event.record gpuBegin Nothing
       CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
       Event.record gpuEnd Nothing
-      --cpuEnd      <- getCPUTime
+      cpuEnd    <- getCPUTime
 
       -- Wait for the GPU to finish executing then display the timing execution
       -- message. Do this in a separate thread so that the remaining kernels can
@@ -620,16 +621,17 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
       --
       void . forkIO $ do
         Event.block gpuEnd
-        gpuTime     <- Event.elapsedTime gpuBegin gpuEnd                  -- returned in milliseconds
-        --let cpuTime  = fromIntegral (cpuEnd - cpuBegin) * 1E-12 :: Double -- picoseconds
+        diff    <- Event.elapsedTime gpuBegin gpuEnd
+        let gpuTime = diff * 1E-3                                        -- milliseconds
+            cpuTime = fromIntegral (cpuEnd - cpuBegin) * 1E-12 :: Double -- picoseconds
 
         Event.destroy gpuBegin
         Event.destroy gpuEnd
         --
         message $
-          entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
-                ++ ", gpu time: " ++ D.showFFloatSIBase (Just 3) 1000 (gpuTime * 1E-3) "s"
-             -- ++ ", cpu time: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime          "s"
+          entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
+                ++ "gpu: " ++ D.showFFloatSIBase (Just 3) 1000 gpuTime "s, "
+                ++ "cpu: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime "s"
 #endif
   | otherwise
   = liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args

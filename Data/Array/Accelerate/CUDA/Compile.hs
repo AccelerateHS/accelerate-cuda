@@ -304,7 +304,7 @@ build1 acc code = do
       -- make sure kernel/stats are printed together. Use 'intercalate' rather
       -- than 'unlines' to avoid a trailing newline.
       --
-      message   $ intercalate "\n" [msg1, "     ... " ++ msg2]
+      message   $ intercalate "\n     ... " [msg1, msg2]
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
