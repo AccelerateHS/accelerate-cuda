@@ -49,7 +49,7 @@ import Prelude                                                  hiding ( exp, su
 import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM, forM_ )
 import Control.Monad.Reader                                     ( asks )
-import Control.Monad.Trans                                      ( liftIO )
+import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
@@ -60,6 +60,12 @@ import Foreign.CUDA.Analysis.Device                             ( DeviceProperti
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.Marshal.Array                          as F
 import qualified Data.HashSet                                   as Set
+
+#ifdef ACCELERATE_DEBUG
+import Control.Monad                                            ( void )
+import Control.Concurrent                                       ( forkIO )
+import qualified Foreign.CUDA.Driver.Event                      as Event
+#endif
 
 #include "accelerate.h"
 
@@ -596,19 +602,47 @@ execute !kernel !gamma !aenv !n !a = do
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
 launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> CIO ()
-launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args = do
-  message $ entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
-  liftIO  $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
+launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
+#ifdef ACCELERATE_DEBUG
+  | D.mode D.dump_exec
+  = liftIO $ do
+      gpuBegin    <- Event.create []
+      gpuEnd      <- Event.create []
+      --cpuBegin    <- getCPUTime
+      Event.record gpuBegin Nothing
+      CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
+      Event.record gpuEnd Nothing
+      --cpuEnd      <- getCPUTime
+
+      -- Wait for the GPU to finish executing then display the timing execution
+      -- message. Do this in a separate thread so that the remaining kernels can
+      -- be queued asynchronously.
+      --
+      void . forkIO $ do
+        Event.block gpuEnd
+        gpuTime     <- Event.elapsedTime gpuBegin gpuEnd                  -- returned in milliseconds
+        --let cpuTime  = fromIntegral (cpuEnd - cpuBegin) * 1E-12 :: Double -- picoseconds
+
+        Event.destroy gpuBegin
+        Event.destroy gpuEnd
+        --
+        message $
+          entry ++ " <<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>>"
+                ++ ", gpu time: " ++ D.showFFloatSIBase (Just 3) 1000 (gpuTime * 1E-3) "s"
+             -- ++ ", cpu time: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime          "s"
+#endif
+  | otherwise
+  = liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
 
 
 -- Debugging
 -- ---------
 
 {-# INLINE trace #-}
-trace :: String -> CIO a -> CIO a
+trace :: MonadIO m => String -> m a -> m a
 trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
 
 {-# INLINE message #-}
-message :: String -> CIO ()
+message :: MonadIO m => String -> m ()
 message s = s `trace` return ()
 
