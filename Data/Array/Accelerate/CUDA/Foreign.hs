@@ -31,7 +31,7 @@
 
 module Data.Array.Accelerate.CUDA.Foreign (
   -- * Backend representation
-  BackendRepr(..), cudaFF,
+  BackendRepr(CudaR), cudaFF,
   
   -- * Manipulating arrays
   indexArray, copyArray,
@@ -185,7 +185,7 @@ peekArray = evalCUDA' . Data.peekArray
 peekArrayAsync :: (Shape dim, Elt e) => Array dim e -> Maybe CUDA.Stream -> IO ()
 peekArrayAsync a = evalCUDA' . Data.peekArrayAsync a
 
--- Copy data from an Accelerate array into the associated device array
+-- |Copy data from an Accelerate array into the associated device array
 --
 pokeArray :: (Shape dim, Elt e) => Array dim e -> IO ()
 pokeArray = evalCUDA' . Data.pokeArray
