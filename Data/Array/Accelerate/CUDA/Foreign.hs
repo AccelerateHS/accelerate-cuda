@@ -62,7 +62,7 @@ import System.Mem.StableName
 -- CUDA backend representation of foreign functions.
 -- ---------------------------------------------------
 
--- CUDA foreign functions are just native Haskell functions in the IO monad.
+-- CUDA foreign functions are just native Haskell IO functions.
 newtype CuForeign args results = CuForeign (args -> IO results)
 
 instance ForeignFun CuForeign where
@@ -78,38 +78,38 @@ instance ForeignFun CuForeign where
 -- Converting between nested and unnested tuples of device pointers.
 -- ------------------------------------------------------------------
 
-type family DevicePtrElt d
-type instance DevicePtrElt () = ()
-type instance DevicePtrElt (CUDA.DevicePtr e) = ((), CUDA.DevicePtr e)
-type instance DevicePtrElt (a, b) = (DevicePtrElt a, DevicePtrElt' b)
-type instance DevicePtrElt (a, b, c) = (DevicePtrElt (a, b), DevicePtrElt' c)
-type instance DevicePtrElt (a, b, c, d) = (DevicePtrElt (a, b, c), DevicePtrElt' d)
-type instance DevicePtrElt (a, b, c, d, e) = (DevicePtrElt (a, b, c, d), DevicePtrElt' e)
-type instance DevicePtrElt (a, b, c, d, e, f) = (DevicePtrElt (a, b, c, d, e), DevicePtrElt' f)
-type instance DevicePtrElt (a, b, c, d, e, f, g) = (DevicePtrElt (a, b, c, d, e, f), DevicePtrElt' g)
-type instance DevicePtrElt (a, b, c, d, e, f, g, h) = (DevicePtrElt (a, b, c, d, e, f, g), DevicePtrElt' h)
-type instance DevicePtrElt (a, b, c, d, e, f, g, h, i)
-  = (DevicePtrElt (a, b, c, d, e, f, g, h), DevicePtrElt' i)
+type family DevRepr d
+type instance DevRepr () = ()
+type instance DevRepr (CUDA.DevicePtr e) = ((), CUDA.DevicePtr e)
+type instance DevRepr (a, b) = (DevRepr a, DevRepr' b)
+type instance DevRepr (a, b, c) = (DevRepr (a, b), DevRepr' c)
+type instance DevRepr (a, b, c, d) = (DevRepr (a, b, c), DevRepr' d)
+type instance DevRepr (a, b, c, d, e) = (DevRepr (a, b, c, d), DevRepr' e)
+type instance DevRepr (a, b, c, d, e, f) = (DevRepr (a, b, c, d, e), DevRepr' f)
+type instance DevRepr (a, b, c, d, e, f, g) = (DevRepr (a, b, c, d, e, f), DevRepr' g)
+type instance DevRepr (a, b, c, d, e, f, g, h) = (DevRepr (a, b, c, d, e, f, g), DevRepr' h)
+type instance DevRepr (a, b, c, d, e, f, g, h, i)
+  = (DevRepr (a, b, c, d, e, f, g, h), DevRepr' i)
 
-type family DevicePtrElt' d
-type instance DevicePtrElt' () = ()
-type instance DevicePtrElt' (CUDA.DevicePtr e) = CUDA.DevicePtr e
-type instance DevicePtrElt' (a, b) = (DevicePtrElt a, DevicePtrElt' b)
-type instance DevicePtrElt' (a, b, c) = (DevicePtrElt (a, b), DevicePtrElt' c)
-type instance DevicePtrElt' (a, b, c, d) = (DevicePtrElt (a, b, c), DevicePtrElt' d)
-type instance DevicePtrElt' (a, b, c, d, e) = (DevicePtrElt (a, b, c, d), DevicePtrElt' e)
-type instance DevicePtrElt' (a, b, c, d, e, f) = (DevicePtrElt (a, b, c, d, e), DevicePtrElt' f)
-type instance DevicePtrElt' (a, b, c, d, e, f, g) = (DevicePtrElt (a, b, c, d, e, f), DevicePtrElt' g)
-type instance DevicePtrElt' (a, b, c, d, e, f, g, h) = (DevicePtrElt (a, b, c, d, e, f, g), DevicePtrElt' h)
-type instance DevicePtrElt' (a, b, c, d, e, f, g, h, i)
-  = (DevicePtrElt (a, b, c, d, e, f, g, h), DevicePtrElt' i)
+type family DevRepr' d
+type instance DevRepr' () = ()
+type instance DevRepr' (CUDA.DevicePtr e) = CUDA.DevicePtr e
+type instance DevRepr' (a, b) = (DevRepr a, DevRepr' b)
+type instance DevRepr' (a, b, c) = (DevRepr (a, b), DevRepr' c)
+type instance DevRepr' (a, b, c, d) = (DevRepr (a, b, c), DevRepr' d)
+type instance DevRepr' (a, b, c, d, e) = (DevRepr (a, b, c, d), DevRepr' e)
+type instance DevRepr' (a, b, c, d, e, f) = (DevRepr (a, b, c, d, e), DevRepr' f)
+type instance DevRepr' (a, b, c, d, e, f, g) = (DevRepr (a, b, c, d, e, f), DevRepr' g)
+type instance DevRepr' (a, b, c, d, e, f, g, h) = (DevRepr (a, b, c, d, e, f, g), DevRepr' h)
+type instance DevRepr' (a, b, c, d, e, f, g, h, i)
+  = (DevRepr (a, b, c, d, e, f, g, h), DevRepr' i)
 
 -- |Constraint that implies the tuple of device pointers 'd' matches the element type 'e'.
-type DevicePtrsOf e d = (Prim.DevicePtrs (EltRepr e) ~ DevicePtrElt d, Dev d)
+type DevicePtrsOf e d = (Prim.DevicePtrs (EltRepr e) ~ DevRepr d, Dev d)
 
 class Dev a where
-  toDev  :: DevicePtrElt a -> a
-  toDev' :: DevicePtrElt' a -> a
+  toDev  :: DevRepr a -> a
+  toDev' :: DevRepr' a -> a
 
 instance Dev (CUDA.DevicePtr e) where
   toDev ((),e) = e
@@ -210,6 +210,7 @@ allocateArray = evalCUDA' . Sugar.allocateArray
 newArray :: (Shape sh, Elt e) => sh -> (sh -> e) -> IO (Array sh e)
 newArray sh = newArray sh
 
+-- |Run an IO action within the given CUDA context
 inContext :: CUDA.Context -> IO a -> IO a
 inContext ctx a = do
   CUDA.push ctx
@@ -217,5 +218,6 @@ inContext ctx a = do
   _ <- CUDA.pop
   return r
 
+-- |Run an IO action in the default CUDA context
 inDefaultContext :: IO a -> IO a
 inDefaultContext = inContext defaultContext
