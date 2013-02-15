@@ -36,7 +36,7 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-import Data.Array.Accelerate.CUDA.Foreign                       (BackendRepr(..))             
+import Data.Array.Accelerate.CUDA.Foreign                       (canExecute)             
 
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
@@ -151,9 +151,9 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
       -- Foreign
-      Foreign ff afun a         -> case toBackendRepr ff of
-                                     (CudaR f) -> executeForeign f =<< travA a
-                                     _         -> executeAfun1 afun =<< travA a   
+      Foreign ff afun a         -> case canExecute ff of
+                                     (Just f) -> executeForeign f =<< travA a
+                                     Nothing  -> executeAfun1 afun =<< travA a  
 
       -- Removed by fusion
       Reshape _ _               -> fusionError

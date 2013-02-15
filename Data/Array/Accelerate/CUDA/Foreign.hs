@@ -5,6 +5,8 @@
 {-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE ConstraintKinds      #-}
+{-# LANGUAGE DeriveDataTypeable   #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign
@@ -31,7 +33,7 @@
 
 module Data.Array.Accelerate.CUDA.Foreign (
   -- * Backend representation
-  BackendRepr(CudaR), cudaFF,
+  cudaFF, canExecute, CuForeign,
   
   -- * Manipulating arrays
   indexArray, copyArray,
@@ -42,7 +44,7 @@ module Data.Array.Accelerate.CUDA.Foreign (
   allocateArray, newArray,
   DevicePtrsOf,
 
-  -- * Run actions in CUDA context
+  -- * Running IO actions in a CUDA context
   inContext, inDefaultContext
 ) where
 
@@ -58,21 +60,28 @@ import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import Control.Applicative
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import System.Mem.StableName
+import Data.Dynamic
 
 -- CUDA backend representation of foreign functions.
 -- ---------------------------------------------------
 
 -- CUDA foreign functions are just native Haskell IO functions.
-newtype CuForeign args results = CuForeign (args -> IO results)
+newtype CuForeign args results = CuForeign (args -> IO results) deriving (Typeable)
 
 instance ForeignFun CuForeign where
-  data BackendRepr args results = CudaR (args -> IO results)
-
-  toBackendRepr (CuForeign ff) = CudaR ff
-
   -- Using the hash of the stablename in order to uniquely identify the function
   -- when it is pretty printed.
   strForeign ff = "cudaFF<" ++ (show . hashStableName) (unsafePerformIO $ makeStableName ff) ++ ">"
+
+-- |Gives an the executable form of a foreign function if it can be executed by the CUDA backend.
+canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable results) 
+           => ff args results 
+           -> Maybe (args -> IO results)
+canExecute ff =
+  let
+    df = toDyn ff
+    fd = fromDynamic :: Dynamic -> Maybe (CuForeign args results)
+  in (\(CuForeign ff') -> ff') <$> fd df 
 
 
 -- Converting between nested and unnested tuples of device pointers.

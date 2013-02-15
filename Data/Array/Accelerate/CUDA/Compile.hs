@@ -30,7 +30,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
-import Data.Array.Accelerate.CUDA.Foreign                       (BackendRepr(..))
+import Data.Array.Accelerate.CUDA.Foreign                       (canExecute)
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -159,10 +159,10 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
-        Foreign ff afun a       -> case toBackendRepr ff of
+        Foreign ff afun a       -> case canExecute ff of
                                      -- If it's a foreign call for the CUDA backend don't bother compiling the pure version
-                                     CudaR _ -> node =<< liftA  (Foreign ff foreignError) <$> travA a
-                                     _       -> node . pure =<< Foreign ff                <$> compileAfun afun <*> traverseAcc a
+                                     (Just _) -> node =<< liftA (Foreign ff foreignError) <$> travA a
+                                     Nothing  -> node . pure =<< Foreign ff               <$> compileAfun afun <*> traverseAcc a 
 
       where
         use :: ArraysR a -> a -> CIO ()
