@@ -3,6 +3,7 @@
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NamedFieldPuns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -16,7 +17,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc,
+--  CUTranslSkel, codegenAcc,
 
 ) where
 
@@ -31,17 +32,20 @@ import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
+import qualified Data.Map                                       as M
 
 -- friends
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Pretty                             ()
-import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr )
-import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
-import qualified Data.Array.Accelerate.Trafo                    as Trafo
-import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
-import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
+-- import Data.Array.Accelerate.Type
+-- import Data.Array.Accelerate.Tuple
+-- import Data.Array.Accelerate.Pretty                             ()
+-- import Data.Array.Accelerate.Analysis.Shape
+-- import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr )
+-- import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
+-- import qualified Data.Array.Accelerate.Trafo                    as Trafo
+-- import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
+-- import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
+
+import Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  hiding ( shapeSize )
@@ -50,23 +54,21 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
-import Data.Array.Accelerate.CUDA.CodeGen.Reduction
-import Data.Array.Accelerate.CUDA.CodeGen.Stencil
+-- import Data.Array.Accelerate.CUDA.CodeGen.Reduction
+-- import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 
 #include "accelerate.h"
 
 
 -- Local environments
---
-data Val env where
-  Empty ::                       Val ()
-  Push  :: Val env -> [C.Exp] -> Val (env, s)
+-- data Val = Empty | Push Val S.Type [C.Exp]
+-- type ValEnv = [(S.Type,[C.Exp])]
+type ValEnv = M.Map S.Var (S.Type,[C.Exp])
 
-prj :: Idx env t -> Val env -> [C.Exp]
-prj ZeroIdx      (Push _   v) = v
-prj (SuccIdx ix) (Push val _) = prj ix val
-prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
-
+-- prj :: Idx env t -> Val env -> [C.Exp]
+-- prj ZeroIdx      (Push _   v) = v
+-- prj (SuccIdx ix) (Push val _) = prj ix val
+-- prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
 
 -- Array expressions
 -- -----------------
@@ -83,13 +85,18 @@ prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuat
 --
 -- TODO: include a measure of how much shared memory a kernel requires.
 --
-codegenAcc :: DeviceProperties -> OpenAcc aenv arrs -> Gamma aenv -> [ CUTranslSkel aenv arrs ]
-codegenAcc dev (OpenAcc pacc) aenv
-  = codegen
-  $ case pacc of
-
+codegenAcc :: DeviceProperties -> S.Prog a -> Gamma -> [ CUTranslSkel ]
+codegenAcc dev prog@(S.Prog {progBinds}) aenv
+  = concat (map doProgBind progBinds)
+ where
+    doProgBind (S.ProgBind {}) = undefined
+    
+    doAE ae = case ae of
+--      Map f a -> mkMap dev aenv       <$> travF1 f <*> travS a
+      _ -> error "FINISH codegenAcc"
+{- RNTODO
       -- Producers
-      Map f a                   -> mkMap dev aenv       <$> travF1 f <*> travS a
+
       Generate _ f              -> mkGenerate dev aenv  <$> travF1 f
       Transform _ p f a         -> mkTransform dev aenv <$> travF1 p <*> travF1 f  <*> travS a
       Backpermute _ p a         -> mkTransform dev aenv <$> travF1 p <*> travF1 id <*> travS a
@@ -123,40 +130,44 @@ codegenAcc dev (OpenAcc pacc) aenv
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
+-}
 
-  where
     codegen :: CUDA a -> a
     codegen cuda = evalState cuda 0
 
-    id :: Elt a => Fun aenv (a -> a)
-    id = Lam (Body (Var ZeroIdx))
+    -- id :: Elt a => Fun aenv (a -> a)
+    -- id = Lam (Body (Var ZeroIdx))
 
     -- scalar code generation
-    travF1 :: Fun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
+    travF1 :: S.Fun1 S.Exp -> CUDA (CUFun1)
     travF1 = codegenFun1 dev
 
-    travF2 :: Fun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
-    travF2 = codegenFun2 dev
+    -- travF2 :: Fun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
+    -- travF2 = codegenFun2 dev
 
-    travE :: Exp aenv t -> CUDA (CUExp aenv t)
-    travE = codegenExp dev
+    -- travE :: Exp aenv t -> CUDA (CUExp aenv t)
+    -- travE = codegenExp dev
 
-    travS :: (Shape sh, Elt e) => OpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e)
-    travS = codegenDelayedAcc dev
+--    travS :: (Shape sh, Elt e) => OpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e)
+    travS = error "travS "-- codegenDelayedAcc dev
 
-    travB :: forall aenv sh e. Elt e
-          => OpenAcc aenv (Array sh e) -> Boundary (EltRepr e) -> CUDA (Boundary (CUExp aenv e))
-    travB _ Clamp        = return Clamp
-    travB _ Mirror       = return Mirror
-    travB _ Wrap         = return Wrap
-    travB _ (Constant c) = return . Constant $ CUExp ([], codegenConst (Sugar.eltType (undefined::e)) c)
+    -- travB :: forall aenv sh e. Elt e
+    --       => OpenAcc aenv (Array sh e) -> Boundary (EltRepr e) -> CUDA (Boundary (CUExp aenv e))
+    -- travB _ Clamp        = return Clamp
+    -- travB _ Mirror       = return Mirror
+    -- travB _ Wrap         = return Wrap
+    -- travB _ (Constant c) = return . Constant $ CUExp ([], codegenConst (Sugar.eltType (undefined::e)) c)
 
-    -- caffeine and misery
-    prim :: String
-    prim                = showPreAccOp pacc
-    unexpectedError     = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected array primitive: " ++ prim
-    fusionError         = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected fusible material: " ++ prim
+    -- -- caffeine and misery
+    -- prim :: String
+    -- prim                = showPreAccOp pacc
+    -- unexpectedError     = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected array primitive: " ++ prim
+    -- fusionError         = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected fusible material: " ++ prim
 
+codegenFun1=error"codegenFun1"
+codegenFun2=error"codegenFun2"
+
+{- RNTODO
 
 -- Scalar function abstraction
 -- ---------------------------
@@ -246,11 +257,15 @@ mark used xs
   = let flags = map (\x -> x `Set.member` used) xs
     in  zipWith (,) flags
 
+-}
+
 visit :: [C.Exp] -> Gen [C.Exp]
 visit exp
   | [x] <- exp  = use x >> return exp
   | otherwise   =          return exp
 
+
+{-  RNTODO
 
 -- Delayed arrays
 -- --------------
@@ -287,23 +302,29 @@ codegenExp dev exp =
     return      $! CUExp (env,code)
 
 
--- The core of the code generator, buildings lists of untyped C expression
+-}
+
+-- The core of the code generator, building lists of untyped C expression
 -- fragments. This is tricky to get right!
 --
-codegenOpenExp :: DeviceProperties -> OpenExp env aenv t -> Val env -> Gen [C.Exp]
-codegenOpenExp dev = cvtE
+codegenOpenExp :: DeviceProperties -> S.Exp -> ValEnv -> Gen [C.Exp]
+codegenOpenExp dev ex env = cvtE env ex
   where
+
     -- Generate code for a scalar expression in depth-first order. We run under
     -- a monad that generates fresh names and keeps track of let bindings.
     --
-    cvtE :: forall env aenv t. OpenExp env aenv t -> Val env -> Gen [C.Exp]
-    cvtE exp env = visit =<<
+--    forall env aenv t. OpenExp env aenv t
+    cvtE :: ValEnv -> S.Exp -> Gen [C.Exp]
+    cvtE env exp  = visit =<<
       case exp of
-        Let bnd body            -> elet bnd body env
-        Var ix                  -> return $ prj ix env
+        ELet bnd body -> elet bnd body env
+        EVr  v        -> return $ snd $ env # v
+        EConst c      -> return $ codegenConst c
+        EPrimApp ty p args -> do lls <- mapM (cvtE env) args
+                                 return [codegenPrim p (concat lls)]
+{- RNTODO
         PrimConst c             -> return $ [codegenPrimConst c]
-        Const c                 -> return $ codegenConst (Sugar.eltType (undefined::t)) c
-        PrimApp f arg           -> return . codegenPrim f <$> cvtE arg env
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
@@ -330,7 +351,7 @@ codegenOpenExp dev = cvtE
 
     -- The heavy lifting
     -- -----------------
-
+-}
     -- Scalar let expressions evaluate their terms and generate new (const)
     -- variable bindings to store these results. These are carried the monad
     -- state, which also gives us a supply of fresh names. The new names are
@@ -340,13 +361,13 @@ codegenOpenExp dev = cvtE
     -- something is added, it remains in scope forever. We are relying on
     -- liveness analysis of the CUDA compiler to manage register pressure.
     --
-    elet :: OpenExp env aenv bnd -> OpenExp (env, bnd) aenv body -> Val env -> Gen [C.Exp]
-    elet bnd body env = do
-      bnd'      <- cvtE bnd env
-      x         <- pushEnv bnd bnd'
-      body'     <- cvtE body (env `Push` x)
+    elet :: (S.Var,S.Type,S.Exp) -> S.Exp -> ValEnv -> Gen [C.Exp]
+    elet (vr,ty,rhs) body env = do
+      rhs'      <- cvtE env rhs 
+      x         <- pushEnv ty rhs rhs'
+      body'     <- cvtE (M.insert vr (ty,rhs') env) body 
       return body'
-
+{-
     -- Convert an OpenExp into a sequence of C expressions. We retain snoc-list
     -- ordering, so the element at tuple index zero is at the end of the list.
     -- Note that nested tuple structures are flattened.
@@ -608,19 +629,20 @@ codegenOpenExp dev = cvtE
     single _   [x] = x
     single loc _   = INTERNAL_ERROR(error) loc "expected single expression"
 
+-}
 
 -- Scalar Primitives
 -- -----------------
 
-codegenPrimConst :: PrimConst a -> C.Exp
-codegenPrimConst (PrimMinBound ty) = codegenMinBound ty
-codegenPrimConst (PrimMaxBound ty) = codegenMaxBound ty
-codegenPrimConst (PrimPi       ty) = codegenPi ty
+-- codegenPrimConst :: PrimConst a -> C.Exp
+-- codegenPrimConst (PrimMinBound ty) = codegenMinBound ty
+-- codegenPrimConst (PrimMaxBound ty) = codegenMaxBound ty
+-- codegenPrimConst (PrimPi       ty) = codegenPi ty
 
-
-codegenPrim :: PrimFun p -> [C.Exp] -> C.Exp
-codegenPrim (PrimAdd              _) [a,b] = [cexp|$exp:a + $exp:b|]
-codegenPrim (PrimSub              _) [a,b] = [cexp|$exp:a - $exp:b|]
+codegenPrim :: S.Prim -> [C.Exp] -> C.Exp
+codegenPrim (NP Add                ) [a,b] = [cexp|$exp:a + $exp:b|]
+codegenPrim (NP Sub                ) [a,b] = [cexp|$exp:a - $exp:b|]
+{- RNTODO
 codegenPrim (PrimMul              _) [a,b] = [cexp|$exp:a * $exp:b|]
 codegenPrim (PrimNeg              _) [a]   = [cexp| - $exp:a|]
 codegenPrim (PrimAbs             ty) [a]   = codegenAbs ty a
@@ -673,28 +695,26 @@ codegenPrim PrimOrd                  [a]   = codegenOrd a
 codegenPrim PrimChr                  [a]   = codegenChr a
 codegenPrim PrimBoolToInt            [a]   = codegenBoolToInt a
 codegenPrim (PrimFromIntegral ta tb) [a]   = codegenFromIntegral ta tb a
-
+-}
 -- If the argument lists are not the correct length
 codegenPrim _ _ =
   INTERNAL_ERROR(error) "codegenPrim" "inconsistent valuation"
 
--- Implementation of scalar primitives
---
-codegenConst :: TupleType a -> a -> [C.Exp]
-codegenConst UnitTuple           _      = []
-codegenConst (SingleTuple ty)    c      = [codegenScalar ty c]
-codegenConst (PairTuple ty1 ty0) (cs,c) = codegenConst ty1 cs ++ codegenConst ty0 c
 
+-- Scalar and tuple constants:
+codegenConst :: S.Const -> [C.Exp]
+codegenConst cnst =
+  case cnst of
+    B b   -> [cbool b]
+    C x   -> [[cexp|$char:x|]]
+    CC x  -> [[cexp|$char:(chr (fromIntegral x))|]]
+    CUC x -> [[cexp|$char:(chr (fromIntegral x))|]]
+    CSC x -> [[cexp|$char:(chr (fromIntegral x))|]]
 
--- Scalar constants
---
-codegenScalar :: ScalarType a -> a -> C.Exp
-codegenScalar (NumScalarType    ty) = codegenNumScalar ty
-codegenScalar (NonNumScalarType ty) = codegenNonNumScalar ty
+--    x | S.isIntType x -> [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
 
-codegenNumScalar :: NumType a -> a -> C.Exp
-codegenNumScalar (IntegralNumType ty) = codegenIntegralScalar ty
-codegenNumScalar (FloatingNumType ty) = codegenFloatingScalar ty
+{- RNTODO:
+
 
 codegenIntegralScalar :: IntegralType a -> a -> C.Exp
 codegenIntegralScalar ty x | IntegralDict <- integralDict ty = [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
@@ -704,13 +724,6 @@ codegenFloatingScalar (TypeFloat   _) x = C.Const (C.FloatConst (shows x "f") (t
 codegenFloatingScalar (TypeCFloat  _) x = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
 codegenFloatingScalar (TypeDouble  _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
 codegenFloatingScalar (TypeCDouble _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
-
-codegenNonNumScalar :: NonNumType a -> a -> C.Exp
-codegenNonNumScalar (TypeBool   _) x = cbool x
-codegenNonNumScalar (TypeChar   _) x = [cexp|$char:x|]
-codegenNonNumScalar (TypeCChar  _) x = [cexp|$char:(chr (fromIntegral x))|]
-codegenNonNumScalar (TypeCUChar _) x = [cexp|$char:(chr (fromIntegral x))|]
-codegenNonNumScalar (TypeCSChar _) x = [cexp|$char:(chr (fromIntegral x))|]
 
 
 -- Constant methods of floating
@@ -748,7 +761,6 @@ codegenAbs (IntegralNumType ty) x =
     TypeCULLong _       -> x
     _                   -> ccall "abs" [x]
 
-
 codegenSig :: NumType a -> C.Exp -> C.Exp
 codegenSig (IntegralNumType ty) = codegenIntegralSig ty
 codegenSig (FloatingNumType ty) = codegenFloatingSig ty
@@ -775,74 +787,74 @@ codegenLogBase ty x y = let a = ccall (FloatingNumType ty `postfix` "log") [x]
                             b = ccall (FloatingNumType ty `postfix` "log") [y]
                         in
                         [cexp|$exp:b / $exp:a|]
+-}
 
+codegenMin :: S.Type -> C.Exp -> C.Exp -> C.Exp
+codegenMin ty a b | S.isIntType ty   = ccall (ty `postfix` "min")  [a,b]
+                  | S.isFloatType ty = ccall (ty `postfix` "fmin") [a,b]
+                  | otherwise = let ty = S.TInt32 
+                                in  codegenMin ty (ccast ty a) (ccast ty b)
 
-codegenMin :: ScalarType a -> C.Exp -> C.Exp -> C.Exp
-codegenMin (NumScalarType ty@(IntegralNumType _)) a b = ccall (ty `postfix` "min")  [a,b]
-codegenMin (NumScalarType ty@(FloatingNumType _)) a b = ccall (ty `postfix` "fmin") [a,b]
-codegenMin (NonNumScalarType _)                   a b =
-  let ty = scalarType :: ScalarType Int32
-  in  codegenMin ty (ccast ty a) (ccast ty b)
-
-
-codegenMax :: ScalarType a -> C.Exp -> C.Exp -> C.Exp
-codegenMax (NumScalarType ty@(IntegralNumType _)) a b = ccall (ty `postfix` "max")  [a,b]
-codegenMax (NumScalarType ty@(FloatingNumType _)) a b = ccall (ty `postfix` "fmax") [a,b]
-codegenMax (NonNumScalarType _)                   a b =
-  let ty = scalarType :: ScalarType Int32
-  in  codegenMax ty (ccast ty a) (ccast ty b)
-
+codegenMax :: S.Type -> C.Exp -> C.Exp -> C.Exp
+codegenMax ty a b | S.isIntType ty   = ccall (ty `postfix` "max")  [a,b]
+                  | S.isFloatType ty = ccall (ty `postfix` "fmax") [a,b]
+                  | otherwise = let ty = S.TInt32
+                                in  codegenMax ty (ccast ty a) (ccast ty b)
 
 -- Type coercions
 --
 codegenOrd :: C.Exp -> C.Exp
-codegenOrd = ccast (scalarType :: ScalarType Int)
+codegenOrd = ccast S.TInt
 
 codegenChr :: C.Exp -> C.Exp
-codegenChr = ccast (scalarType :: ScalarType Char)
+codegenChr = ccast S.TChar
 
 codegenBoolToInt :: C.Exp -> C.Exp
-codegenBoolToInt = ccast (scalarType :: ScalarType Int)
+codegenBoolToInt = ccast S.TInt
 
-codegenFromIntegral :: IntegralType a -> NumType b -> C.Exp -> C.Exp
-codegenFromIntegral _ ty = ccast (NumScalarType ty)
+codegenFromIntegral :: S.Type -> S.Type -> C.Exp -> C.Exp
+codegenFromIntegral _ ty | S.isNumType ty = ccast ty
+                         | otherwise = error$"codegenFromIntegral: not a numtype: "++show ty
 
-codegenTruncate :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenTruncate ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "trunc") [x]
+-- RNTODO:
+-- codegenTruncate :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
+-- codegenTruncate ta tb x
+--   = ccast (NumScalarType (IntegralNumType tb))
+--   $ ccall (FloatingNumType ta `postfix` "trunc") [x]
 
-codegenRound :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenRound ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "round") [x]
+-- codegenRound :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
+-- codegenRound ta tb x
+--   = ccast (NumScalarType (IntegralNumType tb))
+--   $ ccall (FloatingNumType ta `postfix` "round") [x]
 
-codegenFloor :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenFloor ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "floor") [x]
+-- codegenFloor :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
+-- codegenFloor ta tb x
+--   = ccast (NumScalarType (IntegralNumType tb))
+--   $ ccall (FloatingNumType ta `postfix` "floor") [x]
 
-codegenCeiling :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenCeiling ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "ceil") [x]
+-- codegenCeiling :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
+-- codegenCeiling ta tb x
+--   = ccast (NumScalarType (IntegralNumType tb))
+--   $ ccall (FloatingNumType ta `postfix` "ceil") [x]
 
 
 -- Auxiliary Functions
 -- -------------------
 
-ccast :: ScalarType a -> C.Exp -> C.Exp
-ccast ty x = [cexp|($ty:(codegenScalarType ty)) $exp:x|]
 
-postfix :: NumType a -> String -> String
-postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
-postfix (FloatingNumType (TypeCFloat _)) x = x ++ "f"
-postfix _                                x = x
+-- Scalar types only, satisfies `isNumType`
+ccast :: S.Type -> C.Exp -> C.Exp
+ccast ty x = [cexp|($ty:(codegenType ty)) $exp:x|]
+
+postfix :: S.Type -> String -> String
+postfix S.TFloat  x = x ++ "f"
+postfix S.TCFloat x = x ++ "f"
+postfix _         x = x
 
 
 -- Debugging
 -- ---------
-
+{-
 showPreAccOp :: PreOpenAcc acc aenv a -> String
 showPreAccOp pacc =
   case pacc of
@@ -875,4 +887,12 @@ showPreAccOp pacc =
     Backpermute _ _ _   -> "Backpermute"
     Stencil _ _ _       -> "Stencil"
     Stencil2 _ _ _ _ _  -> "Stencil2"
+-}
 
+
+-- | For debugging purposes we should really never use Data.Map.!  This is an
+-- alternative with a better error message.
+(#) :: (Ord a1, Show a, Show a1) => M.Map a1 a -> a1 -> a
+mp # k = case M.lookup k mp of
+          Nothing -> error$"Map.lookup: key "++show k++" is not in map:\n  "++show mp
+          Just x  -> x

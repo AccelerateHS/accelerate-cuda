@@ -32,7 +32,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type {- (
 -- import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 -- import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 
-import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+import Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
 -- libraries
 import Language.C.Quote.CUDA
@@ -50,7 +50,7 @@ typename name = [cty| typename $id:name |]
 -- Surface element types
 -- ---------------------
 
-#if 0 
+{-
 accType :: S.Prog a -> [C.Type]
 accType =  codegenTupleType . Sugar.accType
 
@@ -97,43 +97,60 @@ codegenNumType :: NumType a -> C.Type
 codegenNumType (IntegralNumType ty) = codegenIntegralType ty
 codegenNumType (FloatingNumType ty) = codegenFloatingType ty
 
-codegenIntegralType :: IntegralType a -> C.Type
-codegenIntegralType (TypeInt8    _) = typename "Int8"
-codegenIntegralType (TypeInt16   _) = typename "Int16"
-codegenIntegralType (TypeInt32   _) = typename "Int32"
-codegenIntegralType (TypeInt64   _) = typename "Int64"
-codegenIntegralType (TypeWord8   _) = typename "Word8"
-codegenIntegralType (TypeWord16  _) = typename "Word16"
-codegenIntegralType (TypeWord32  _) = typename "Word32"
-codegenIntegralType (TypeWord64  _) = typename "Word64"
-codegenIntegralType (TypeCShort  _) = [cty|short|]
-codegenIntegralType (TypeCUShort _) = [cty|unsigned short|]
-codegenIntegralType (TypeCInt    _) = [cty|int|]
-codegenIntegralType (TypeCUInt   _) = [cty|unsigned int|]
-codegenIntegralType (TypeCLong   _) = [cty|long int|]
-codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
-codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
-codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
+-}
+
+-- TEMP:
+codegenIntegralType = codegenType
+
+codegenType :: S.Type -> C.Type
+codegenType ty =
+  case ty of
+    TInt8   -> typename "Int8"
+    TInt16  -> typename "Int16"
+    TInt32  -> typename "Int32"
+    TInt64  -> typename "Int64"
+    TWord8  -> typename "Word8"
+    TWord16 -> typename "Word16"
+    TWord32 -> typename "Word32"
+    TWord64 -> typename "Word64"
+
 #if   SIZEOF_HSINT == 4
-codegenIntegralType (TypeInt     _) = typename "Int32"
+    TInt    -> typename "Int32"
+    TWord   -> typename "Word32"
 #elif SIZEOF_HSINT == 8
-codegenIntegralType (TypeInt     _) = typename "Int64"
+    TInt    -> typename "Int64"
+    TWord   -> typename "Word64"
 #else
-codegenIntegralType (TypeInt     _) = typename
-  $ case sizeOf (undefined :: Int) of
-      4 -> "Int32"
-      8 -> "Int64"
+    TInt    -> typename 
+     $ case sizeOf (undefined :: Int) of
+         4 -> "Int32"
+         8 -> "Int64"
+    TWord    -> typename 
+     $ case sizeOf (undefined :: Int) of
+         4 -> "Word32"
+         8 -> "Word64"
 #endif
-#if   SIZEOF_HSINT == 4
-codegenIntegralType (TypeWord    _) = typename "Word32"
-#elif SIZEOF_HSINT == 8
-codegenIntegralType (TypeWord    _) = typename "Word64"
-#else
-codegenIntegralType (TypeWord    _) = typename
-  $ case sizeOf (undefined :: Int) of
-      4 -> "Word32"
-      8 -> "Word64"
-#endif
+    TCShort  -> [cty|short|]
+    TCInt    -> [cty|int|]
+    TCLong   -> [cty|long int|]
+    TCLLong  -> [cty|long long int|]
+    TCUShort -> [cty|unsigned short|]
+    TCUInt   -> [cty|unsigned int|]
+    TCULong  -> [cty|unsigned long int|]
+    TCULLong -> [cty|unsigned long long int|]
+    -- TCChar   -> 
+    -- TCSChar  -> 
+    -- TCUChar  -> 
+    -- TFloat   -> 
+    -- TDouble  -> 
+    -- TCFloat  -> 
+    -- TCDouble -> 
+    -- TBool    -> 
+    -- TChar    -> 
+--    TTuple ls -> sum$ map typeByteSize ls;
+--    TArray _ _ -> error "typeByteSize: cannot know the size of array from its type"
+
+{-
 
 codegenFloatingType :: FloatingType a -> C.Type
 codegenFloatingType (TypeFloat   _) = [cty|float|]
@@ -236,4 +253,4 @@ codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
 codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
 codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"
 
-#endif
+-}
