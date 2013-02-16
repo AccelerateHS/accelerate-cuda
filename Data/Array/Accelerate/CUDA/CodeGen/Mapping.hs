@@ -22,7 +22,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Mapping (
 import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis.Device
 
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+-- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 
@@ -35,13 +36,9 @@ import Data.Array.Accelerate.CUDA.CodeGen.Base
 --     -> Acc (Array sh a)
 --     -> Acc (Array sh b)
 --
-mkMap :: forall aenv sh a b. (Shape sh, Elt a, Elt b)
-      => DeviceProperties
-      -> Gamma aenv
-      -> CUFun1 aenv (a -> b)
-      -> CUDelayedAcc aenv sh a
-      -> [CUTranslSkel aenv (Array sh b)]
-mkMap dev aenv fun arr
+mkMap :: S.Type -> S.Type 
+      -> DeviceProperties -> Gamma -> CUFun1 -> CUDelayedAcc  -> [CUTranslSkel]
+mkMap tyIn tyOut dev aenv fun arr
   | CUFun1 dce f                 <- fun
   , CUDelayed _ _ (CUFun1 _ get) <- arr
   = return
@@ -71,8 +68,8 @@ mkMap dev aenv fun arr
     }
   |]
   where
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
-    (x, _, _)           = locals "x" (undefined :: a)
+    (texIn, argIn)      = environment (tyIn) dev aenv
+    (argOut, setOut)    = setters tyOut "Out" 
+    (x, _, _)           = locals tyIn "x" 
     ix                  = [cvar "ix"]
 

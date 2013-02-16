@@ -78,12 +78,12 @@ groupOfAvar ix = "In" ++ show (ix)
 -- A CUDA compilation unit, together with the name of the main __global__ entry
 -- function.
 --
-data CUTranslSkel aenv a = CUTranslSkel Name [C.Definition]
+data CUTranslSkel = CUTranslSkel Name [C.Definition]
 
-instance Show (CUTranslSkel aenv a) where
+instance Show (CUTranslSkel) where
   show (CUTranslSkel entry _) = entry
 
-instance Pretty (CUTranslSkel aenv a) where
+instance Pretty (CUTranslSkel) where
   ppr  (CUTranslSkel _ code)  = ppr code
 
 -- Scalar expressions, including the environment of local let-bindings to bring
