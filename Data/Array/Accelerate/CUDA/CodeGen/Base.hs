@@ -18,7 +18,7 @@
 -- Portability : non-portable (GHC extensions)
 --
 
-module Data.Array.Accelerate.CUDA.CodeGen.Base (
+module Data.Array.Accelerate.CUDA.CodeGen.Base {- (
 
   -- Names and Types
   CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1(..), CUFun2(..),
@@ -32,7 +32,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   -- Mutable operations
   (.=.), locals, Lvalue(..), Rvalue(..),
 
-) where
+)-} where
 
 import Text.PrettyPrint.Mainland
 import Language.C.Quote.CUDA
@@ -40,8 +40,12 @@ import qualified Language.C.Syntax                      as C
 import qualified Data.HashSet                           as Set
 
 import Foreign.CUDA.Analysis.Device
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+
+-- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.Analysis.Shape
+
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.AST
 
@@ -52,25 +56,21 @@ import Data.Array.Accelerate.CUDA.AST
 
 type Name = String
 
-namesOfArray
-    :: forall e. Elt e
-    => Name             -- name of group: typically "Out" or "InX" for some number 'X'
-    -> e                -- dummy
-    -> (Name, [Name])   -- shape and array field names
-namesOfArray grp _
-  = let ty      = eltType (undefined :: e)
+namesOfArray :: S.Type ->
+                Name             -- name of group: typically "Out" or "InX" for some number 'X'
+             -> (Name, [Name])   -- shape and array field names
+namesOfArray ty grp 
+  = let 
         arr x   = "arr" ++ grp ++ "_a" ++ show x
-        n       = length ty
+        n       = length (S.flattenTy ty)
     in
     ( "sh" ++ grp, map arr [n-1, n-2 .. 0] )
 
+namesOfAvar :: S.Type -> S.Var -> (Name, [Name])
+namesOfAvar ty ix = namesOfArray ty (groupOfAvar ix) 
 
-namesOfAvar :: forall aenv sh e. Elt e => Idx aenv (Array sh e) -> (Name, [Name])
-namesOfAvar ix = namesOfArray (groupOfAvar ix) (undefined :: e)
-
-groupOfAvar :: Idx aenv (Array sh e) -> Name
-groupOfAvar ix = "In" ++ show (idxToInt ix)
-
+groupOfAvar :: S.Var -> Name
+groupOfAvar ix = "In" ++ show (ix)
 
 -- Types of compilation units
 -- --------------------------
@@ -89,34 +89,40 @@ instance Pretty (CUTranslSkel aenv a) where
 -- Scalar expressions, including the environment of local let-bindings to bring
 -- into scope before evaluating the body.
 --
-data CUExp aenv a where
-  CUExp  :: ([C.BlockItem], [C.Exp])
-         -> CUExp aenv a
+data CUExp = CUExp ([C.BlockItem], [C.Exp])
 
 -- Scalar functions of particular arity, with local bindings.
 --
-data CUFun1 aenv f where
-  CUFun1 :: (Elt a, Elt b)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
-         -> CUFun1 aenv (a -> b)
+-- data CUFun1 f where
+--   CUFun1 :: 
+--             (forall x. [x] -> [(Bool,x)])
+--          -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
+--          -> CUFun1 (S.Const -> S.Const)
 
-data CUFun2 aenv f where
-  CUFun2 :: (Elt a, Elt b, Elt c)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall y. [y] -> [(Bool,y)])
-         -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
-         -> CUFun2 aenv (a -> b -> c)
+data CUFun1 = CUFun1 (forall x. [x] -> [(Bool,x)])
+                     (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
+
+-- data CUFun2 f where
+--   CUFun2 :: 
+--             (forall x. [x] -> [(Bool,x)])
+--          -> (forall y. [y] -> [(Bool,y)])
+--          -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
+--          -> CUFun2 (S.Const -> S.Const -> S.Const)
+
+data CUFun2  = CUFun2 (forall x. [x] -> [(Bool,x)])
+                      (forall y. [y] -> [(Bool,y)])
+                      (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
 
 -- Delayed arrays
 --
-data CUDelayedAcc aenv sh e where
-  CUDelayed :: CUExp  aenv sh
-            -> CUFun1 aenv (sh -> e)
-            -> CUFun1 aenv (Int -> e)
-            -> CUDelayedAcc aenv sh e
+-- data CUDelayedAcc sh where
+  -- CUDelayed :: CUExp  
+  --           -> CUFun1  (sh -> S.Const)
+  --           -> CUFun1  (Int -> S.Const)
+  --           -> CUDelayedAcc sh
 
-
+data CUDelayedAcc = CUDelayed CUExp CUFun1 CUFun1 
+  
 -- Expression and declaration generation
 -- -------------------------------------
 
@@ -137,6 +143,11 @@ cbool = cintegral . fromEnum
 
 cdim :: Name -> Int -> C.Definition
 cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+
+ctype :: S.Type -> C.Type
+ctype = error "implement me"
+
+#if 0
 
 -- Disassemble a struct-shape into a list of expressions accessing the fields
 cshape :: Int -> C.Exp -> [C.Exp]
@@ -193,14 +204,11 @@ indexArray dev elt arr ix
 -- Generate kernel parameters for an array valued argument, and a function to
 -- linearly index this array. Note that dimensional indexing results in error.
 --
-getters
-    :: forall aenv sh e. (Shape sh, Elt e)
-    => Name                             -- group names
-    -> Array sh e                       -- dummy to fix types
-    -> ( [C.Param], CUDelayedAcc aenv sh e )
-getters grp dummy
-  = let (sh, arrs)      = namesOfArray grp (undefined :: e)
-        args            = arrayAsArg dummy grp
+getters :: S.Type -> Name                             -- group names
+        -> ( [C.Param], CUDelayedAcc  )
+getters ty grp 
+  = let (sh, arrs)      = namesOfArray ty grp 
+        args            = arrayAsArg ty grp
 
         dim             = expDim (undefined :: Exp aenv sh)
         sh'             = cshape dim (cvar sh)
@@ -217,14 +225,11 @@ getters grp dummy
 -- name (say "Out") to be welded with a shape name "shOut" followed by the
 -- non-parametric array data "arrOut_aX".
 --
-setters
-    :: forall sh e. (Shape sh, Elt e)
-    => Name                             -- group names
-    -> Array sh e                       -- dummy to fix types
-    -> ([C.Param], Name -> [C.Exp])
-setters grp _
-  = let (sh, arrs)      = namesOfArray grp (undefined :: e)
-        dim             = expDim (undefined :: Exp aenv sh)
+setters :: S.Type -> Name                             -- group names
+        -> ([C.Param], Name -> [C.Exp])
+setters ty grp 
+  = let (sh, arrs)      = namesOfArray ty grp 
+        dim             = length$ S.flattenTy ty
         sh'             = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
         arrs'           = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
     in
@@ -238,15 +243,12 @@ setters grp _
 -- shared memory, the first parameter is a pointer to where the new declarations
 -- should take as the base address.
 --
-shared
-    :: forall e. Elt e
-    => e                                -- dummy type
-    -> Name                             -- group name
+shared :: S.Type -> Name                             -- group name
     -> C.Exp                            -- how much shared memory per type
     -> Maybe C.Exp                      -- (optional) initialise from this base address
     -> ([C.InitGroup], Name -> [C.Exp]) -- shared memory declaration and indexing function
-shared _ grp size mprev
-  = let e:es                    = eltType (undefined :: e)
+shared ty grp size mprev
+  = let e:es                    = map ctype $ S.flattenTy ty
         x:xs                    = let k = length es in map (\n -> grp ++ show n) [k, k-1 .. 0]
 
         sdata t v p             = [cdecl| volatile $ty:t * $id:v = ($ty:t *) & $id:p [ $exp:size ]; |]
@@ -273,36 +275,36 @@ shared _ grp size mprev
 --       execution phase.
 --
 environment
-    :: DeviceProperties
+    :: S.Type -> DeviceProperties
     -> Gamma aenv
     -> ([C.Definition], [C.Param])
-environment dev (Gamma aenv)
+environment ty dev (Gamma aenv)
   | computeCapability dev < Compute 2 0
-  = (Set.foldr (\(Idx_ v) vs -> asTex v ++ vs) [] aenv, [])
+  =  (Set.foldr (\v vs -> asTex ty v ++ vs) [] aenv, [])
 
   | otherwise
-  = ([], Set.foldr (\(Idx_ v) vs -> asArg v ++ vs) [] aenv)
+  = ([], Set.foldr (\(v) vs -> asArg v ++ vs) [] aenv)
 
   where
-    asTex :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Definition]
-    asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar ix)
+    asTex :: S.Type -> S.Var -> [C.Definition]
+    asTex ty ix = arrayAsTex ty (groupOfAvar ix)
 
-    asArg :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
-    asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar ix)
+    asArg :: S.Type -> S.Var -> [C.Param]
+    asArg ty ix = arrayAsArg ty (groupOfAvar ix)
 
 
-arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Definition]
-arrayAsTex _ grp =
-  let (sh, arrs)        = namesOfArray grp (undefined :: e)
+arrayAsTex :: S.Type -> Name -> [C.Definition]
+arrayAsTex ty grp =
+  let (sh, arrs)        = namesOfArray ty grp 
       dim               = expDim (undefined :: Exp aenv sh)
       sh'               = [cedecl| static __constant__ typename $id:("DIM" ++ show dim) $id:sh; |]
       arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
   in
   sh' : arrs'
 
-arrayAsArg :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Param]
-arrayAsArg _ grp =
-  let (sh, arrs)        = namesOfArray grp (undefined :: e)
+arrayAsArg :: S.Type -> Name -> [C.Param]
+arrayAsArg ty grp =
+  let (sh, arrs)        = namesOfArray ty grp 
       dim               = expDim (undefined :: Exp aenv sh)
       sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
       arrs'             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
@@ -316,19 +318,19 @@ arrayAsArg _ grp =
 -- Declare some local variables. These can be either const or mutable
 -- declarations.
 --
-locals :: forall e. Elt e
-       => Name
-       -> e
+locals :: Name
+       -> S.Type
        -> ( [(C.Type, Name)]            -- const declarations
           , [C.Exp], [C.InitGroup])     -- mutable declaration and names
-locals base _
-  = let elt             = eltType (undefined :: e)
+locals ty base 
+  = let elt             = S.flattenTy ty 
         n               = length elt
         local t v       = let name = base ++ show v
                           in ( (t, name), cvar name, [cdecl| $ty:t $id:name; |] )
     in
     unzip3 $ zipWith local elt [n-1, n-2 .. 0]
 
+#endif
 
 class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem

@@ -15,19 +15,22 @@
 
 module Data.Array.Accelerate.CUDA.AST (
 
-  module Data.Array.Accelerate.AST,
+--   module Data.Array.Accelerate.AST,
 
-  AccKernel(..), Gamma(..), Idx_(..),
-  ExecAcc, ExecAfun, ExecOpenAcc(..),
-  ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
+  AccKernel(..), Gamma(..), 
+  ExecAcc, -- ExecAfun, 
+  ExecExp, ExecFun, 
   freevar,
 
 ) where
 
 -- friends
-import Data.Array.Accelerate.AST
-import Data.Array.Accelerate.Pretty
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+
+-- import Data.Array.Accelerate.AST
+-- import Data.Array.Accelerate.Pretty
+-- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -63,72 +66,58 @@ data AccKernel a where
 -- within scalar expressions. This are required to execute the kernel, bi
 -- binding to texture references to similar.
 --
-newtype Gamma aenv = Gamma ( Set.HashSet (Idx_ aenv) )
+newtype Gamma = Gamma ( Set.HashSet S.Var )
   deriving ( Monoid )
 
-freevar :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Gamma aenv
-freevar = Gamma . Set.singleton . Idx_
+instance Hashable S.Var where
+  hashWithSalt salt v = hashWithSalt salt (show v)
 
--- Opaque array environment indices
---
-data Idx_ aenv where
-  Idx_ :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Idx_ aenv
-
-instance Eq (Idx_ aenv) where
-  Idx_ ix1 == Idx_ ix2 = idxToInt ix1 == idxToInt ix2
-
-instance Hashable (Idx_ aenv) where
-  hashWithSalt salt (Idx_ ix)
-    = salt `hashWithSalt` idxToInt ix
-
-
--- Interleave compilation & execution state annotations into an open array
--- computation AST
---
-data ExecOpenAcc aenv a where
-  ExecAcc :: {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
-          -> !(Gamma aenv)                                      -- free array variables the kernel needs access to
-          -> !(PreOpenAcc ExecOpenAcc aenv a)                   -- the actual computation
-          -> ExecOpenAcc aenv a                                 -- the recursive knot
+freevar :: S.Var -> Gamma 
+freevar = Gamma . Set.singleton 
 
 
 -- An annotated AST suitable for execution in the CUDA environment
 --
-type ExecAcc  a         = ExecOpenAcc () a
-type ExecAfun a         = PreAfun ExecOpenAcc a
+-- Interleave compilation & execution state annotations.
+data ExecAcc a =
+  ExecAcc {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
+          !(Gamma )                                      -- free array variables the kernel needs access to
+          !(S.Prog ())                                       -- the actual computation
 
-type ExecOpenExp        = PreOpenExp ExecOpenAcc
-type ExecOpenFun        = PreOpenFun ExecOpenAcc
 
-type ExecExp            = ExecOpenExp ()
-type ExecFun            = ExecOpenFun ()
+-- type ExecAfun a         = PreAfun ExecOpenAcc a
 
+-- type ExecOpenExp        = PreOpenExp ExecOpenAcc
+-- type ExecOpenFun        = PreOpenFun ExecOpenAcc
+
+type ExecExp = S.Exp 
+type ExecFun = S.Fun1 S.Exp 
 
 -- Display the annotated AST
 -- -------------------------
 
-instance Show (ExecOpenAcc aenv a) where
-  show = render . prettyExecAcc 0 noParens
+-- instance Show (ExecOpenAcc aenv a) where
+--   show = render . prettyExecAcc 0 noParens
 
-instance Show (ExecAfun a) where
-  show = render . prettyExecAfun 0
+-- instance Show (ExecAfun a) where
+--   show = render . prettyExecAfun 0
 
 
-prettyExecAfun :: Int -> ExecAfun a -> Doc
-prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
+-- prettyExecAfun :: Int -> ExecAfun a -> Doc
+-- prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
-prettyExecAcc :: PrettyAcc ExecOpenAcc
-prettyExecAcc alvl wrap (ExecAcc _ (Gamma fv) pacc) =
-  let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
-      ann       = braces (freevars (Set.toList fv))
-      freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
-                                  . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
-  in case pacc of
-       Avar _         -> base
-       Alet  _ _      -> base
-       Apply _ _      -> base
-       Acond _ _ _    -> base
-       Atuple _       -> base
-       Aprj _ _       -> base
-       _              -> ann <+> base
+-- prettyExecAcc :: PrettyAcc ExecOpenAcc
+-- prettyExecAcc alvl wrap (ExecAcc _ (Gamma fv) pacc) =
+--   let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
+--       ann       = braces (freevars (Set.toList fv))
+--       freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
+--                                   . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
+--   in case pacc of
+--        Avar _         -> base
+--        Alet  _ _      -> base
+--        Apply _ _      -> base
+--        Acond _ _ _    -> base
+--        Atuple _       -> base
+--        Aprj _ _       -> base
+--        _              -> ann <+> base
 
