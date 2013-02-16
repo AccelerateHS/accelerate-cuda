@@ -15,7 +15,7 @@
 -- Generate types for the reified elements of an array computation
 --
 
-module Data.Array.Accelerate.CUDA.CodeGen.Type (
+module Data.Array.Accelerate.CUDA.CodeGen.Type {- (
 
   -- surface types
   accType, accTypeTex, segmentsType, expType,
@@ -24,13 +24,15 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type (
   -- primitive bits...
   codegenIntegralType, codegenScalarType
 
-) where
+) -} where
 
 -- friends
-import Data.Array.Accelerate.AST
-import Data.Array.Accelerate.Type
-import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
-import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
+-- import Data.Array.Accelerate.AST
+-- import Data.Array.Accelerate.Type
+-- import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
+-- import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
+
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
 -- libraries
 import Language.C.Quote.CUDA
@@ -42,18 +44,21 @@ import Foreign.Storable
 
 #include "accelerate.h"
 
-
 typename :: String -> C.Type
 typename name = [cty| typename $id:name |]
 
 -- Surface element types
 -- ---------------------
 
-accType :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+#if 0 
+accType :: S.Prog a -> [C.Type]
 accType =  codegenTupleType . Sugar.accType
 
-expType :: OpenExp aenv env t -> [C.Type]
+expType :: S.Exp -> [C.Type]
 expType =  codegenTupleType . Sugar.expType
+
+codegenTupleType = error "codegenTupleType"
+
 
 segmentsType :: OpenAcc aenv (Sugar.Segments i) -> C.Type
 segmentsType seg
@@ -230,3 +235,4 @@ codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
 codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
 codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"
 
+#endif

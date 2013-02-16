@@ -30,8 +30,10 @@ import qualified Language.C                             as C
 import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
 
-import Data.Array.Accelerate.AST
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+-- import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Type
+import Data.Array.Accelerate.CUDA.CodeGen.Base (ctype)
 
 instance Hashable C.Exp where
   hashWithSalt salt = hashWithSalt salt . show
@@ -74,13 +76,13 @@ execCGM = fmap snd . runCGM
 -- binding expression. This will be used as a reverse lookup when marking terms
 -- as used.
 --
-pushEnv :: OpenExp env aenv t -> [C.Exp] -> Gen [C.Exp]
-pushEnv exp cs =
+pushEnv :: S.Type -> S.Exp -> [C.Exp] -> Gen [C.Exp]
+pushEnv ty exp cs =
   case exp of
-    Var _       -> return cs
-    Prj _ _     -> return cs
-    _           -> do
-      vs <- zipWithM bind (expType exp) cs
+    S.EVr _          -> return cs
+    S.ETupProject {} -> return cs
+    _ -> do
+      vs <- zipWithM bind (map ctype$ S.flattenTy ty) cs
       modify (\st -> st { letterms = Map.union (Map.fromList (zip vs cs)) (letterms st) })
       return vs
 
