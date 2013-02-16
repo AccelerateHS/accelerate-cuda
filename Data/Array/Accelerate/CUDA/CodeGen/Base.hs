@@ -273,15 +273,15 @@ shared ty grp size mprev
 --       execution phase.
 --
 environment
-    :: S.Type -> DeviceProperties
+    :: DeviceProperties
     -> Gamma 
     -> ([C.Definition], [C.Param])
-environment ty dev (Gamma aenv)
+environment dev (Gamma aenv)
   | computeCapability dev < Compute 2 0
-  =  (Set.foldr (\v vs -> asTex ty v ++ vs) [] aenv, [])
+  =  (Set.foldr (\(v,ty) vs -> asTex ty v ++ vs) [] aenv, [])
 
   | otherwise
-  = ([], Set.foldr (\(v) vs -> asArg ty v ++ vs) [] aenv)
+  = ([], Set.foldr (\(v,ty) vs -> asArg ty v ++ vs) [] aenv)
 
   where
     asTex :: S.Type -> S.Var -> [C.Definition]

@@ -72,6 +72,7 @@ eltType =  codegenTupleType . Sugar.eltType
 eltTypeTex :: Sugar.Elt a => a {- dummy -} -> [C.Type]
 eltTypeTex =  codegenTupleTex . Sugar.eltType
 
+-- RRN: Uh, is this in bytes presumably?
 eltSizeOf :: Sugar.Elt a => a {- dummy -} -> [Int]
 eltSizeOf =  sizeOf' . Sugar.eltType
   where

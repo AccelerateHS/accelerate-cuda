@@ -68,7 +68,7 @@ mkMap tyIn tyOut dev aenv fun arr
     }
   |]
   where
-    (texIn, argIn)      = environment (tyIn) dev aenv
+    (texIn, argIn)      = environment  dev aenv
     (argOut, setOut)    = setters tyOut "Out" 
     (x, _, _)           = locals tyIn "x" 
     ix                  = [cvar "ix"]

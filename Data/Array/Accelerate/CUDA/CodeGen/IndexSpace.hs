@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP  #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
@@ -19,7 +20,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
   mkGenerate,
 
   -- Permutations
-  mkTransform, mkPermute,
+--  mkTransform, mkPermute,
 
 ) where
 
@@ -28,9 +29,10 @@ import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis.Device
 import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
-import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.CUDA.AST                   ( Gamma, Exp )
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+-- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+-- import Data.Array.Accelerate.Analysis.Shape
+import Data.Array.Accelerate.CUDA.AST                   ( Gamma ) -- Exp
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 
@@ -43,13 +45,10 @@ import Data.Array.Accelerate.CUDA.CodeGen.Base
 --          -> (Exp ix -> Exp a)                -- function to apply at each index
 --          -> Acc (Array ix a)
 --
-mkGenerate
-    :: forall aenv sh e. (Shape sh, Elt e)
-    => DeviceProperties
-    -> Gamma aenv
-    -> CUFun1 aenv (sh -> e)
-    -> [CUTranslSkel aenv (Array sh e)]
-mkGenerate dev aenv (CUFun1 _ f)
+mkGenerate :: S.Type -> S.Type -> 
+--    :: forall aenv sh e. (Shape sh, Elt e)
+       DeviceProperties -> Gamma -> CUFun1 -> [CUTranslSkel]
+mkGenerate shpTy eltTy dev aenv (CUFun1 _ f)
   = return
   $ CUTranslSkel "generate" [cunit|
 
@@ -79,10 +78,11 @@ mkGenerate dev aenv (CUFun1 _ f)
     }
   |]
   where
-    dim                 = expDim (undefined :: Exp aenv sh)
+    dim                 = length$ S.flattenTy shpTy
     sh                  = cshape dim (cvar "sh")
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh e)
+    (argOut, setOut)    = setters eltTy  "Out" 
+
 
 
 -- A combination map/backpermute, where the index and value transformations have
@@ -95,15 +95,15 @@ mkGenerate dev aenv (CUFun1 _ f)
 --           ->            acc aenv (Array sh  a)       -- source array
 --           -> PreOpenAcc acc aenv (Array sh' b)
 --
-mkTransform
-    :: forall aenv sh sh' a b. (Shape sh, Shape sh', Elt a, Elt b)
-    => DeviceProperties
-    -> Gamma aenv
-    -> CUFun1 aenv (sh' -> sh)
-    -> CUFun1 aenv (a -> b)
-    -> CUDelayedAcc aenv sh a
-    -> [CUTranslSkel aenv (Array sh' b)]
-mkTransform dev aenv perm fun arr
+mkTransform :: (S.Type, S.Type) -> (S.Type, S.Type) ->
+--    :: forall aenv sh sh' a b. (Shape sh, Shape sh', Elt a, Elt b)
+       DeviceProperties
+    -> Gamma 
+    -> CUFun1 
+    -> CUFun1 
+    -> CUDelayedAcc
+    -> [CUTranslSkel]
+mkTransform (shpTy1,shpTy2) (inTy,outTy) dev aenv perm fun arr
   | CUFun1 _ p                   <- perm
   , CUFun1 dce f                 <- fun
   , CUDelayed _ (CUFun1 _ get) _ <- arr
@@ -138,13 +138,13 @@ mkTransform dev aenv perm fun arr
     }
   |]
   where
-    dimIn               = expDim (undefined :: Exp aenv sh)
-    dimOut              = expDim (undefined :: Exp aenv sh')
+    dimIn               = length$ S.flattenTy shpTy1
+    dimOut              = length$ S.flattenTy shpTy2
     sh_                 = cshape dimOut (cvar "sh_")
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh' b)
-    (x0, _, _)          = locals "x"  (undefined :: a)
-    (sh, _, _)          = locals "sh" (undefined :: sh)
+    (argOut, setOut)    = setters outTy "Out" 
+    (x0, _, _)          = locals inTy  "x"  
+    (sh, _, _)          = locals shpTy1 "sh" 
 
 
 -- Forward permutation specified by an index mapping that determines for each
@@ -163,15 +163,15 @@ mkTransform dev aenv perm fun arr
 --         -> Acc (Array ix  a)                 -- permuted array
 --         -> Acc (Array ix' a)
 --
-mkPermute
-    :: forall aenv sh sh' e. (Shape sh, Shape sh', Elt e)
-    => DeviceProperties
-    -> Gamma aenv
-    -> CUFun2 aenv (e -> e -> e)
-    -> CUFun1 aenv (sh -> sh')
-    -> CUDelayedAcc aenv sh e
-    -> [CUTranslSkel aenv (Array sh' e)]
-mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
+mkPermute :: (S.Type,S.Type) -> S.Type -> 
+--    :: forall aenv sh sh' e. (Shape sh, Shape sh', Elt e)
+       DeviceProperties
+    -> Gamma 
+    -> CUFun2 
+    -> CUFun1 
+    -> CUDelayedAcc 
+    -> [CUTranslSkel]
+mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
   | CUDelayed (CUExp shIn) _ (CUFun1 _ get) <- arr
   = return
   $ CUTranslSkel "permute" [cunit|
@@ -218,15 +218,15 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
     }
   |]
   where
-    dimIn               = expDim (undefined :: Exp aenv sh)
-    dimOut              = expDim (undefined :: Exp aenv sh')
-    sizeof              = eltSizeOf (undefined::e)
+    dimIn               = length$ S.flattenTy shpTy1
+    dimOut              = length$ S.flattenTy shpTy2
+    sizeof              = map S.typeByteSize (S.flattenTy eltTy)
     (texIn, argIn)      = environment dev aenv
-    (argOut, arrOut)    = setters "Out" (undefined :: Array sh' e)
-    (sh, _, _)          = locals "sh" (undefined :: sh)
-    (x, _, _)           = locals "x"  (undefined :: e)
-    (_, y,  decly)      = locals "y"  (undefined :: e)
-    (_, y', decly')     = locals "_y" (undefined :: e)
+    (argOut, arrOut)    = setters eltTy "Out" 
+    (sh, _, _)          = locals shpTy1 "sh" 
+    (x, _, _)           = locals eltTy "x"  
+    (_, y,  decly)      = locals eltTy "y"  
+    (_, y', decly')     = locals eltTy "_y" 
     ix                  = [cvar "ix"]
     src                 = cshape dimIn  (cvar "src")
     dst                 = cshape dimOut (cvar "dst")

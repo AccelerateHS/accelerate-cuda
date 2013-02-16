@@ -25,7 +25,7 @@ module Data.Array.Accelerate.CUDA.AST (
 ) where
 
 -- friends
-import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+import Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
 -- import Data.Array.Accelerate.AST
 -- import Data.Array.Accelerate.Pretty
@@ -66,13 +66,36 @@ data AccKernel a where
 -- within scalar expressions. This are required to execute the kernel, bi
 -- binding to texture references to similar.
 --
-newtype Gamma = Gamma ( Set.HashSet S.Var )
+newtype Gamma = Gamma ( Set.HashSet (S.Var,S.Type) )
   deriving ( Monoid )
 
 instance Hashable S.Var where
   hashWithSalt salt v = hashWithSalt salt (show v)
 
-freevar :: S.Var -> Gamma 
+instance Hashable S.Type where
+  hash ty =
+    case ty of
+      TTuple (h:t) -> hashWithSalt (hash h) (S.TTuple t)
+      TArray n elt -> hashWithSalt (hash n) elt
+      TInt8  -> 1; TInt16 -> 2; TInt32 -> 3; TInt64 ->4;
+      TWord8 -> 5; TWord16 ->6; TWord32 ->7; TWord64 ->8;
+      TInt   -> 9;
+      TWord  -> 10
+      TCShort -> 11
+      TCInt   -> 12
+      TCLong  -> 13
+      TCLLong -> 14
+      TCUShort -> 15
+      TCUInt   -> 16
+      TCULong  -> 17
+      TCULLong -> 18
+      TCChar   -> 19; TCSChar -> 20; TCUChar -> 21;
+      TFloat  -> 22; TDouble  -> 23;
+      TCFloat -> 24; TCDouble -> 25;
+      TBool   -> 25; TChar -> 26; 
+
+
+freevar :: (S.Var, S.Type)-> Gamma 
 freevar = Gamma . Set.singleton 
 
 
