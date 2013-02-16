@@ -14,23 +14,26 @@
 -- Portability : non-portable (GHC extensions)
 --
 
-module  Data.Array.Accelerate.CUDA.CodeGen.PrefixSum (
+module  Data.Array.Accelerate.CUDA.CodeGen.PrefixSum {-(
 
   -- skeletons
   mkScanl, mkScanl1, mkScanl',
   mkScanr, mkScanr1, mkScanr',
 
-) where
+)-} where
 
 import Data.Maybe
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Array.Sugar                ( Vector, Scalar, Elt, DIM1 )
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
+-- import Data.Array.Accelerate.Array.Sugar                ( Vector, Scalar, Elt, DIM1 )
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 
+
+#if 0
 
 -- Wrappers
 -- --------
@@ -87,14 +90,13 @@ cast (CUTranslSkel entry code) = CUTranslSkel entry code
 
 -- Core implementation
 -- -------------------
-
+#endif
 data Direction = L | R
   deriving Eq
 
 instance Show Direction where
   show L = "l"
   show R = "r"
-
 
 -- [OVERVIEW]
 --
@@ -159,15 +161,16 @@ instance Show Direction where
 --   * scanl1, scanr1 : no change (argSum is required, even though it will not be used Haskell-side)
 --   * scanl', scanr' : no change
 --
-mkScan :: forall aenv e. Elt e
-       => Direction
+mkScan :: -- forall aenv e. Elt e
+          S.Type
+       -> Direction
        -> DeviceProperties
-       -> Gamma aenv
-       -> CUFun2 aenv (e -> e -> e)
-       -> Maybe (CUExp aenv e)
-       -> CUDelayedAcc aenv DIM1 e
-       -> CUTranslSkel aenv (Vector e)
-mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
+       -> Gamma 
+       -> CUFun2 
+       -> Maybe (CUExp)
+       -> CUDelayedAcc
+       -> CUTranslSkel 
+mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -232,7 +235,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $stms:(scanBlock eltTy dev fun x y sdata Nothing)
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -272,14 +275,14 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
   where
     scan                = "scan" ++ show dir ++ maybe "1" (const []) mseed
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (argSum, totalSum)  = setters "Sum" (undefined :: Vector e)
-    (argBlk, blkSum)    = setters "Blk" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (_, z, declz)       = locals "z" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    (argOut, setOut)    = setters (S.TArray 1 eltTy) "Out" 
+    (argSum, totalSum)  = setters (S.TArray 1 eltTy) "Sum" 
+    (argBlk, blkSum)    = setters (S.TArray 1 eltTy) "Blk" 
+    (_, x, declx)       = locals eltTy "x" 
+    (_, y, decly)       = locals eltTy "y" 
+    (_, z, declz)       = locals eltTy "z" 
+    (sh, _, _)          = locals S.TInt "sh" 
+    (smem, sdata)       = shared eltTy "sdata" [cexp| blockDim.x |] Nothing
     ix                  = [cvar "ix"]
     setSum              = totalSum "0"
 
@@ -316,15 +319,15 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
 -- output, rather than the entire body of the scan. Indeed, if the combination
 -- function were commutative, this is equivalent to a parallel tree reduction.
 --
-mkScanUp1
-    :: forall aenv e. Elt e
-    => Direction
+mkScanUp1 :: S.Type ->
+--    :: forall aenv e. Elt e
+       Direction
     -> DeviceProperties
-    -> Gamma aenv
-    -> CUFun2 aenv (e -> e -> e)
-    -> CUDelayedAcc aenv DIM1 e
-    -> CUTranslSkel aenv (Vector e)
-mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
+    -> Gamma 
+    -> CUFun2 
+    -> CUDelayedAcc 
+    -> CUTranslSkel 
+mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
     $esc:("#include <accelerate_cuda_extras.h>")
@@ -372,7 +375,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $stms:(scanBlock eltTy dev fun x y sdata Nothing)
 
             /*
              * Store the final result of the block to be carried in
@@ -395,44 +398,44 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
   where
     scan                = "scan" ++ show dir ++ "Up"
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    (argOut, setOut)    = setters (S.TArray 1 eltTy) "Out"
+    (_, x, declx)       = locals eltTy "x" 
+    (_, y, decly)       = locals eltTy "y" 
+    (sh, _, _)          = locals S.TInt "sh"
+    (smem, sdata)       = shared eltTy  "sdata" [cexp| blockDim.x |] Nothing
     ix                  = [cvar "ix"]
 
 
 -- Second step of the upsweep phase: scan the interval sums to produce carry-in
 -- values for each block of the final downsweep step
 --
-mkScanUp2
-    :: forall aenv e. Elt e
-    => Direction
+mkScanUp2 :: S.Type -> 
+--    :: forall aenv e. Elt e
+       Direction
     -> DeviceProperties
-    -> Gamma aenv
-    -> CUFun2 aenv (e -> e -> e)
-    -> Maybe (CUExp aenv e)
-    -> CUTranslSkel aenv (Vector e)
-mkScanUp2 dir dev aenv f z
-  = let (_, get) = getters "Blk" (undefined :: Vector e)
-    in  mkScan dir dev aenv f z get
+    -> Gamma 
+    -> CUFun2 
+    -> Maybe (CUExp)
+    -> CUTranslSkel 
+mkScanUp2 eltTy dir dev aenv f z
+  = let (_, get) = getters (S.TArray 1 eltTy) "Blk" 
+    in  mkScan eltTy dir dev aenv f z get
 
 
 -- Block scans
 -- ===========
 
-scanBlock
-    :: forall aenv e. Elt e
-    => DeviceProperties
-    -> CUFun2 aenv (e -> e -> e)
+scanBlock :: S.Type -> 
+--    :: forall aenv e. Elt e
+       DeviceProperties
+    -> CUFun2
     -> [C.Exp] -> [C.Exp]
     -> (Name -> [C.Exp])
     -> Maybe C.Exp
     -> [C.Stm]
-scanBlock dev f x0 x1 sdata mlim
-  | shflOK dev (undefined :: e) = error "shfl-scan"
-  | otherwise                   = scanBlockTree dev f x0 x1 sdata mlim
+scanBlock eltTy dev f x0 x1 sdata mlim
+  | shflOK dev eltTy = error "shfl-scan"
+  | otherwise        = scanBlockTree dev f x0 x1 sdata mlim
 
 
 -- Use a thread block to scan values in shared memory. Each thread must have
@@ -440,10 +443,10 @@ scanBlock dev f x0 x1 sdata mlim
 -- this thread will be stored in x0 as well as the appropriate place in shared
 -- memory.
 --
-scanBlockTree
-    :: forall aenv e. Elt e
-    => DeviceProperties
-    -> CUFun2 aenv (e -> e -> e)
+scanBlockTree ::
+--    :: forall aenv e. Elt e
+       DeviceProperties
+    -> CUFun2 
     -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
@@ -474,8 +477,8 @@ scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. max
 -- Shuffle scan
 -- ------------
 
-shflOK :: Elt e => DeviceProperties -> e -> Bool
-shflOK _dev _ = False
+shflOK :: DeviceProperties -> S.Type -> Bool
+shflOK _dev _eltTy = False
 -- shflOk dev dummy
 --   = computeCapability dev >= Compute 3 0 && all (`elem` [4,8]) (eltSizeOf dummy)
 
@@ -510,4 +513,5 @@ scanWarpShfl _dev (CUFun2 f) x0 x1 mlim tid
         shfl 8  = "shfl_up64"
         shfl _  = INTERNAL_ERROR(error) "shfl_up" "I only know about 32- and 64-bit types"
 --}
+
 
