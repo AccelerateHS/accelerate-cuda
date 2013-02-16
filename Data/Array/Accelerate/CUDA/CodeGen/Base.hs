@@ -44,7 +44,7 @@ import Foreign.CUDA.Analysis.Device
 import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
 -- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
-import Data.Array.Accelerate.Analysis.Shape
+-- import Data.Array.Accelerate.Analysis.Shape
 
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.AST
@@ -147,8 +147,6 @@ cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 ctype :: S.Type -> C.Type
 ctype = error "implement me"
 
-#if 0
-
 -- Disassemble a struct-shape into a list of expressions accessing the fields
 cshape :: Int -> C.Exp -> [C.Exp]
 cshape dim sh
@@ -210,14 +208,13 @@ getters ty grp
   = let (sh, arrs)      = namesOfArray ty grp 
         args            = arrayAsArg ty grp
 
-        dim             = expDim (undefined :: Exp aenv sh)
+        dim             = length$ S.flattenTy ty
         sh'             = cshape dim (cvar sh)
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
                                     (INTERNAL_ERROR(error) "getters" "linear indexing only")
                                     (CUFun1 (zip (repeat True)) (get . rvalue . head))
     in ( args, manifest )
-
 
 -- Generate function parameters and corresponding variable names for the
 -- components of the given output array. The parameter list generated is
@@ -231,7 +228,8 @@ setters ty grp
   = let (sh, arrs)      = namesOfArray ty grp 
         dim             = length$ S.flattenTy ty
         sh'             = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-        arrs'           = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+        arrs'           = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |])
+                          (map ctype$ S.flattenTy ty) arrs
     in
     ( sh' : arrs'
     , \ix -> map (\a -> [cexp| $id:a [ $id:ix ] |]) arrs
@@ -276,14 +274,14 @@ shared ty grp size mprev
 --
 environment
     :: S.Type -> DeviceProperties
-    -> Gamma aenv
+    -> Gamma 
     -> ([C.Definition], [C.Param])
 environment ty dev (Gamma aenv)
   | computeCapability dev < Compute 2 0
   =  (Set.foldr (\v vs -> asTex ty v ++ vs) [] aenv, [])
 
   | otherwise
-  = ([], Set.foldr (\(v) vs -> asArg v ++ vs) [] aenv)
+  = ([], Set.foldr (\(v) vs -> asArg ty v ++ vs) [] aenv)
 
   where
     asTex :: S.Type -> S.Var -> [C.Definition]
@@ -296,18 +294,20 @@ environment ty dev (Gamma aenv)
 arrayAsTex :: S.Type -> Name -> [C.Definition]
 arrayAsTex ty grp =
   let (sh, arrs)        = namesOfArray ty grp 
-      dim               = expDim (undefined :: Exp aenv sh)
+      dim               = length$ S.flattenTy ty
       sh'               = [cedecl| static __constant__ typename $id:("DIM" ++ show dim) $id:sh; |]
-      arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
+      arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) 
+                                  (map ctype$ S.flattenTy ty) arrs
   in
   sh' : arrs'
 
 arrayAsArg :: S.Type -> Name -> [C.Param]
 arrayAsArg ty grp =
   let (sh, arrs)        = namesOfArray ty grp 
-      dim               = expDim (undefined :: Exp aenv sh)
+      dim               = length$ S.flattenTy ty
       sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-      arrs'             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+      arrs'             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |])
+                                  (map ctype$ S.flattenTy ty) arrs
   in
   sh' : arrs'
 
@@ -318,8 +318,8 @@ arrayAsArg ty grp =
 -- Declare some local variables. These can be either const or mutable
 -- declarations.
 --
-locals :: Name
-       -> S.Type
+locals :: S.Type
+       -> Name
        -> ( [(C.Type, Name)]            -- const declarations
           , [C.Exp], [C.InitGroup])     -- mutable declaration and names
 locals ty base 
@@ -328,9 +328,8 @@ locals ty base
         local t v       = let name = base ++ show v
                           in ( (t, name), cvar name, [cdecl| $ty:t $id:name; |] )
     in
-    unzip3 $ zipWith local elt [n-1, n-2 .. 0]
+    unzip3 $ zipWith local (map ctype elt) [n-1, n-2 .. 0]
 
-#endif
 
 class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem
