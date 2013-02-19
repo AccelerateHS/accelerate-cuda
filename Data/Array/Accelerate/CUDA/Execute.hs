@@ -152,7 +152,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
 
       -- Foreign
       Foreign ff afun a         -> case canExecute ff of
-                                     (Just f) -> executeForeign f =<< travA a
+                                     (Just f) -> f =<< travA a
                                      Nothing  -> executeAfun1 afun =<< travA a  
 
       -- Removed by fusion
@@ -438,15 +438,6 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
 
     index :: (Shape sh, Elt e) => Array sh e -> sh -> CIO e
     index !arr !ix = indexArray arr (toIndex (shape arr) ix)
-
--- Evaluate a foreign function call
--- --------------------------------
-
-executeForeign :: forall arr rs. (Arrays arr, Arrays rs) 
-               => (arr -> IO rs)
-               -> arr 
-               -> CIO rs
-executeForeign f arr = liftIO $ f arr
 
 
 -- Marshalling data

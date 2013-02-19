@@ -20,7 +20,7 @@
 module Data.Array.Accelerate.CUDA.State (
 
   -- Evaluating computations
-  CIO, evalCUDA, evalCUDA',
+  CIO, evalCUDA,
 
   -- Querying execution state
   defaultContext, deviceProps, activeContext, kernelTable, memoryTable
@@ -91,16 +91,6 @@ evalCUDA !ctx !acc
       weak_ctx  <- mkWeakContext ctx (return ())
       return    $! Config prp (Context ctx weak_ctx)
 
--- Evaluate a CUDA array computation under the assumption that the correct CUDA
--- context is already loaded.
-evalCUDA' :: CIO a -> IO a
-evalCUDA' acc = do
-  ctx      <- CUDA.get
-  dev      <- CUDA.device
-  prp      <- CUDA.props dev
-  weak_ctx <- mkWeakContext ctx (return ())
-  let config = Config prp (Context ctx weak_ctx)
-  evalStateT (runReaderT (runCIO acc) config) theState
 
 -- Top-level mutable state
 -- -----------------------
