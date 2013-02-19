@@ -307,7 +307,7 @@ pokeArray
     -> IO ()
 pokeArray !ctx !mt !ad !n =
   devicePtrsOfArrayData ctx mt ad >>= \dst -> do
-    message $ "pokeArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
+    message $ "pokeArray: " ++ showBytes (n * sizeOf (undefined :: a))
     CUDA.pokeArray n (ptrsOfArrayData ad) dst
 
 pokeArrayAsync

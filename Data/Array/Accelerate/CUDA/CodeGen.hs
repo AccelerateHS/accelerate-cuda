@@ -118,6 +118,7 @@ codegenAcc dev (OpenAcc pacc) aenv
       Aprj _ _                  -> unexpectedError
       Use _                     -> unexpectedError
       Unit _                    -> unexpectedError
+      Foreign _ _ _             -> unexpectedError
 
       Reshape _ _               -> fusionError
       Replicate _ _ _           -> fusionError
@@ -875,4 +876,5 @@ showPreAccOp pacc =
     Backpermute _ _ _   -> "Backpermute"
     Stencil _ _ _       -> "Stencil"
     Stencil2 _ _ _ _ _  -> "Stencil2"
+    Foreign _ _ _       -> "Foreign"
 
