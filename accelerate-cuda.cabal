@@ -119,6 +119,7 @@ Library
     build-depends:      unix                    >= 2.4
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
+                        Data.Array.Accelerate.CUDA.Foreign
 
   Other-modules:        Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch

@@ -30,6 +30,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
+import Data.Array.Accelerate.CUDA.Foreign                       (canExecute)
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -158,6 +159,11 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
+        Foreign ff afun a       -> case canExecute ff of
+                                     -- If it's a foreign call for the CUDA backend don't bother compiling the pure version
+                                     (Just _) -> node =<< liftA (Foreign ff foreignError) <$> travA a
+                                     Nothing  -> node . pure =<< Foreign ff               <$> compileAfun afun <*> traverseAcc a 
+
       where
         use :: ArraysR a -> a -> CIO ()
         use ArraysRunit         ()       = return ()
@@ -203,6 +209,9 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         fullOfList []       = INTERNAL_ERROR(error) "fullList" "empty list"
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
+
+        foreignError = INTERNAL_ERROR(error) "compile" $ "Didn't compile the pure version of a foreign function call but" ++
+                                                         " it looks like it's being executed anyway"
 
     -- Traverse a scalar expression
     --
