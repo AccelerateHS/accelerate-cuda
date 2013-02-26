@@ -599,9 +599,14 @@ codegenOpenExp dev = cvtE
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --
-    intersect :: OpenExp env aenv sh -> OpenExp env aenv sh -> Val env -> Gen [C.Exp]
-    intersect sh1 sh2 env =
-      zipWith (\a b -> ccall "min" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
+    intersect :: forall env aenv sh. (Elt sh) 
+              => OpenExp env aenv sh 
+              -> OpenExp env aenv sh 
+              -> Val env -> Gen [C.Exp]
+    intersect sh1 sh2 env = let
+        sh1' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh1 env
+        sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env 
+      in zipWith (\a b -> ccall "min" [a,b]) <$> sh1' <*> sh2'
 
     -- Some terms demand we extract only singly typed expressions
     --
@@ -834,6 +839,19 @@ codegenCeiling ta tb x
 
 ccast :: ScalarType a -> C.Exp -> C.Exp
 ccast ty x = [cexp|($ty:(codegenScalarType ty)) $exp:x|]
+
+ccastTup :: TupleType e -> [C.Exp] -> [C.Exp]
+ccastTup ty = fst . travTup ty
+  where
+    travTup :: TupleType e -> [C.Exp] -> ([C.Exp],[C.Exp])
+    travTup UnitTuple         xs     = ([], xs)
+    travTup (SingleTuple ty') (x:xs) = ([ccast ty' x], xs)
+    travTup (PairTuple l r)   xs     = let
+                                         (ls, xs' ) = travTup l xs
+                                         (rs, xs'') = travTup r xs'
+                                       in (ls ++ rs, xs'')
+    travTup _ _                      = INTERNAL_ERROR(error) "ccastTup" "not enough expressions to match type"
+
 
 postfix :: NumType a -> String -> String
 postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
