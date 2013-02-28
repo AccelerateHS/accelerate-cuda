@@ -68,7 +68,8 @@ data KernelTable = KT {-# UNPACK #-} !ProgramCache      -- first level cache
 
 new :: IO KernelTable
 new = do
-  cacheDir      <- cacheDirectory
+  cacheDir <- cacheDirectory
+  createDirectoryIfMissing True cacheDir
   --
   local         <- HT.new
   persistent    <- restore (cacheDir </> "persistent.db")
@@ -186,9 +187,7 @@ type PersistentCache = HT.BasicHashTable KernelKey ()
 cacheDirectory :: IO FilePath
 cacheDirectory = do
   home  <- getAppUserDataDirectory "accelerate"
-  let cacheDir = home </> "accelerate-cuda-" ++ showVersion version </> "cache"
-  createDirectoryIfMissing True cacheDir
-  return cacheDir
+  return $ home </> "accelerate-cuda-" ++ showVersion version </> "cache"
 
 
 -- A relative path to be appended to (presumably) 'cacheDirectory'.
@@ -308,6 +307,7 @@ persist !cubin !key = do
       cacheFile = cacheDir </> cacheFilePath key
   --
   message $ "persist/save: " ++ cacheFile
+  createDirectoryIfMissing True (dropFileName cacheFile)
   renameFile cubin cacheFile
     -- If the temporary and cache directories are on different disks, we must
     -- copy the file instead. Unsupported operation: (Cross-device link)
