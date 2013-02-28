@@ -25,12 +25,13 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Tuple
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
-import Data.Array.Accelerate.CUDA.Foreign                       (canExecute)
+import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute, canExecuteExp )
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -244,6 +245,22 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Shape a                 -> liftA  Shape                 <$> travA a
         ShapeSize e             -> liftA  ShapeSize             <$> travE e
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
+        ForeignExp ff f e       -> case canExecuteExp ff of
+                                     -- We don't care about the pure version of the function if the foreign version
+                                     -- is a CUDA foreign expression function.
+                                     (Just _) -> liftA (ForeignExp ff undefined) <$> travE e
+                                     -- If the foreign function is not intended for this backend, this node needs to
+                                     -- be replaced by a pure accelerate node giving the same result. Due to the lack
+                                     -- of an 'apply' node in the scalar language, this is done by substitution.
+                                     Nothing  -> travE e'
+                                       where
+                                        wExp :: Idx ((),a) t -> Idx (env,a) t
+                                        wExp ZeroIdx = ZeroIdx
+                                        wExp _       = INTERNAL_ERROR(error) "prepareOpenAcc" "unreachable case"
+                                        
+                                        e' = case f of
+                                               (Lam (Body b)) -> Let e $ weakenByEA undefined (weakenByE wExp b) 
+                                               _              -> INTERNAL_ERROR(error) "travE" "unreachable case"
       where
         travA :: (Shape sh, Elt e)
               => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))

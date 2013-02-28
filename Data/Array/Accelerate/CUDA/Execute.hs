@@ -383,6 +383,10 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix
       LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
+      ForeignExp _ f e          -> case f of
+                                     (Lam (Body b)) -> 
+                                       travE e >>= \x -> executeOpenExp b (Empty `Push` x) Empty  
+                                     _ -> INTERNAL_ERROR(error) "executeOpenExp" "impossible case"
 
     -- Helpers
     -- -------

@@ -33,8 +33,8 @@
 
 module Data.Array.Accelerate.CUDA.Foreign (
   -- * Backend representation
-  cudaFF, canExecute, CuForeign, CIO,
-  liftIO,
+  cudaAcc, canExecute, CuForeignAcc, CuForeignExp, CIO,
+  liftIO, canExecuteExp, cudaExp,
   
   -- * Manipulating arrays
   indexArray, copyArray,
@@ -65,13 +65,13 @@ import Control.Monad.Trans                              ( liftIO )
 -- CUDA backend representation of foreign functions.
 -- ---------------------------------------------------
 
--- CUDA foreign functions are just CIO functions.
-newtype CuForeign args results = CuForeign (args -> CIO results) deriving (Typeable)
+-- CUDA foreign Acc functions are just CIO functions.
+newtype CuForeignAcc args results = CuForeignAcc (args -> CIO results) deriving (Typeable)
 
-instance ForeignFun CuForeign where
+instance ForeignFun CuForeignAcc where
   -- Using the hash of the stablename in order to uniquely identify the function
   -- when it is pretty printed.
-  strForeign ff = "cudaFF<" ++ (show . hashStableName) (unsafePerformIO $ makeStableName ff) ++ ">"
+  strForeign ff = "cudaAcc<" ++ (show . hashStableName) (unsafePerformIO $ makeStableName ff) ++ ">"
 
 -- |Gives an the executable form of a foreign function if it can be executed by the CUDA backend.
 canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable results) 
@@ -80,18 +80,43 @@ canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable re
 canExecute ff =
   let
     df = toDyn ff
-    fd = fromDynamic :: Dynamic -> Maybe (CuForeign args results)
-  in (\(CuForeign ff') -> ff') <$> fd df 
+    fd = fromDynamic :: Dynamic -> Maybe (CuForeignAcc args results)
+  in (\(CuForeignAcc ff') -> ff') <$> fd df 
+
+-- CUDA foreign Exp functions are just strings with the header filename and the name of the 
+-- function separated by a space.
+newtype CuForeignExp args results = CuForeignExp String deriving (Typeable)
+
+instance ForeignFun CuForeignExp where
+  strForeign (CuForeignExp n) = "cudaExp<" ++ n ++ ">" 
+
+-- |Gives the foreign function name as a string if it is a foreign Exp function for the CUDA backend. 
+canExecuteExp :: forall ff args results. (ForeignFun ff, Typeable results, Typeable args)
+              => ff args results
+              -> Maybe String
+canExecuteExp ff =
+  let
+    df = toDyn ff
+    fd = fromDynamic :: Dynamic -> Maybe (CuForeignExp args results)
+  in (\(CuForeignExp ff') -> ff') <$> fd df 
 
 
 -- User facing utility functions
 -- -----------------------------
 
 -- |Create a cuda foreign function.
-cudaFF :: (Arrays args, Arrays results)
+cudaAcc :: (Arrays args, Arrays results)
        => (args -> CIO results)
-       -> CuForeign args results
-cudaFF = CuForeign
+       -> CuForeignAcc args results
+cudaAcc = CuForeignAcc
+
+-- |Create a CUDA foreign scalar function. The string needs to be formatted in the same way
+-- as for the Haskell FFI. That is, the header file name and the name of the function separated 
+-- by a space. i.e cudaExp "stdlib.h min".
+cudaExp :: (Elt args, Elt results)
+       => String
+       -> CuForeignExp args results
+cudaExp = CuForeignExp
 
 -- |Get the raw CUDA device pointers associated with an array.
 --
