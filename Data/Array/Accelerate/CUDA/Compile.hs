@@ -246,9 +246,10 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         ShapeSize e             -> liftA  ShapeSize             <$> travE e
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
         ForeignExp ff f e       -> case canExecuteExp ff of
-                                     -- We don't care about the pure version of the function if the foreign version
-                                     -- is a CUDA foreign expression function.
-                                     (Just _) -> liftA (ForeignExp ff undefined) <$> travE e
+                                     -- If it's a foreign function that we can generate code from, just leave it alone.
+                                     -- As the pure function is closed, gamma needs to be replaced with one of the right
+                                     -- type.
+                                     (Just _) -> liftA2 (ForeignExp ff) <$> (pure <$> (snd <$> travF f)) <*> travE e
                                      -- If the foreign function is not intended for this backend, this node needs to
                                      -- be replaced by a pure accelerate node giving the same result. Due to the lack
                                      -- of an 'apply' node in the scalar language, this is done by substitution.
@@ -257,9 +258,14 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
                                         wExp :: Idx ((),a) t -> Idx (env,a) t
                                         wExp ZeroIdx = ZeroIdx
                                         wExp _       = INTERNAL_ERROR(error) "prepareOpenAcc" "unreachable case"
-                                        
+
+                                        -- As the expression we want to weaken is closed with respect to the array
+                                        -- environment, the index manipulation function becomes a dummy argument.
+                                        wAcc :: Idx () t -> Idx aenv t
+                                        wAcc _ = INTERNAL_ERROR(error) "prepareOpenAcc" "unreachable case"
+
                                         e' = case f of
-                                               (Lam (Body b)) -> Let e $ weakenByEA undefined (weakenByE wExp b) 
+                                               (Lam (Body b)) -> Let e $ weakenByEA wAcc (weakenByE wExp b) 
                                                _              -> INTERNAL_ERROR(error) "travE" "unreachable case"
       where
         travA :: (Shape sh, Elt e)
@@ -272,6 +278,10 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
               -> CIO (Gamma aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
         travT NilTup        = return (pure NilTup)
         travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
+
+        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF (Body b)  = liftA Body <$> travE b
+        travF (Lam  f)  = liftA Lam  <$> travF f
 
         bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Gamma aenv
         bind (ExecAcc _ _ (Avar ix)) = freevar ix
