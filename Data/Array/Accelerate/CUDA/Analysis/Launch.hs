@@ -88,8 +88,8 @@ blockSize dev acc lim regs smem =
   CUDA.optimalBlockSizeBy dev (filter (<= lim) . strategy) (const regs) smem
   where
     strategy = case acc of
-      Fold _ _ _        -> CUDA.decPow2
-      Fold1 _ _         -> CUDA.decPow2
+      Fold _ _ _        -> CUDA.incPow2
+      Fold1 _ _         -> CUDA.incPow2
       Scanl _ _ _       -> CUDA.incWarp
       Scanl' _ _ _      -> CUDA.incWarp
       Scanl1 _ _        -> CUDA.incWarp
