@@ -48,7 +48,7 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 -- standard library
 import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
-import Control.Monad                                            ( join, when, liftM, forM_ )
+import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
@@ -327,7 +327,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
-              execute kernel gamma aenv (size sh) out
+              execute kernel gamma aenv (size sh) (out, sh)
          else execute kernel gamma aenv (size sh) (out, arr)
       --
       return out
@@ -335,14 +335,16 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
                => Array sh a -> Array sh b -> CIO (Array sh c)
     stencil2Op !arr1 !arr2 = do
-      let sh    =  shape arr1 `intersect` shape arr2
+      let sh1   =  shape arr1
+          sh2   =  shape arr2
+          sh    =  sh1 `intersect` sh2
       out       <- allocateArray sh
       dev       <- asks deviceProps
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
               marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) kernel arr2 >>
-              execute kernel gamma aenv (size sh) out
+              execute kernel gamma aenv (size sh) (out, sh1,  sh2)
          else execute kernel gamma aenv (size sh) (out, arr1, arr2)
       --
       return out
@@ -536,18 +538,16 @@ convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int
 -- as to use the larger available caches.
 --
 
-marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO ()
+marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
 marshalAccEnvTex !kernel !aenv (Gamma !gamma)
-  = forM_ (Set.toList gamma)
-  $ \(Idx_ !idx) -> marshalAccTex (namesOfAvar idx) kernel (prj idx aenv)
+  = flip concatMapM (Set.toList gamma)
+  $ \(Idx_ !idx) -> do let arr = prj idx aenv
+                       marshalAccTex (namesOfAvar idx) kernel arr
+                       marshal (shape arr)
 
 marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
-marshalAccTex (!shIn, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
-  = let sh'     = convertShape (R.shapeToList sh)
-        tex     = map (CUDA.getTex mdl) (reverse arrIn)
-    in do
-      liftIO $ CUDA.pokeListArray sh' . fst =<< CUDA.getPtr mdl shIn
-      marshalTextureData adata (R.size sh)  =<< liftIO (sequence' tex)
+marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
+  = marshalTextureData adata (R.size sh) =<< liftIO (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
 
 marshalAccEnvArg :: Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
 marshalAccEnvArg !aenv (Gamma !gamma)
@@ -588,9 +588,10 @@ arguments :: Marshalable args
           -> CIO [CUDA.FunParam]
 arguments !kernel !aenv !gamma !a = do
   dev <- asks deviceProps
-  if computeCapability dev < Compute 2 0
-     then marshalAccEnvTex kernel aenv gamma >> marshal a
-     else (++) <$> marshalAccEnvArg aenv gamma <*> marshal a
+  let marshaller | computeCapability dev < Compute 2 0   = marshalAccEnvTex kernel
+                 | otherwise                             = marshalAccEnvArg
+  --
+  (++) <$> marshaller aenv gamma <*> marshal a
 
 
 -- Link the binary object implementing the computation, configure the kernel

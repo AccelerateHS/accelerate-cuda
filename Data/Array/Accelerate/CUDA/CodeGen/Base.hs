@@ -278,27 +278,27 @@ environment
     -> ([C.Definition], [C.Param])
 environment dev (Gamma aenv)
   | computeCapability dev < Compute 2 0
-  = (Set.foldr (\(Idx_ v) vs -> asTex v ++ vs) [] aenv, [])
+  = Set.foldr (\(Idx_ v) (ds,ps) -> let (d,p) = asTex v in (d++ds, p:ps)) ([],[]) aenv
 
   | otherwise
   = ([], Set.foldr (\(Idx_ v) vs -> asArg v ++ vs) [] aenv)
 
   where
-    asTex :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Definition]
+    asTex :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], C.Param)
     asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar ix)
 
     asArg :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
     asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar ix)
 
 
-arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Definition]
+arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], C.Param)
 arrayAsTex _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      sh'               = [cedecl| static __constant__ typename $id:("DIM" ++ show dim) $id:sh; |]
+      sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
       arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
   in
-  sh' : arrs'
+  (arrs', sh')
 
 arrayAsArg :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Param]
 arrayAsArg _ grp =

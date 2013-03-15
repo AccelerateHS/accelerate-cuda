@@ -276,7 +276,7 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
     getStencil ix       = zipWith (\t a -> indexArray dev t a ix) (eltType (undefined :: e)) (map cvar stencilIn)
     (shIn, stencilIn)   = namesOfArray grp (undefined :: e)
     (texStencil, argStencil)
-      | computeCapability dev < Compute 2 0 = (arrayAsTex (undefined :: Array sh e) grp, [])
+      | computeCapability dev < Compute 2 0 = let (d,p) = arrayAsTex (undefined :: Array sh e) grp in (d,[p])
       | otherwise                           = ([], arrayAsArg (undefined :: Array sh e) grp)
 
     -- Generate a fresh variable name
