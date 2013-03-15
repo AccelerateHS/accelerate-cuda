@@ -662,8 +662,10 @@ codegenPrim (PrimAbs             ty) [a]   = codegenAbs ty a
 codegenPrim (PrimSig             ty) [a]   = codegenSig ty a
 codegenPrim (PrimQuot             _) [a,b] = [cexp|$exp:a / $exp:b|]
 codegenPrim (PrimRem              _) [a,b] = [cexp|$exp:a % $exp:b|]
-codegenPrim (PrimIDiv             _) [a,b] = ccall "idiv" [a,b]
-codegenPrim (PrimMod              _) [a,b] = ccall "mod"  [a,b]
+codegenPrim (PrimIDiv            ty) [a,b] = ccall "idiv" [ccast (NumScalarType $ IntegralNumType ty) a, 
+                                                           ccast (NumScalarType $ IntegralNumType ty) b]
+codegenPrim (PrimMod             ty) [a,b] = ccall "mod"  [ccast (NumScalarType $ IntegralNumType ty) a, 
+                                                           ccast (NumScalarType $ IntegralNumType ty) b]
 codegenPrim (PrimBAnd             _) [a,b] = [cexp|$exp:a & $exp:b|]
 codegenPrim (PrimBOr              _) [a,b] = [cexp|$exp:a | $exp:b|]
 codegenPrim (PrimBXor             _) [a,b] = [cexp|$exp:a ^ $exp:b|]
