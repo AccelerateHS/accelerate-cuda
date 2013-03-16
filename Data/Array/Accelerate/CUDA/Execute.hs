@@ -146,7 +146,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Scanr' _ _ a              -> scan'Op =<< extent a
       Scanl _ _ a               -> scanOp True  =<< extent a
       Scanr _ _ a               -> scanOp False =<< extent a
-      Permute _ d _ _           -> permuteOp =<< travA d
+      Permute _ d _ a           -> join $ permuteOp <$> extent a <*> travA d
       Stencil _ _ a             -> stencilOp =<< travA a
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
@@ -307,14 +307,12 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
 
     -- Forward permutation
     --
-    permuteOp :: (Shape sh, Elt e) => Array sh e -> CIO (Array sh e)
-    permuteOp !dfs
-      = let sh  = shape dfs
-        in do
-          out   <- allocateArray sh
-          copyArray dfs out
-          execute kernel gamma aenv (size sh) out
-          return out
+    permuteOp :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
+    permuteOp !sh !dfs = do
+      out <- allocateArray (shape dfs)
+      copyArray dfs out
+      execute kernel gamma aenv (size sh) out
+      return out
 
     -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the
     -- same as those given in the function 'mkStencil[2]'.
