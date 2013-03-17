@@ -25,7 +25,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
