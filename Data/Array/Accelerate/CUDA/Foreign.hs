@@ -47,20 +47,24 @@ module Data.Array.Accelerate.CUDA.Foreign (
 
   -- * Running IO actions in a CUDA context
   inContext, inDefaultContext
+
 ) where
 
 import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 
 import qualified Foreign.CUDA.Driver                    as CUDA
 
+import Data.Dynamic
 import Control.Applicative
+import Control.Exception                                ( bracket_ )
+import Control.Monad.Trans                              ( liftIO )
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import System.Mem.StableName
-import Data.Dynamic
-import Control.Monad.Trans                              ( liftIO )
+
 
 -- CUDA backend representation of foreign functions.
 -- ---------------------------------------------------
@@ -124,13 +128,13 @@ devicePtrsOfArray :: Array sh e -> CIO (DevicePtrs (EltRepr e))
 devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata 
 
 -- |Run an IO action within the given CUDA context
-inContext :: CUDA.Context -> IO a -> IO a
-inContext ctx a = do
-  CUDA.push ctx
-  r <- a
-  _ <- CUDA.pop
-  return r
+--
+inContext :: Context -> IO a -> IO a
+inContext ctx action =
+  bracket_ (push ctx) CUDA.pop action
 
 -- |Run an IO action in the default CUDA context
+--
 inDefaultContext :: IO a -> IO a
 inDefaultContext = inContext defaultContext
+

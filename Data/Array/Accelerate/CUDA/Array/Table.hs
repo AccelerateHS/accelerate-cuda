@@ -16,7 +16,7 @@
 module Data.Array.Accelerate.CUDA.Array.Table (
 
   -- Tables for host/device memory associations
-  MemoryTable, Context(..), new, lookup, insert, reclaim
+  MemoryTable, new, lookup, insert, reclaim
 
 ) where
 
@@ -37,6 +37,7 @@ import Foreign.CUDA.Ptr                                 ( DevicePtr )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Data.HashTable.IO                      as HT
 
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.Array.Data                 ( ArrayData )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
@@ -60,12 +61,6 @@ type HashTable key val  = HT.BasicHashTable key val
 type MT                 = IORef ( HashTable HostArray DeviceArray )
 data MemoryTable        = MemoryTable {-# UNPACK #-} !MT
                                       {-# UNPACK #-} !(Weak MT)
-
--- The currently active context. Finaliser threads need to check if the context
--- is still active before attempting to release their associated memory.
---
-data Context = Context {-# UNPACK #-} !CUDA.Context
-                       {-# UNPACK #-} !(Weak CUDA.Context)
 
 -- Arrays on the host and device
 --
@@ -127,9 +122,9 @@ lookup ctx (MemoryTable !ref _) !arr = do
 -- The device memory will be freed when the host array is garbage collected.
 --
 insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
-insert ctx@(Context _ !weak_ctx) (MemoryTable !ref !weak_ref) !arr !ptr = do
+insert !ctx (MemoryTable !ref !weak_ref) !arr !ptr = do
   key  <- makeStableArray ctx arr
-  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer weak_ctx weak_ref key ptr)
+  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer (weakContext ctx) weak_ref key ptr)
   tbl  <- readIORef ref
   message $ "insert: " ++ show key
   HT.insert tbl key dev
@@ -192,9 +187,11 @@ table_finalizer !tbl
 
 {-# INLINE makeStableArray #-}
 makeStableArray :: Typeable a => Context -> ArrayData a -> IO HostArray
-makeStableArray (Context (CUDA.Context !p) !_) !arr =
-  let cid = fromIntegral (ptrToIntPtr p)
-  in  HostArray cid <$> makeStableName arr
+makeStableArray !ctx !arr =
+  let CUDA.Context !p   = deviceContext ctx
+      !cid              = fromIntegral (ptrToIntPtr p)
+  in
+  HostArray cid <$> makeStableName arr
 
 {-# INLINE withIORef #-}
 withIORef :: IORef a -> (a -> IO b) -> IO b

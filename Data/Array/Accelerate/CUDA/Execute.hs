@@ -321,7 +321,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     stencilOp !arr = do
       let sh    =  shape arr
       out       <- allocateArray sh
-      dev       <- asks deviceProps
+      dev       <- asks deviceProperties
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
@@ -337,7 +337,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
           sh2   =  shape arr2
           sh    =  sh1 `intersect` sh2
       out       <- allocateArray sh
-      dev       <- asks deviceProps
+      dev       <- asks deviceProperties
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
@@ -585,7 +585,7 @@ arguments :: Marshalable args
           -> args
           -> CIO [CUDA.FunParam]
 arguments !kernel !aenv !gamma !a = do
-  dev <- asks deviceProps
+  dev <- asks deviceProperties
   let marshaller | computeCapability dev < Compute 2 0   = marshalAccEnvTex kernel
                  | otherwise                             = marshalAccEnvArg
   --

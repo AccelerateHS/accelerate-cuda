@@ -48,6 +48,7 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 
 -- friends
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 

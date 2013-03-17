@@ -121,7 +121,8 @@ Library
   Exposed-modules:      Data.Array.Accelerate.CUDA
                         Data.Array.Accelerate.CUDA.Foreign
 
-  Other-modules:        Data.Array.Accelerate.CUDA.Analysis.Device
+  Other-modules:        Data.Array.Accelerate.CUDA.AST
+                        Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim
@@ -129,15 +130,15 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Table
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Base
-                        Data.Array.Accelerate.CUDA.CodeGen.Monad
-                        Data.Array.Accelerate.CUDA.CodeGen.Mapping
                         Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
+                        Data.Array.Accelerate.CUDA.CodeGen.Mapping
+                        Data.Array.Accelerate.CUDA.CodeGen.Monad
                         Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
                         Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil
                         Data.Array.Accelerate.CUDA.CodeGen.Type
-                        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Compile
+                        Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
                         Data.Array.Accelerate.CUDA.FullList

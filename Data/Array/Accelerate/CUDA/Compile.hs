@@ -305,12 +305,12 @@ liftA4 f a b c d = f <$> a <*> b <*> c <*> d
 --
 build :: OpenAcc aenv a -> Gamma aenv -> CIO [AccKernel a]
 build acc aenv = do
-  dev   <- asks deviceProps
+  dev   <- asks deviceProperties
   mapM (build1 acc) (codegenAcc dev acc aenv)
 
 build1 :: OpenAcc aenv a -> CUTranslSkel aenv a -> CIO (AccKernel a)
 build1 acc code = do
-  dev           <- asks deviceProps
+  dev           <- asks deviceProperties
   table         <- gets kernelTable
   (entry,key)   <- compile table dev code
   let (cta,blocks,smem) = launchConfig acc dev occ
@@ -428,7 +428,7 @@ compile table dev cunit = do
 --
 compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
-  CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProps
+  CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProperties
   ddir                  <- liftIO getDataDir
   return                $  filter (not . null) $
     [ "-I", ddir </> "cubits"
