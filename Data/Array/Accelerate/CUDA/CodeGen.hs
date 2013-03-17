@@ -31,7 +31,6 @@ import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
-import Data.Monoid
 
 -- friends
 import Data.Array.Accelerate.Type
@@ -87,7 +86,7 @@ prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuat
 --
 codegenAcc :: DeviceProperties -> OpenAcc aenv arrs -> Gamma aenv -> [ CUTranslSkel aenv arrs ]
 codegenAcc dev (OpenAcc pacc) aenv
-  = insertHeaders (headersAcc $ OpenAcc pacc) $ codegen
+  = codegen
   $ case pacc of
 
       -- Producers
@@ -128,8 +127,13 @@ codegenAcc dev (OpenAcc pacc) aenv
       ZipWith _ _ _             -> fusionError
 
   where
-    codegen :: CUDA a -> a
-    codegen cuda = evalState cuda 0
+    codegen :: CUDA [CUTranslSkel aenv a] -> [CUTranslSkel aenv a]
+    codegen cuda =
+      let (skeletons, st)                = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      map addTo skeletons
 
     id :: Elt a => Fun aenv (a -> a)
     id = Lam (Body (Var ZeroIdx))
@@ -160,13 +164,6 @@ codegenAcc dev (OpenAcc pacc) aenv
     unexpectedError     = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected array primitive: " ++ prim
     fusionError         = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected fusible material: " ++ prim
 
-    -- Insert all the given header files into the skeletons as #include pragmas.
-    insertHeaders :: [String] -> [CUTranslSkel aenv arrs] -> [CUTranslSkel aenv arrs]
-    insertHeaders headers = map insertHeaders'
-      where
-        headers' = map (\x -> "#include <" ++ x ++ ">") headers
-        insertHeaders' (CUTranslSkel n defs) = CUTranslSkel n $ map ((flip C.EscDef) noLoc) headers' ++ defs
-
 
 -- Scalar function abstraction
 -- ---------------------------
@@ -194,7 +191,7 @@ codegenFun1 dev fun
         (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
       n                 <- get
-      GenST _ used _    <- execCGM (go u)
+      ExpST _ used _    <- execCGM (go u)
       return $ CUFun1 (mark used u)
              $ \xs -> evalState (evalCGM (go xs)) n
   --
@@ -215,7 +212,7 @@ codegenFun2 dev fun
         (_,v,_)  = locals "undefined_y" (undefined :: b)
     in do
       n                 <- get
-      GenST _ used _    <- execCGM (go u v)
+      ExpST _ used _    <- execCGM (go u v)
       return $ CUFun2 (mark used u) (mark used v)
              $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
@@ -339,9 +336,7 @@ codegenOpenExp dev = cvtE
         Intersect sh1 sh2       -> intersect sh1 sh2 env
 
         --Foreign function
-        ForeignExp ff _ e       -> case canExecuteExp ff of
-                                     Just n  -> foreignExp n e env
-                                     Nothing -> INTERNAL_ERROR(error) "codegenOpenExp" "All non-CUDA foreign functions should have been removed"
+        ForeignExp ff _ e       -> foreignExp ff e env
 
     -- The heavy lifting
     -- -----------------
@@ -622,21 +617,23 @@ codegenOpenExp dev = cvtE
         sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env
       in zipWith (\a b -> ccall "min" [a,b]) <$> sh1' <*> sh2'
 
-    -- Foreign function calling
+    -- Foreign scalar functions. We need to extract any header files that might
+    -- be required so they can be added to the top level definitions.
     --
-    foreignExp :: forall args env aenv. Elt args => String -> OpenExp env aenv args -> Val env -> Gen [C.Exp]
-    foreignExp name args env = do
-      args' <- cvtE args env
-      -- The C type of an expression may not always match the Accelerate type
-      -- (e.g Indices are Int32 not Int on 64-bit). A user of the FFI should not
-      -- have to know this in order to use it. Hence, we insert explicit casts
-      -- back to the Accelerate type.
-      --
-      let args'' = ccastTup (Sugar.eltType (undefined :: args)) args'
-          name'  = case dropWhile (not . isSpace) name of
-                     [] -> name
-                     x  -> tail x
-      return [ccall name' args'']
+    -- Additionally, we insert an explicit type cast from the foreign function
+    -- result back into Accelerate types (c.f. Int vs int).
+    --
+    foreignExp :: forall f a b env aenv. (Sugar.ForeignFun f, Elt a, Elt b)
+               => f a b -> OpenExp env aenv a -> Val env -> Gen [C.Exp]
+    foreignExp ff x env = case canExecuteExp ff of
+      Nothing   -> INTERNAL_ERROR(error) "codegenOpenExp" "Non-CUDA foreign expression encountered"
+      Just f    -> do
+        unless (null hdr) . lift $ modify (\st -> st { headers = Set.insert hdr (headers st) })
+        args    <- cvtE x env
+        return  $  [ccall name (ccastTup (Sugar.eltType (undefined::a)) args)]
+        where
+          (hdr, rest)   = break isSpace f
+          name          = if null rest then f else tail rest
 
     -- Some terms demand we extract only singly typed expressions
     --
@@ -889,92 +886,6 @@ postfix :: NumType a -> String -> String
 postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
 postfix (FloatingNumType (TypeCFloat _)) x = x ++ "f"
 postfix _                                x = x
-
--- Extract all the names of the C headers files being used in all the foreign expressions in the given computation.
-headersAcc :: OpenAcc aenv arrs -> [String]
-headersAcc acc = Set.toList $ travA acc
-  where
-    travA :: OpenAcc aenv arrs -> HashSet String
-    travA (OpenAcc pacc) = case pacc of
-      Alet a b            -> travA a <> travA b
-      Atuple tup          -> travAtup tup
-      Aprj _ a            -> travA a
-      Apply f a           -> travAF f <> travA a
-      Acond p t e         -> travE p <> travA t <> travA e
-      Unit e              -> travE e
-      Reshape e a         -> travE e <> travA a
-      Generate e f        -> travE e <> travF f
-      Transform sh ix f a -> travE sh <> travF ix <> travF f <> travA a
-      Replicate _ slix a  -> travE slix <> travA a
-      Slice _ a slix      -> travA a <> travE slix
-      Map f a             -> travF f <> travA a
-      ZipWith f a1 a2     -> travF f <> travA a1 <> travA a2
-      Fold f z a          -> travF f <> travE z <> travA a
-      Fold1 f a           -> travF f <> travA a
-      FoldSeg f z a s     -> travF f <> travE z <> travA a <> travA s
-      Fold1Seg f a s      -> travF f <> travA a <> travA s
-      Scanl f z a         -> travF f <> travE z <> travA a
-      Scanl' f z a        -> travF f <> travE z <> travA a
-      Scanl1 f a          -> travF f <> travA a
-      Scanr f z a         -> travF f <> travE z <> travA a
-      Scanr' f z a        -> travF f <> travE z <> travA a
-      Scanr1 f a          -> travF f <> travA a
-      Permute f1 a1 f2 a2 -> travF f1 <> travA a1 <> travF f2 <> travA a2
-      Backpermute sh f a  -> travE sh <> travF f <> travA a
-      Stencil f _ a       -> travF f <> travA a
-      Stencil2 f _ a1 _ a2
-                          -> travF f <> travA a1 <> travA a2
-      Foreign _ f a       -> travAF f <> travA a
-
-      Avar{}              -> Set.empty
-      Use{}               -> Set.empty
-
-    travE :: OpenExp aenv env e -> HashSet String
-    travE exp = case exp of
-      Let a b             -> travE a <> travE b
-      Var{}               -> Set.empty
-      Const{}             -> Set.empty
-      Tuple tup           -> travTup tup
-      Prj _ e             -> travE e
-      IndexNil{}          -> Set.empty
-      IndexCons sh sz     -> travE sh <> travE sz
-      IndexHead sh        -> travE sh
-      IndexTail sh        -> travE sh
-      IndexAny{}          -> Set.empty
-      IndexSlice _ ix sh  -> travE ix <> travE sh
-      IndexFull _ ix sl   -> travE ix <> travE sl
-      ToIndex sh ix       -> travE sh <> travE ix
-      FromIndex sh ix     -> travE sh <> travE ix
-      Cond p t e          -> travE p <> travE t <> travE e
-      Iterate n f x       -> travE n <> travE f <> travE x
-      PrimConst _         -> Set.empty
-      PrimApp _ x         -> travE x
-      Index a sh          -> travA a <> travE sh
-      LinearIndex a i     -> travA a <> travE i
-      Shape a             -> travA a
-      ShapeSize sh        -> travE sh
-      Intersect s t       -> travE s <> travE t
-      ForeignExp ff f e   -> case canExecuteExp ff of
-                              (Just n) -> case takeWhile (not . isSpace) n of
-                                            x | x == n    -> travF f <> travE e
-                                              | otherwise -> Set.singleton x <> travF f <> travE e
-                              Nothing  -> INTERNAL_ERROR(error) "headersAcc" "All non-CUDA foreign functions should have been removed"
-
-    travAtup :: Atuple (OpenAcc aenv) arrs -> HashSet String
-    travAtup NilAtup          = Set.empty
-    travAtup (SnocAtup tup a) = travA a <> travAtup tup
-
-    travTup :: Tuple (OpenExp aenv env) e -> HashSet String
-    travTup NilTup           = Set.empty
-    travTup (SnocTup tup e) = travTup tup <> travE e
-
-    travAF :: OpenAfun aenv arrs -> HashSet String
-    travAF (Alam  f) = travAF f
-    travAF (Abody b) = travA b
-
-    travF :: OpenFun aenv env arrs -> HashSet String
-    travF (Lam  f) = travF f
-    travF (Body b) = travE b
 
 
 -- Debugging

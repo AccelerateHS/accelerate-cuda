@@ -13,8 +13,8 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
-  CUDA, Gen, GenST(..),
-  runCGM, evalCGM, execCGM, pushEnv, getEnv, fresh, bind, use,
+  CUDA, Gen, AccST(..), ExpST(..),
+  runCUDA, runCGM, evalCGM, execCGM, pushEnv, getEnv, fresh, bind, use,
 
 ) where
 
@@ -38,32 +38,41 @@ instance Hashable C.Exp where
 
 
 -- The state of the code generator monad. The outer monad is used to generate
--- fresh variable names, while the inner is used to collect local environment
--- bindings when generating code.
+-- fresh variable names and collect any headers required for foreign functions.
+-- The inner is used to collect local environment bindings when generating code
+-- for each individual scalar expression.
 --
--- This separation is require so that names are unique across all generated code
--- fragments of a skeleton.
+-- This separation is required so that names are unique across all generated
+-- code fragments of a skeleton.
 --
-type CUDA       = State Int
-type Gen        = StateT GenST CUDA
+type CUDA       = State  AccST
+type Gen        = StateT ExpST CUDA
 
-data GenST = GenST
+data AccST = AccST
+  { counter     :: {-# UNPACK #-} !Int
+  , headers     :: !(HashSet String)
+  }
+
+data ExpST = ExpST
   { bindings    :: [C.BlockItem]
-  , terms       :: HashSet C.Exp
-  , letterms    :: HashMap C.Exp C.Exp
+  , terms       :: !(HashSet C.Exp)
+  , letterms    :: !(HashMap C.Exp C.Exp)
   }
 
 
 -- Run the code generator with a fresh environment, returning the result and
 -- final state.
 --
-runCGM :: Gen a -> CUDA (a, GenST)
-runCGM a = runStateT a (GenST [] Set.empty Map.empty)
+runCUDA :: CUDA a -> (a, AccST)
+runCUDA a = runState a (AccST 0 Set.empty)
+
+runCGM :: Gen a -> CUDA (a, ExpST)
+runCGM a = runStateT a (ExpST [] Set.empty Map.empty)
 
 evalCGM :: Gen a -> CUDA a
 evalCGM = fmap fst . runCGM
 
-execCGM :: Gen a -> CUDA GenST
+execCGM :: Gen a -> CUDA ExpST
 execCGM = fmap snd . runCGM
 
 
@@ -95,7 +104,7 @@ getEnv = reverse <$> gets bindings
 --
 fresh :: CUDA String
 fresh = do
-  n     <- get <* modify (+1)
+  n     <- gets counter <* modify (\st -> st { counter = counter st + 1 })
   return $ 'v' : show n
 
 -- Add an expression of given type to the environment and return the (new,
