@@ -33,10 +33,10 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
+import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-import Data.Array.Accelerate.CUDA.Foreign                       (canExecute)             
 
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
@@ -54,6 +54,7 @@ import Control.Monad.Trans                                      ( MonadIO, liftI
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
+import Data.Maybe
 
 import Foreign.Ptr                                              ( Ptr, castPtr )
 import Foreign.Storable                                         ( Storable(..) )
@@ -151,9 +152,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
       -- Foreign
-      Foreign ff afun a         -> case canExecute ff of
-                                     (Just f) -> f =<< travA a
-                                     Nothing  -> executeAfun1 afun =<< travA a  
+      Foreign ff afun a         -> fromMaybe (executeAfun1 afun) (canExecute ff) =<< travA a
 
       -- Removed by fusion
       Reshape _ _               -> fusionError
@@ -383,10 +382,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix
       LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
-      ForeignExp _ f e          -> case f of
-                                     (Lam (Body b)) -> 
-                                       travE e >>= \x -> executeOpenExp b (Empty `Push` x) Empty  
-                                     _ -> INTERNAL_ERROR(error) "executeOpenExp" "impossible case"
+      ForeignExp _ f x          -> travF1 f x
 
     -- Helpers
     -- -------
@@ -398,6 +394,10 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
 
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv
+
+    travF1 :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
+    travF1 (Lam (Body f)) x = travE x >>= \a -> executeOpenExp f (Empty `Push` a) Empty
+    travF1 _              _ = error "I bless the rains down in Africa"
 
     iterate :: ExecOpenExp (env,a) aenv a -> Int -> a -> CIO a
     iterate !f !limit !x

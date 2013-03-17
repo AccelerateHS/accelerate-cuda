@@ -613,13 +613,13 @@ codegenOpenExp dev = cvtE
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --
-    intersect :: forall env aenv sh. (Elt sh) 
-              => OpenExp env aenv sh 
-              -> OpenExp env aenv sh 
+    intersect :: forall env aenv sh. Elt sh
+              => OpenExp env aenv sh
+              -> OpenExp env aenv sh
               -> Val env -> Gen [C.Exp]
     intersect sh1 sh2 env = let
         sh1' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh1 env
-        sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env 
+        sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env
       in zipWith (\a b -> ccall "min" [a,b]) <$> sh1' <*> sh2'
 
     -- Foreign function calling
@@ -628,13 +628,14 @@ codegenOpenExp dev = cvtE
     foreignExp name args env = do
       args' <- cvtE args env
       -- The C type of an expression may not always match the Accelerate type
-      -- (e.g Indices are Int32 not Int on 64-bit). A user of the FFI should
-      -- not have to know this in order to use it. Hence, we insert explicit 
-      -- casts back to the Accelerate type.
+      -- (e.g Indices are Int32 not Int on 64-bit). A user of the FFI should not
+      -- have to know this in order to use it. Hence, we insert explicit casts
+      -- back to the Accelerate type.
+      --
       let args'' = ccastTup (Sugar.eltType (undefined :: args)) args'
           name'  = case dropWhile (not . isSpace) name of
                      [] -> name
-                     x  -> tail x 
+                     x  -> tail x
       return [ccall name' args'']
 
     -- Some terms demand we extract only singly typed expressions
@@ -889,22 +890,22 @@ postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
 postfix (FloatingNumType (TypeCFloat _)) x = x ++ "f"
 postfix _                                x = x
 
--- Extract all the names of the C headers files being used in all the foreign expressions in the given computation.  
+-- Extract all the names of the C headers files being used in all the foreign expressions in the given computation.
 headersAcc :: OpenAcc aenv arrs -> [String]
 headersAcc acc = Set.toList $ travA acc
   where
     travA :: OpenAcc aenv arrs -> HashSet String
     travA (OpenAcc pacc) = case pacc of
-      Alet a b            -> travA a <> travA b  
+      Alet a b            -> travA a <> travA b
       Atuple tup          -> travAtup tup
       Aprj _ a            -> travA a
       Apply f a           -> travAF f <> travA a
-      Acond p t e         -> travE p <> travA t <> travA e 
+      Acond p t e         -> travE p <> travA t <> travA e
       Unit e              -> travE e
       Reshape e a         -> travE e <> travA a
       Generate e f        -> travE e <> travF f
       Transform sh ix f a -> travE sh <> travF ix <> travF f <> travA a
-      Replicate _ slix a  -> travE slix <> travA a 
+      Replicate _ slix a  -> travE slix <> travA a
       Slice _ a slix      -> travA a <> travE slix
       Map f a             -> travF f <> travA a
       ZipWith f a1 a2     -> travF f <> travA a1 <> travA a2
@@ -928,13 +929,13 @@ headersAcc acc = Set.toList $ travA acc
       Avar{}              -> Set.empty
       Use{}               -> Set.empty
 
-    travE :: OpenExp aenv env e -> HashSet String  
+    travE :: OpenExp aenv env e -> HashSet String
     travE exp = case exp of
       Let a b             -> travE a <> travE b
       Var{}               -> Set.empty
       Const{}             -> Set.empty
       Tuple tup           -> travTup tup
-      Prj _ e             -> travE e 
+      Prj _ e             -> travE e
       IndexNil{}          -> Set.empty
       IndexCons sh sz     -> travE sh <> travE sz
       IndexHead sh        -> travE sh
@@ -961,7 +962,7 @@ headersAcc acc = Set.toList $ travA acc
 
     travAtup :: Atuple (OpenAcc aenv) arrs -> HashSet String
     travAtup NilAtup          = Set.empty
-    travAtup (SnocAtup tup a) = travA a <> travAtup tup 
+    travAtup (SnocAtup tup a) = travA a <> travAtup tup
 
     travTup :: Tuple (OpenExp aenv env) e -> HashSet String
     travTup NilTup           = Set.empty
@@ -974,7 +975,7 @@ headersAcc acc = Set.toList $ travA acc
     travF :: OpenFun aenv env arrs -> HashSet String
     travF (Lam  f) = travF f
     travF (Body b) = travE b
- 
+
 
 -- Debugging
 -- ---------

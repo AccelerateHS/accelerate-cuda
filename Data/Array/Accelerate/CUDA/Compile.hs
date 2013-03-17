@@ -25,7 +25,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Trafo
+import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
@@ -128,6 +128,9 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
+        -- Foreign
+        Foreign ff afun a       -> node =<< foreignA ff afun a
+
         -- Array injection
         Unit e                  -> node =<< liftA  Unit         <$> travE e
         Use arrs                -> use (arrays (undefined::arrs)) arrs >> node (pure $ Use arrs)
@@ -159,11 +162,6 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Stencil f b a           -> exec =<< liftA2 (flip Stencil b)     <$> travF f <*> travA a
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
-
-        Foreign ff afun a       -> case canExecute ff of
-                                     -- If it's a foreign call for the CUDA backend don't bother compiling the pure version
-                                     (Just _) -> node =<< liftA (Foreign ff foreignError) <$> travA a
-                                     Nothing  -> node . pure =<< Foreign ff               <$> compileAfun afun <*> traverseAcc a 
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -211,8 +209,15 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
 
-        foreignError = INTERNAL_ERROR(error) "compile" $ "Didn't compile the pure version of a foreign function call but" ++
-                                                         " it looks like it's being executed anyway"
+        -- If it is a foreign call for the CUDA backend, don't bother compiling
+        -- the pure version
+        --
+        foreignA :: (Arrays a, Arrays r, ForeignFun f) => f a r -> Afun (a -> r) -> OpenAcc aenv' a -> CIO (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' r)
+        foreignA ff afun a = case canExecute ff of
+          Nothing       -> liftA2 (Foreign ff)          <$> pure <$> compileAfun afun <*> travA a
+          Just _        -> liftA  (Foreign ff err)      <$> travA a
+            where
+              err = INTERNAL_ERROR(error) "compile" "Executing pure version of a CUDA foreign function"
 
     -- Traverse a scalar expression
     --
@@ -225,6 +230,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         PrimConst c             -> return $ pure (PrimConst c)
         IndexAny                -> return $ pure IndexAny
         IndexNil                -> return $ pure IndexNil
+        ForeignExp ff f x       -> foreignE ff f x
         --
         Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
         IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
@@ -245,28 +251,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Shape a                 -> liftA  Shape                 <$> travA a
         ShapeSize e             -> liftA  ShapeSize             <$> travE e
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
-        ForeignExp ff f e       -> case canExecuteExp ff of
-                                     -- If it's a foreign function that we can generate code from, just leave it alone.
-                                     -- As the pure function is closed, gamma needs to be replaced with one of the right
-                                     -- type.
-                                     (Just _) -> liftA2 (ForeignExp ff) <$> (pure <$> (snd <$> travF f)) <*> travE e
-                                     -- If the foreign function is not intended for this backend, this node needs to
-                                     -- be replaced by a pure accelerate node giving the same result. Due to the lack
-                                     -- of an 'apply' node in the scalar language, this is done by substitution.
-                                     Nothing  -> travE e'
-                                       where
-                                        wExp :: Idx ((),a) t -> Idx (env,a) t
-                                        wExp ZeroIdx = ZeroIdx
-                                        wExp _       = INTERNAL_ERROR(error) "prepareOpenAcc" "unreachable case"
 
-                                        -- As the expression we want to weaken is closed with respect to the array
-                                        -- environment, the index manipulation function becomes a dummy argument.
-                                        wAcc :: Idx () t -> Idx aenv t
-                                        wAcc _ = INTERNAL_ERROR(error) "prepareOpenAcc" "unreachable case"
-
-                                        e' = case f of
-                                               (Lam (Body b)) -> Let e $ weakenByEA wAcc (weakenByE wExp b) 
-                                               _              -> INTERNAL_ERROR(error) "travE" "unreachable case"
       where
         travA :: (Shape sh, Elt e)
               => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
@@ -282,6 +267,38 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
+
+        foreignE :: (Elt a, Elt b, ForeignFun f)
+                 => f a b -> Fun () (a -> b) -> OpenExp env aenv a -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv b)
+        foreignE ff f x = case canExecuteExp ff of
+          -- If it's a foreign function that we can generate code from, just
+          -- leave it alone. As the pure function is closed, gamma needs to be
+          -- replaced with one of the right type.
+          --
+          Just _        -> liftA2 (ForeignExp ff) <$> pure <$> snd <$> travF f <*> travE x
+
+          -- If the foreign function is not intended for this backend, this node
+          -- needs to be replaced by a pure accelerate node giving the same
+          -- result. Due to the lack of an 'apply' node in the scalar language,
+          -- this is done by substitution.
+          --
+          Nothing       -> travE (apply f x)
+            where
+              -- Twiddle the environment variables
+              --
+              apply :: Fun () (a -> b) -> OpenExp env aenv a -> OpenExp env aenv b
+              apply (Lam (Body b)) e    = Let e $ weakenByEA wAcc $ weakenByE wExp b
+              apply _ _                 = error "This was a triumph."
+
+              -- As the expression we want to weaken is closed with respect to the array
+              -- environment, the index manipulation function becomes a dummy argument.
+              --
+              wAcc :: Idx () t -> Idx aenv t
+              wAcc _                    = error "I'm making a note here:"
+
+              wExp :: Idx ((),a) t -> Idx (env,a) t
+              wExp ZeroIdx              = ZeroIdx
+              wExp _                    = error "HUGE SUCCESS"
 
         bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Gamma aenv
         bind (ExecAcc _ _ (Avar ix)) = freevar ix

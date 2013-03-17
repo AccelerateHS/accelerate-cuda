@@ -1,49 +1,53 @@
 {-# LANGUAGE CPP                  #-}
-{-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE FlexibleContexts     #-}
-{-# LANGUAGE RankNTypes           #-}
-{-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE ConstraintKinds      #-}
 {-# LANGUAGE DeriveDataTypeable   #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeFamilies         #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
 -- License     : BSD3
 --
 -- Maintainer  : Robert Clifton-Everest <robertce@cse.unsw.edu.au>
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 --
--- This module provides the CUDA backend's implementation of Accelerate's foreign function interface.
--- Also provided are a series of utility functions for transferring arrays from the device to the host
--- (and vice-versa), allocating new arrays, getting the CUDA device pointers of a given array, and
--- executing IO actions within a CUDA context. 
--- 
+-- This module provides the CUDA backend's implementation of Accelerate's
+-- foreign function interface. Also provided are a series of utility functions
+-- for transferring arrays from the device to the host (and vice-versa),
+-- allocating new arrays, getting the CUDA device pointers of a given array, and
+-- executing IO actions within a CUDA context.
+--
 -- /NOTES:/
 --
--- When arrays are passed to the foreign function there is no guarantee that the host side data matches
--- the device side data. If the data is needed host side 'peekArray' or 'peekArrayAsync' must be called.
+-- When arrays are passed to the foreign function there is no guarantee that the
+-- host side data matches the device side data. If the data is needed host side
+-- 'peekArray' or 'peekArrayAsync' must be called.
 --
--- Arrays of tuples are represented as tuples of arrays so for example an array of type 
--- 'Array DIM1 (Float, Float)' would have two device pointers associated with it.  
+-- Arrays of tuples are represented as tuples of arrays so for example an array
+-- of type 'Array DIM1 (Float, Float)' would have two device pointers associated
+-- with it.
+--
 
 module Data.Array.Accelerate.CUDA.Foreign (
+
   -- * Backend representation
   cudaAcc, canExecute, CuForeignAcc, CuForeignExp, CIO,
   liftIO, canExecuteExp, cudaExp,
-  
+
   -- * Manipulating arrays
+  DevicePtrs,
+  devicePtrsOfArray,
   indexArray, copyArray,
   useArray,  useArrayAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
-  devicePtrsOfArray,
   allocateArray, newArray,
-  DevicePtrs,
 
   -- * Running IO actions in a CUDA context
   inContext, inDefaultContext
@@ -66,35 +70,47 @@ import System.IO.Unsafe                                 ( unsafePerformIO )
 import System.Mem.StableName
 
 
--- CUDA backend representation of foreign functions.
--- ---------------------------------------------------
+-- CUDA backend representation of foreign functions
+-- ------------------------------------------------
 
 -- CUDA foreign Acc functions are just CIO functions.
-newtype CuForeignAcc args results = CuForeignAcc (args -> CIO results) deriving (Typeable)
+--
+newtype CuForeignAcc args results = CuForeignAcc (args -> CIO results)
+  deriving (Typeable)
 
 instance ForeignFun CuForeignAcc where
-  -- Using the hash of the stablename in order to uniquely identify the function
+  -- Using the hash of the StableName in order to uniquely identify the function
   -- when it is pretty printed.
-  strForeign ff = "cudaAcc<" ++ (show . hashStableName) (unsafePerformIO $ makeStableName ff) ++ ">"
+  --
+  strForeign ff =
+    let sn = unsafePerformIO $ makeStableName ff
+    in
+    "cudaAcc<" ++ (show (hashStableName sn)) ++ ">"
 
--- |Gives an the executable form of a foreign function if it can be executed by the CUDA backend.
-canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable results) 
-           => ff args results 
+-- |Gives the executable form of a foreign function if it can be executed by the
+-- CUDA backend.
+--
+canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable results)
+           => ff args results
            -> Maybe (args -> CIO results)
 canExecute ff =
   let
     df = toDyn ff
     fd = fromDynamic :: Dynamic -> Maybe (CuForeignAcc args results)
-  in (\(CuForeignAcc ff') -> ff') <$> fd df 
+  in (\(CuForeignAcc ff') -> ff') <$> fd df
 
--- CUDA foreign Exp functions are just strings with the header filename and the name of the 
+-- CUDA foreign Exp functions are just strings with the header filename and the name of the
 -- function separated by a space.
-newtype CuForeignExp args results = CuForeignExp String deriving (Typeable)
+--
+newtype CuForeignExp args results = CuForeignExp String
+  deriving (Typeable)
 
 instance ForeignFun CuForeignExp where
-  strForeign (CuForeignExp n) = "cudaExp<" ++ n ++ ">" 
+  strForeign (CuForeignExp n) = "cudaExp<" ++ n ++ ">"
 
--- |Gives the foreign function name as a string if it is a foreign Exp function for the CUDA backend. 
+-- |Gives the foreign function name as a string if it is a foreign Exp function
+-- for the CUDA backend.
+--
 canExecuteExp :: forall ff args results. (ForeignFun ff, Typeable results, Typeable args)
               => ff args results
               -> Maybe String
@@ -102,30 +118,32 @@ canExecuteExp ff =
   let
     df = toDyn ff
     fd = fromDynamic :: Dynamic -> Maybe (CuForeignExp args results)
-  in (\(CuForeignExp ff') -> ff') <$> fd df 
+  in (\(CuForeignExp ff') -> ff') <$> fd df
 
 
 -- User facing utility functions
 -- -----------------------------
 
--- |Create a cuda foreign function.
+-- |Create a CUDA foreign function
+--
 cudaAcc :: (Arrays args, Arrays results)
-       => (args -> CIO results)
-       -> CuForeignAcc args results
+        => (args -> CIO results)
+        -> CuForeignAcc args results
 cudaAcc = CuForeignAcc
 
--- |Create a CUDA foreign scalar function. The string needs to be formatted in the same way
--- as for the Haskell FFI. That is, the header file name and the name of the function separated 
--- by a space. i.e cudaExp "stdlib.h min".
+-- |Create a CUDA foreign scalar function. The string needs to be formatted in
+-- the same way as for the Haskell FFI. That is, the header file name and the
+-- name of the function separated by a space. i.e cudaExp "stdlib.h min".
+--
 cudaExp :: (Elt args, Elt results)
-       => String
-       -> CuForeignExp args results
+        => String
+        -> CuForeignExp args results
 cudaExp = CuForeignExp
 
--- |Get the raw CUDA device pointers associated with an array.
+-- |Get the raw CUDA device pointers associated with an array
 --
 devicePtrsOfArray :: Array sh e -> CIO (DevicePtrs (EltRepr e))
-devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata 
+devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
 
 -- |Run an IO action within the given CUDA context
 --
