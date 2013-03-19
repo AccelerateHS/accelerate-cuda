@@ -442,6 +442,7 @@ codegenOpenExp dev = cvtE
            modify (\st -> st { bindings = go : map C.BlockDecl (reverse seed) ++ outer })
            return acc
 
+{--
     while :: OpenExp (env,a) aenv Bool        -- continue while predicate returns true
           -> OpenExp (env,a) aenv a           -- loop body
           -> OpenExp env     aenv a           -- initial value
@@ -478,7 +479,7 @@ codegenOpenExp dev = cvtE
            -- restore the outer environment, plus the new loop
            modify (\st -> st { bindings = reverse (map C.BlockDecl seed ++ go) ++ outer })
            return acc
-
+--}
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
     -- elide the presence of IndexAny from the head of slx, as this is not

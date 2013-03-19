@@ -36,7 +36,9 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
+#ifdef ACCELERATE_DEBUG
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
+#endif
 
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
@@ -407,6 +409,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
         in
         go 0 x
 
+{--
     while :: ExecOpenExp (env,a) aenv Bool -> ExecOpenExp (env,a) aenv a -> a -> CIO a
     while !p !f !x
       = let go !acc = do
@@ -415,6 +418,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
                       else go =<< executeOpenExp f (env `Push` acc) aenv
         in
         go x
+--}
 
     indexSlice :: (Elt slix, Elt sh, Elt sl)
                => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
@@ -612,7 +616,7 @@ execute !kernel !gamma !aenv !n !a = do
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
 launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> CIO ()
-launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
+launch (AccKernel _entry !fn _ _ _ _ _) !(cta, grid, smem) !args
 #ifdef ACCELERATE_DEBUG
   | D.mode D.dump_exec
   = liftIO $ do
@@ -638,9 +642,9 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
         Event.destroy gpuEnd
         --
         message $
-          entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
-                ++ "gpu: " ++ D.showFFloatSIBase (Just 3) 1000 gpuTime "s, "
-                ++ "cpu: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime "s"
+          _entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
+                 ++ "gpu: " ++ D.showFFloatSIBase (Just 3) 1000 gpuTime "s, "
+                 ++ "cpu: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime "s"
 #endif
   | otherwise
   = liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
@@ -649,6 +653,7 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
 -- Debugging
 -- ---------
 
+#ifdef ACCELERATE_DEBUG
 {-# INLINE trace #-}
 trace :: MonadIO m => String -> m a -> m a
 trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
@@ -656,4 +661,5 @@ trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
 message s = s `trace` return ()
+#endif
 
