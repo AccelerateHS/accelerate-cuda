@@ -26,6 +26,7 @@ import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, dump
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- system
+import Data.Function                                    ( on )
 import Control.Exception                                ( bracket_ )
 import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Monad                                    ( when )
@@ -44,6 +45,9 @@ data Context = Context {
     deviceContext       :: {-# UNPACK #-} !CUDA.Context,                -- device execution context
     weakContext         :: {-# UNPACK #-} !(Weak CUDA.Context)          -- weak pointer to the context (for memory management)
   }
+
+instance Eq Context where
+  (==) = (==) `on` deviceContext
 
 
 -- | Create a new CUDA context associated with the calling thread
