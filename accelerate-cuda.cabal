@@ -128,6 +128,7 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Prim
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
+                        Data.Array.Accelerate.CUDA.Async
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Base
                         Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
