@@ -22,14 +22,9 @@ import Control.Concurrent
 data Async a = Async {-# UNPACK #-} !ThreadId
                      {-# UNPACK #-} !(MVar (Either SomeException a))
 
--- Fork an action to execute asynchronously.
---
--- TLM:
---   CUDA contexts are specific to the processor on which they were created. It
---   may be necessary to take this into account when forking accelerate
---   computations (forkOn or forkOS rather than forkIO), either by always
---   requiring a specific CPU, and/or having the driver API store the processor
---   ordinal when creating contexts.
+-- Fork an action to execute asynchronously. Moreover, this will be forked into
+-- a _bound_ thread, which allows the thread to call foreign libraries that make
+-- use of thread-local state, such as CUDA.
 --
 async :: IO a -> IO (Async a)
 async action = do
