@@ -67,6 +67,7 @@ module Data.Array.Accelerate.CUDA (
 import Prelude                                          hiding ( catch )
 #endif
 import Control.Monad
+import Control.Monad.Trans
 import Control.Exception
 import Control.Applicative
 import System.IO.Unsafe
@@ -282,9 +283,9 @@ instance Backend CUDA where
     return $! CUR (withContext c) result
 
   runRawFun1 c acc cache r = do
-    arr    <- wait . remoteArray =<< useRemote c r
     result <- async . evalCUDA (withContext c) $ do
-                afun    <- maybe (compileAfun acc) (return . blobAfun) cache
+                arr  <- liftIO $ wait . remoteArray =<< useRemote c r
+                afun <- maybe (compileAfun acc) (return . blobAfun) cache
                 executeAfun1 afun arr
     return $! CUR (withContext c) result
 
@@ -310,8 +311,8 @@ instance Backend CUDA where
   -- the same.
   --
   useRemote c r = do
-    src    <- wait (remoteArray r)
     result <- async $ do
+      src  <- wait (remoteArray r)
       when (withContext c /= remoteContext r) . evalCUDA dstCtx $ do
         mallocR (arrays src) (fromArr src)
         copyR (arrays src) (fromArr src) (fromArr src)
