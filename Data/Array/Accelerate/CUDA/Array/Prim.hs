@@ -6,7 +6,7 @@
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+--               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -18,8 +18,12 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 
   DevicePtrs, HostPtrs,
 
-  mallocArray, useArray, useArrayAsync, indexArray, copyArray, peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, marshalDevicePtrs, marshalArrayData, marshalTextureData,
+  mallocArray, indexArray,
+  useArray,  useArrayAsync,
+  copyArray, copyArrayPeer, copyArrayPeerAsync,
+  peekArray, peekArrayAsync,
+  pokeArray, pokeArrayAsync,
+  marshalDevicePtrs, marshalArrayData, marshalTextureData,
   devicePtrsOfArrayData, advancePtrsOfArrayData
 
 ) where
@@ -267,6 +271,37 @@ copyArray !ctx !mt !from !to !n = do
   src <- devicePtrsOfArrayData ctx mt from
   dst <- devicePtrsOfArrayData ctx mt to
   CUDA.copyArrayAsync n src dst
+
+
+-- Copy data between two device arrays that exist in different contexts and/or
+-- devices.
+--
+copyArrayPeer
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => MemoryTable
+    -> ArrayData e -> Context   -- source array and context
+    -> ArrayData e -> Context   -- destination array and context
+    -> Int                      -- number of array elements
+    -> IO ()
+copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n = do
+  message $ "copyArrayPeer: " ++ showBytes (n * sizeOf (undefined :: b))
+  src <- devicePtrsOfArrayData ctxSrc mt from
+  dst <- devicePtrsOfArrayData ctxDst mt to
+  CUDA.copyArrayPeer n src (deviceContext ctxSrc) dst (deviceContext ctxDst)
+
+copyArrayPeerAsync
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => MemoryTable
+    -> ArrayData e -> Context   -- source array and context
+    -> ArrayData e -> Context   -- destination array and context
+    -> Int                      -- number of array elements
+    -> Maybe CUDA.Stream
+    -> IO ()
+copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st = do
+  message $ "copyArrayPeerAsync: " ++ showBytes (n * sizeOf (undefined :: b))
+  src <- devicePtrsOfArrayData ctxSrc mt from
+  dst <- devicePtrsOfArrayData ctxDst mt to
+  CUDA.copyArrayPeerAsync n src (deviceContext ctxSrc) dst (deviceContext ctxDst) st
 
 
 -- Copy data from the device into the associated Accelerate host-side array
