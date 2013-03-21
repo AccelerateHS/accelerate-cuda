@@ -2,7 +2,6 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Compile
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -79,13 +78,6 @@ import Foreign.Storable
 #endif
 
 import Paths_accelerate_cuda                                    ( getDataDir )
-
-
--- Keep track of which kernels have been linked into which contexts. We use the
--- context as a lookup key, which requires equality.
---
-instance Eq CUDA.Context where
-  CUDA.Context c1 == CUDA.Context c2 = c1 == c2
 
 
 -- | Initiate code generation, compilation, and data transfer for an array
