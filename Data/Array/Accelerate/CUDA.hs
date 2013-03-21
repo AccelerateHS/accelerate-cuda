@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -57,7 +58,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy,
+  CUDA(..), Context, create, destroy,
 
 ) where
 
@@ -65,6 +66,7 @@ module Data.Array.Accelerate.CUDA (
 #if !MIN_VERSION_base(4,6,0)
 import Prelude                                          hiding ( catch )
 #endif
+import Control.Monad
 import Control.Exception
 import Control.Applicative
 import System.IO.Unsafe
@@ -74,12 +76,15 @@ import Foreign.CUDA.Driver.Error
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
-import Data.Array.Accelerate.CUDA.Array.Data
+import Data.Array.Accelerate.CUDA.AST                   ( ExecAcc, ExecAfun )
 import Data.Array.Accelerate.CUDA.Async
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
+import Data.Array.Accelerate.CUDA.Array.Data
+
+import Data.Array.Accelerate.BackendClass               -- temporarily imported from backend-kit
 
 #include "accelerate.h"
 
@@ -237,4 +242,101 @@ config =  Phase
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
   }
+
+
+-- Backend class
+-- -------------
+
+data CUDA = CUDA { withContext :: !Context }
+
+data CUDARemote a = CUR
+  { remoteContext :: !Context
+  , remoteArray   :: {-# UNPACK #-} !(Async a)
+  }
+
+data CUDABlob a
+  = CUAcc  { blobAcc  :: ExecAcc a }
+  | CUAfun { blobAfun :: ExecAfun a }
+
+
+instance Backend CUDA where
+  type Remote CUDA a    = CUDARemote a
+  type Blob CUDA a      = CUDABlob a
+
+  -- Accelerate expressions
+  -- ----------------------
+
+  -- Pre-compile an Accelerate computation for the CUDA backend. This populates
+  -- the internal caches as well as producing an annotated AST to facilitate
+  -- later execution.
+  --
+  compile     c _ acc      = CUAcc  <$> evalCUDA (withContext c) (compileAcc acc)
+  compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
+
+  -- Run Accelerate expressions. This is executed asynchronously and does not
+  -- copy the result back to the host.
+  --
+  runRaw c acc cache = do
+    result <- async . evalCUDA (withContext c) $
+                executeAcc =<< maybe (compileAcc acc) (return . blobAcc) cache
+    return $! CUR (withContext c) result
+
+  runRawFun1 c acc cache r = do
+    arr    <- wait . remoteArray =<< useRemote c r
+    result <- async . evalCUDA (withContext c) $ do
+                afun    <- maybe (compileAfun acc) (return . blobAfun) cache
+                executeAfun1 afun arr
+    return $! CUR (withContext c) result
+
+  -- Array management
+  -- ----------------
+
+  copyToHost r          = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
+
+  copyToDevice c arrs   = do
+    result <- async . evalCUDA (withContext c) $ pokeR (arrays arrs) (fromArr arrs) >> return arrs
+    return $! CUR (withContext c) result
+    where
+      pokeR :: ArraysR a -> a -> CIO a
+      pokeR ArraysRunit ()               = return ()
+      pokeR ArraysRarray a               = pokeArrayAsync a Nothing >> return a
+      pokeR (ArraysRpair r1 r2) (a1, a2) = (,) <$> pokeR r1 a1 <*> pokeR r2 a2
+
+  waitRemote    = void . wait . remoteArray
+
+  -- If we are attempting to use the remote array on a context different from
+  -- the one the array was evaluated on, then we must copy the array data to the
+  -- new execution context. The actual host side array, for GC purposes, remains
+  -- the same.
+  --
+  useRemote c r = do
+    src    <- wait (remoteArray r)
+    result <- async $ do
+      when (withContext c /= remoteContext r) . evalCUDA dstCtx $ do
+        mallocR (arrays src) (fromArr src)
+        copyR (arrays src) (fromArr src) (fromArr src)
+      --
+      return src
+    --
+    return $! CUR (withContext c) result
+    where
+      srcCtx = remoteContext r
+      dstCtx = withContext c
+
+      copyR :: ArraysR a -> a -> a -> CIO ()
+      copyR ArraysRunit         ()       ()       = return ()
+      copyR ArraysRarray        as       bs       = copyArrayPeer as srcCtx bs dstCtx
+      copyR (ArraysRpair r1 r2) (a1, a2) (b1, b2) = copyR r1 a1 b1 >> copyR r2 a2 b2
+
+      mallocR :: ArraysR a -> a -> CIO ()
+      mallocR ArraysRunit         ()       = return ()
+      mallocR ArraysRarray        a        = mallocArray a
+      mallocR (ArraysRpair r1 r2) (a1, a2) = mallocR r1 a1 >> mallocR r2 a2
+
+  -- Configuration
+  -- -------------
+
+  separateMemorySpace _         = True          -- some devices share host memory, but we still copy
+  compilesToDisk _              = True          -- persistent cache: internally managed
+  forceToDisk                   = return        -- persistent cache: internally managed
 
