@@ -309,16 +309,17 @@ instance Backend CUDA where
   -- new execution context. The actual host side array, for GC purposes, remains
   -- the same.
   --
-    result <- async $ do
-      src  <- wait (remoteArray r)
-      when (withContext c /= remoteContext r) . evalCUDA dstCtx $ do
-        mallocR (arrays src) (fromArr src)
-        copyR (arrays src) (fromArr src) (fromArr src)
-      --
-      return src
-  copyToPeer c r = do
-    --
-    return $! CUR (withContext c) result
+  copyToPeer c r
+    | srcCtx == dstCtx  = return r
+    | otherwise         = do
+        result  <- async $ do
+          src <- wait (remoteArray r)
+          evalCUDA dstCtx $ do
+            mallocR (arrays src) (fromArr src)
+            copyR (arrays src) (fromArr src) (fromArr src)
+            --
+          return src
+        return $! CUR dstCtx result
     where
       srcCtx = remoteContext r
       dstCtx = withContext c
