@@ -284,7 +284,7 @@ instance Backend CUDA where
 
   runRawFun1 c acc cache r = do
     result <- async . evalCUDA (withContext c) $ do
-                arr  <- liftIO $ wait . remoteArray =<< useRemote c r
+                arr  <- liftIO $ wait . remoteArray =<< copyToPeer c r
                 afun <- maybe (compileAfun acc) (return . blobAfun) cache
                 executeAfun1 afun arr
     return $! CUR (withContext c) result
@@ -292,8 +292,9 @@ instance Backend CUDA where
   -- Array management
   -- ----------------
 
+  -- Copying to host/device
+  --
   copyToHost r          = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
-
   copyToDevice c arrs   = do
     result <- async . evalCUDA (withContext c) $ pokeR (arrays arrs) (fromArr arrs) >> return arrs
     return $! CUR (withContext c) result
@@ -303,14 +304,11 @@ instance Backend CUDA where
       pokeR ArraysRarray a               = pokeArrayAsync a Nothing >> return a
       pokeR (ArraysRpair r1 r2) (a1, a2) = (,) <$> pokeR r1 a1 <*> pokeR r2 a2
 
-  waitRemote    = void . wait . remoteArray
-
   -- If we are attempting to use the remote array on a context different from
   -- the one the array was evaluated on, then we must copy the array data to the
   -- new execution context. The actual host side array, for GC purposes, remains
   -- the same.
   --
-  useRemote c r = do
     result <- async $ do
       src  <- wait (remoteArray r)
       when (withContext c /= remoteContext r) . evalCUDA dstCtx $ do
@@ -318,6 +316,7 @@ instance Backend CUDA where
         copyR (arrays src) (fromArr src) (fromArr src)
       --
       return src
+  copyToPeer c r = do
     --
     return $! CUR (withContext c) result
     where
@@ -333,6 +332,10 @@ instance Backend CUDA where
       mallocR ArraysRunit         ()       = return ()
       mallocR ArraysRarray        a        = mallocArray a
       mallocR (ArraysRpair r1 r2) (a1, a2) = mallocR r1 a1 >> mallocR r2 a2
+
+  -- Wait for a remote to finish executing
+  --
+  waitRemote    = void . wait . remoteArray
 
   -- Configuration
   -- -------------
