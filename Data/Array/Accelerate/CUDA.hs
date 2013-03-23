@@ -77,7 +77,7 @@ import Foreign.CUDA.Driver.Error
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
-import Data.Array.Accelerate.CUDA.AST                   ( ExecAcc, ExecAfun )
+import Data.Array.Accelerate.CUDA.AST                   ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
 import Data.Array.Accelerate.CUDA.Async
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
@@ -337,6 +337,10 @@ instance Backend CUDA where
   -- Wait for a remote to finish executing
   --
   waitRemote    = void . wait . remoteArray
+
+  -- Inject a remote array into an AST node
+  --
+  useRemote a   = OpenAcc . Use . fromArr <$> wait (remoteArray a)
 
   -- Configuration
   -- -------------
