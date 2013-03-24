@@ -294,7 +294,7 @@ instance Backend CUDA where
 
   -- Copying to host/device
   --
-  copyToHost r          = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
+  copyToHost _ r        = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
   copyToDevice c arrs   = do
     result <- async . evalCUDA (withContext c) $ pokeR (arrays arrs) (fromArr arrs) >> return arrs
     return $! CUR (withContext c) result
@@ -340,7 +340,7 @@ instance Backend CUDA where
 
   -- Inject a remote array into an AST node
   --
-  useRemote a   = OpenAcc . Use . fromArr <$> wait (remoteArray a)
+  useRemote _ a = OpenAcc . Use . fromArr <$> wait (remoteArray a)
 
   -- Configuration
   -- -------------
