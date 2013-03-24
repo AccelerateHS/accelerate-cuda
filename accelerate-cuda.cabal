@@ -103,6 +103,7 @@ Library
                         language-c-quote        >= 0.4.4,
                         mainland-pretty         >= 0.2,
                         mtl                     >= 2.0,
+                        old-time                >= 1.0,
                         pretty                  >= 1.0,
                         process                 >= 1.0,
                         SafeSemaphore           >= 0.9,
