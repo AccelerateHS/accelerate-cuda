@@ -55,6 +55,7 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
+import System.Time
 import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
@@ -419,9 +420,8 @@ compile table dev cunit = do
     (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
     flags       <- compileFlags file
     done        <- liftIO $ do
-      message $ "execute: " ++ nvcc ++ " " ++ unwords flags
-      T.hPutStr hdl code               `finally`     hClose hdl
-      enqueueProcess (proc nvcc flags) `onException` removeFile file
+      T.hPutStr hdl code        `finally`     hClose hdl
+      enqueueProcess nvcc flags `onException` removeFile file
     --
     liftIO $ KT.insert table key (CompileProcess file done)
   --
@@ -488,18 +488,39 @@ pool = unsafePerformIO $ Q.new =<< getNumProcessors
 -- is a worker available from the pool. This ensures we don't run out of process
 -- handles or flood the IO bus, degrading performance.
 --
-enqueueProcess :: CreateProcess -> IO (MVar ())
-enqueueProcess cp = do
+enqueueProcess :: FilePath -> [String] -> IO (MVar ())
+enqueueProcess nvcc flags = do
   mvar  <- newEmptyMVar
   _     <- forkIO $ do
 
     -- wait for a worker to become available
-    Q.wait pool
-    (_,_,_,pid) <- createProcess cp
+    (_, queueT) <- time $ Q.wait pool
+    ccBegin     <- getTime
+    (_,_,_,pid) <- createProcess (proc nvcc flags)
 
     -- asynchronously notify the queue when the compiler has completed
-    _           <- forkIO $ do finally (waitFor pid) (Q.signal pool)
-                               putMVar mvar ()  -- never executed if the compilation fails.
+    _           <- forkIO $ do
+
+      -- Wait for the process to complete
+      --
+      waitFor pid
+      ccEnd     <- getTime
+
+      let ccT   = diffTime ccBegin ccEnd
+          msg2  = nvcc ++ " " ++ unwords flags
+          msg1  = "queue: " ++ D.showFFloatSIBase (Just 3) 1000 queueT "s, "
+             ++ "execute: " ++ D.showFFloatSIBase (Just 3) 1000 ccT    "s"
+
+      message $ intercalate "\n     ... " [msg1, msg2]
+
+      -- If there was an error (compilation failed) then this spot in the queue
+      -- is never released and the MVar never signalled that compilation is
+      -- done. This means you'll get a "blocked indefinitely on MVar" error, but
+      -- since the compiler failed in the first places that is somewhat moot.
+      --
+      Q.signal pool
+      putMVar mvar ()
+
     return ()
   --
   return mvar
@@ -517,6 +538,38 @@ waitFor pid = do
 
 -- Debug
 -- -----
+
+-- Get the current wall clock time in picoseconds since the epoch
+--
+{-# INLINE getTime #-}
+getTime :: IO Integer
+#ifdef ACCELERATE_DEBUG
+getTime = do
+  TOD sec pico  <- getClockTime
+  return        $! pico + sec * 1000000000000
+#else
+getTime = return 0
+#endif
+
+-- Return the difference between the first and second (later) time in seconds
+--
+{-# INLINE diffTime #-}
+diffTime :: Integer -> Integer -> Double
+diffTime t1 t2 = fromIntegral (t2 - t1) * 1E-12
+
+-- Return the number of seconds of wall-clock time it took to execute the given
+-- action. Makes sure to `deepseq` or otherwise fully evaluate the action before
+-- returning from the task, otherwise there is a good chance you'll just pass a
+-- suspension out and the elapsed time will be zero.
+--
+time :: IO a -> IO (a, Double)
+{-# NOINLINE time #-}
+time p = do
+  start <- getTime
+  res   <- p
+  end   <- getTime
+  return $ (res, diffTime start end)
+
 
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
