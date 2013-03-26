@@ -346,6 +346,4 @@ instance Backend CUDA where
   -- -------------
 
   separateMemorySpace _         = True          -- some devices share host memory, but we still copy
-  compilesToDisk _              = True          -- persistent cache: internally managed
-  forceToDisk                   = return        -- persistent cache: internally managed
 
