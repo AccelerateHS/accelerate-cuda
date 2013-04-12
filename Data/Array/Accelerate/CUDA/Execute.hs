@@ -132,6 +132,9 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Apply f a                 -> executeAfun1 f =<< travA a
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
 
+      -- Foreign
+      Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecute ff) =<< travA a
+
       -- Producers
       Map _ a                   -> executeOp =<< extent a
       Generate sh _             -> executeOp =<< travE sh
@@ -152,9 +155,6 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Permute _ d _ a           -> join $ permuteOp <$> extent a <*> travA d
       Stencil _ _ a             -> stencilOp =<< travA a
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
-
-      -- Foreign
-      Foreign ff afun a         -> fromMaybe (executeAfun1 afun) (canExecute ff) =<< travA a
 
       -- Removed by fusion
       Reshape _ _               -> fusionError
@@ -384,7 +384,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix
       LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
-      ForeignExp _ f x          -> travF1 f x
+      Foreign _ f x             -> travF1 f x
 
     -- Helpers
     -- -------

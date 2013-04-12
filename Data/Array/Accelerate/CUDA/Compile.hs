@@ -24,7 +24,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Trafo
+import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
@@ -122,7 +122,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
         -- Foreign
-        Foreign ff afun a       -> node =<< foreignA ff afun a
+        Aforeign ff afun a      -> node =<< foreignA ff afun a
 
         -- Array injection
         Unit e                  -> node =<< liftA  Unit         <$> travE e
@@ -205,10 +205,10 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         -- If it is a foreign call for the CUDA backend, don't bother compiling
         -- the pure version
         --
-        foreignA :: (Arrays a, Arrays r, ForeignFun f) => f a r -> Afun (a -> r) -> OpenAcc aenv' a -> CIO (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' r)
+        foreignA :: (Arrays a, Arrays r, Foreign f) => f a r -> Afun (a -> r) -> OpenAcc aenv' a -> CIO (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' r)
         foreignA ff afun a = case canExecute ff of
-          Nothing       -> liftA2 (Foreign ff)          <$> pure <$> compileAfun afun <*> travA a
-          Just _        -> liftA  (Foreign ff err)      <$> travA a
+          Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
+          Just _        -> liftA  (Aforeign ff err)      <$> travA a
             where
               err = INTERNAL_ERROR(error) "compile" "Executing pure version of a CUDA foreign function"
 
@@ -223,7 +223,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         PrimConst c             -> return $ pure (PrimConst c)
         IndexAny                -> return $ pure IndexAny
         IndexNil                -> return $ pure IndexNil
-        ForeignExp ff f x       -> foreignE ff f x
+        Foreign ff f x          -> foreignE ff f x
         --
         Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
         IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
@@ -261,14 +261,14 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
-        foreignE :: (Elt a, Elt b, ForeignFun f)
+        foreignE :: (Elt a, Elt b, Foreign f)
                  => f a b -> Fun () (a -> b) -> OpenExp env aenv a -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv b)
         foreignE ff f x = case canExecuteExp ff of
           -- If it's a foreign function that we can generate code from, just
           -- leave it alone. As the pure function is closed, gamma needs to be
           -- replaced with one of the right type.
           --
-          Just _        -> liftA2 (ForeignExp ff) <$> pure <$> snd <$> travF f <*> travE x
+          Just _        -> liftA2 (Foreign ff) <$> pure <$> snd <$> travF f <*> travE x
 
           -- If the foreign function is not intended for this backend, this node
           -- needs to be replaced by a pure accelerate node giving the same
@@ -280,7 +280,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
               -- Twiddle the environment variables
               --
               apply :: Fun () (a -> b) -> OpenExp env aenv a -> OpenExp env aenv b
-              apply (Lam (Body b)) e    = Let e $ weakenByEA wAcc $ weakenByE wExp b
+              apply (Lam (Body b)) e    = Let e $ weakenEA rebuildOpenAcc wAcc $ weakenE wExp b
               apply _ _                 = error "This was a triumph."
 
               -- As the expression we want to weaken is closed with respect to the array

@@ -119,7 +119,7 @@ codegenAcc dev (OpenAcc pacc) aenv
       Aprj _ _                  -> unexpectedError
       Use _                     -> unexpectedError
       Unit _                    -> unexpectedError
-      Foreign _ _ _             -> unexpectedError
+      Aforeign _ _ _            -> unexpectedError
 
       Reshape _ _               -> fusionError
       Replicate _ _ _           -> fusionError
@@ -336,7 +336,7 @@ codegenOpenExp dev = cvtE
         Intersect sh1 sh2       -> intersect sh1 sh2 env
 
         --Foreign function
-        ForeignExp ff _ e       -> foreignExp ff e env
+        Foreign ff _ e          -> foreignE ff e env
 
     -- The heavy lifting
     -- -----------------
@@ -624,9 +624,9 @@ codegenOpenExp dev = cvtE
     -- Additionally, we insert an explicit type cast from the foreign function
     -- result back into Accelerate types (c.f. Int vs int).
     --
-    foreignExp :: forall f a b env aenv. (Sugar.ForeignFun f, Elt a, Elt b)
-               => f a b -> OpenExp env aenv a -> Val env -> Gen [C.Exp]
-    foreignExp ff x env = case canExecuteExp ff of
+    foreignE :: forall f a b env aenv. (Sugar.Foreign f, Elt a, Elt b)
+             => f a b -> OpenExp env aenv a -> Val env -> Gen [C.Exp]
+    foreignE ff x env = case canExecuteExp ff of
       Nothing   -> INTERNAL_ERROR(error) "codegenOpenExp" "Non-CUDA foreign expression encountered"
       Just f    -> do
         unless (null hdr) . lift $ modify (\st -> st { headers = Set.insert hdr (headers st) })
@@ -900,6 +900,7 @@ showPreAccOp pacc =
     Atuple _            -> "Atuple"
     Aprj _ _            -> "Aprj"
     Apply _ _           -> "Apply"
+    Aforeign _ _ _      -> "Aforeign"
     Acond _ _ _         -> "Acond"
     Use _               -> "Use"
     Unit _              -> "Unit"
@@ -924,5 +925,4 @@ showPreAccOp pacc =
     Backpermute _ _ _   -> "Backpermute"
     Stencil _ _ _       -> "Stencil"
     Stencil2 _ _ _ _ _  -> "Stencil2"
-    Foreign _ _ _       -> "Foreign"
 

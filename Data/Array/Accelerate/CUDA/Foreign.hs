@@ -78,7 +78,7 @@ import System.Mem.StableName
 newtype CuForeignAcc args results = CuForeignAcc (args -> CIO results)
   deriving (Typeable)
 
-instance ForeignFun CuForeignAcc where
+instance Foreign CuForeignAcc where
   -- Using the hash of the StableName in order to uniquely identify the function
   -- when it is pretty printed.
   --
@@ -90,7 +90,7 @@ instance ForeignFun CuForeignAcc where
 -- |Gives the executable form of a foreign function if it can be executed by the
 -- CUDA backend.
 --
-canExecute :: forall ff args results. (ForeignFun ff, Typeable args, Typeable results)
+canExecute :: forall ff args results. (Foreign ff, Typeable args, Typeable results)
            => ff args results
            -> Maybe (args -> CIO results)
 canExecute ff =
@@ -105,13 +105,13 @@ canExecute ff =
 newtype CuForeignExp args results = CuForeignExp String
   deriving (Typeable)
 
-instance ForeignFun CuForeignExp where
+instance Foreign CuForeignExp where
   strForeign (CuForeignExp n) = "cudaExp<" ++ n ++ ">"
 
 -- |Gives the foreign function name as a string if it is a foreign Exp function
 -- for the CUDA backend.
 --
-canExecuteExp :: forall ff args results. (ForeignFun ff, Typeable results, Typeable args)
+canExecuteExp :: forall ff args results. (Foreign ff, Typeable results, Typeable args)
               => ff args results
               -> Maybe String
 canExecuteExp ff =
