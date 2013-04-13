@@ -69,35 +69,41 @@ showFFloatSIBase p b n
 
 data Flags = Flags
   {
-    -- phase control
+    -- debugging
     _dump_gc            :: !Bool        -- garbage collection & memory management
   , _dump_cc            :: !Bool        -- compilation & linking
   , _debug_cc           :: !Bool        -- compile device code with debug symbols
   , _dump_exec          :: !Bool        -- kernel execution
-
-    -- general options
   , _verbose            :: !Bool        -- additional status messages
+
+    -- general options / functionality
   , _flush_cache        :: !Bool        -- delete the persistent cache directory
+  , _fast_math          :: !Bool        -- use faster, less accurate maths library operations
   }
 
 $(mkLabels [''Flags])
 
-flags :: [OptDescr (Flags -> Flags)]
-flags =
-  [ Option [] ["ddump-gc"]      (NoArg (set dump_gc True))      "print device memory management trace"
+allFlags :: [OptDescr (Flags -> Flags)]
+allFlags =
+  [
+    -- debugging
+    Option [] ["ddump-gc"]      (NoArg (set dump_gc True))      "print device memory management trace"
   , Option [] ["ddump-cc"]      (NoArg (set dump_cc True))      "print generated code and compilation information"
   , Option [] ["ddebug-cc"]     (NoArg (set debug_cc True))     "generate debug information for device code"
   , Option [] ["ddump-exec"]    (NoArg (set dump_exec True))    "print kernel execution trace"
   , Option [] ["dverbose"]      (NoArg (set verbose True))      "print additional information"
+
+    -- functionality / optimisation
   , Option [] ["fflush-cache"]  (NoArg (set flush_cache True))  "delete the persistent cache directory"
+  , Option [] ["ffast-math"]    (NoArg (set fast_math True))    "use faster, less accurate maths library operations"
   ]
 
 initialise :: IO Flags
 initialise = parse `fmap` getArgs
   where
-    defaults      = Flags False False False False False False
+    defaults      = Flags False False False False False False False
     parse         = foldl parse1 defaults
-    parse1 opts x = case filter (\(Option _ [f] _ _) -> x `isPrefixOf` ('-':f)) flags of
+    parse1 opts x = case filter (\(Option _ [f] _ _) -> x `isPrefixOf` ('-':f)) allFlags of
                       [Option _ _ (NoArg go) _] -> go opts
                       _                         -> opts         -- not specified, or ambiguous
 
