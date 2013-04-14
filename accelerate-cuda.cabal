@@ -165,25 +165,11 @@ Library
                         -Wall
                         -fwarn-tabs
 
-  Extensions:           BangPatterns,
-                        CPP,
-                        GADTs,
-                        FlexibleInstances,
-                        GADTs,
-                        GeneralizedNewtypeDeriving,
-                        IncoherentInstances,
-                        MultiParamTypeClasses,
-                        OverlappingInstances,
-                        PatternGuards,
-                        QuasiQuotes,
-                        RankNTypes,
-                        ScopedTypeVariables,
-                        TemplateHaskell,
-                        TupleSections,
-                        TypeFamilies,
-                        TypeOperators,
-                        TypeSynonymInstances,
-                        UndecidableInstances
+  -- Don't add the extensions list here. Instead, place individual LANGUAGE
+  -- pragmas in the files that require a specific extension. This means the
+  -- project loads in GHCi, and avoids extension clashes.
+  --
+  -- Extensions:
 
 source-repository head
   type:                 git
