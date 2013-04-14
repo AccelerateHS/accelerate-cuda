@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Async
 -- Copyright   : [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -11,6 +12,9 @@
 module Data.Array.Accelerate.CUDA.Async
   where
 
+#if !MIN_VERSION_base(4,6,0)
+import Prelude                                          hiding ( catch )
+#endif
 import Control.Exception
 import Control.Concurrent
 
