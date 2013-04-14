@@ -82,7 +82,9 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 
+#if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
+#endif
 
 #include "accelerate.h"
 
