@@ -31,6 +31,7 @@ import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
 
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 instance Hashable C.Exp where
@@ -57,6 +58,7 @@ data ExpST = ExpST
   { bindings    :: [C.BlockItem]
   , terms       :: !(HashSet C.Exp)
   , letterms    :: !(HashMap C.Exp C.Exp)
+    -- TODO: this should be a set of reverse dependencies: HashMap C.Exp [C.Exp]
   }
 
 
@@ -83,7 +85,7 @@ execCGM = fmap snd . runCGM
 -- binding expression. This will be used as a reverse lookup when marking terms
 -- as used.
 --
-pushEnv :: OpenExp env aenv t -> [C.Exp] -> Gen [C.Exp]
+pushEnv :: DelayedOpenExp env aenv t -> [C.Exp] -> Gen [C.Exp]
 pushEnv exp cs =
   case exp of
     Var _       -> return cs

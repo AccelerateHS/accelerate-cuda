@@ -1,4 +1,5 @@
-{-# LANGUAGE CPP, GADTs #-}
+{-# LANGUAGE CPP   #-}
+{-# LANGUAGE GADTs #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Analysis.Launch
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -18,6 +19,7 @@ module Data.Array.Accelerate.CUDA.Analysis.Launch (
 
 -- friends
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
 
@@ -39,13 +41,14 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 -- thread. Scan operations select the largest block size of maximum occupancy.
 --
 launchConfig
-    :: OpenAcc aenv a
+    :: DelayedOpenAcc aenv a
     -> CUDA.DeviceProperties    -- the device being executed on
     -> CUDA.Occupancy           -- kernel occupancy information
     -> ( Int                    -- block size
        , Int -> Int             -- number of blocks for input problem size (grid)
        , Int )                  -- shared memory (bytes)
-launchConfig (OpenAcc acc) dev occ =
+launchConfig Delayed{} _ _ = INTERNAL_ERROR(error) "launchConfig" "encountered delayed array"
+launchConfig (Manifest acc) dev occ =
   let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
       maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
       smem      = sharedMem dev acc cta
@@ -58,12 +61,13 @@ launchConfig (OpenAcc acc) dev occ =
 -- combination.
 --
 determineOccupancy
-    :: OpenAcc aenv a
+    :: DelayedOpenAcc aenv a
     -> CUDA.DeviceProperties
     -> CUDA.Fun                 -- corresponding __global__ entry function
     -> Int                      -- maximum number of threads per block
     -> IO CUDA.Occupancy
-determineOccupancy (OpenAcc acc) dev fn maxBlock = do
+determineOccupancy Delayed{} _ _ _ = INTERNAL_ERROR(error) "determineOccupancy" "encountered delayed array"
+determineOccupancy (Manifest acc) dev fn maxBlock = do
   registers     <- CUDA.requires fn CUDA.NumRegs
   static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
   return . snd  $  blockSize dev acc maxBlock registers (\threads -> static_smem + dynamic_smem threads)
@@ -79,7 +83,7 @@ determineOccupancy (OpenAcc acc) dev fn maxBlock = do
 --
 blockSize
     :: CUDA.DeviceProperties
-    -> PreOpenAcc OpenAcc aenv a
+    -> PreOpenAcc DelayedOpenAcc aenv a
     -> Int                      -- maximum number of threads per block
     -> Int                      -- number of registers used
     -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
@@ -112,14 +116,14 @@ blockSize dev acc lim regs smem =
 --  * fold: for multidimensional reductions, this is the size of the shape tail
 --          for 1D reductions this is the total number of elements
 --
-gridSize :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
+gridSize :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int -> Int
 gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
 gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
-gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim accDim acc == 0 then split acc size cta else max 1 size
-gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim accDim acc == 0 then split acc size cta else max 1 size
+gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim delayedDim acc == 0 then split acc size cta else max 1 size
+gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim delayedDim acc == 0 then split acc size cta else max 1 size
 gridSize _ acc                   size cta = split acc size cta
 
-split :: PreOpenAcc OpenAcc aenv a -> Int -> Int -> Int
+split :: acc aenv a -> Int -> Int -> Int
 split acc size cta = (size `between` eltsPerThread acc) `between` cta
   where
     between arr n   = 1 `max` ((n + arr - 1) `div` n)
@@ -131,7 +135,7 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 -- memory usage as a function of thread block size. This can be used by the
 -- occupancy calculator to optimise kernel launch shape.
 --
-sharedMem :: CUDA.DeviceProperties -> PreOpenAcc OpenAcc aenv a -> Int -> Int
+sharedMem :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int
 -- non-computation forms
 sharedMem _ (Alet _ _)      _   = INTERNAL_ERROR(error) "sharedMem" "Let"
 sharedMem _ (Avar _)        _   = INTERNAL_ERROR(error) "sharedMem" "Avar"
@@ -155,16 +159,16 @@ sharedMem _ (Permute _ _ _ _)    _        = 0
 sharedMem _ (Backpermute _ _ _)  _        = 0
 sharedMem _ (Stencil _ _ _)      _        = 0
 sharedMem _ (Stencil2 _ _ _ _ _) _        = 0
-sharedMem _ (Fold  _ _ a)        blockDim = sizeOf (accType a) * blockDim
-sharedMem _ (Fold1 _ a)          blockDim = sizeOf (accType a) * blockDim
-sharedMem _ (Scanl _ x _)        blockDim = sizeOf (expType x) * blockDim
-sharedMem _ (Scanr _ x _)        blockDim = sizeOf (expType x) * blockDim
-sharedMem _ (Scanl' _ x _)       blockDim = sizeOf (expType x) * blockDim
-sharedMem _ (Scanr' _ x _)       blockDim = sizeOf (expType x) * blockDim
-sharedMem _ (Scanl1 _ a)         blockDim = sizeOf (accType a) * blockDim
-sharedMem _ (Scanr1 _ a)         blockDim = sizeOf (accType a) * blockDim
-sharedMem p (FoldSeg _ _ a _)    blockDim =
-  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)  -- TLM: why 8? I can't remember...
+sharedMem _ (Fold  _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanl _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanr _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanl' _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanr' _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Fold1 _ a)          blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem _ (Scanl1 _ a)         blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem _ (Scanr1 _ a)         blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem p (FoldSeg _ x _ _)    blockDim =
+  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedExpType x)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
-  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (accType a)
+  (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
 

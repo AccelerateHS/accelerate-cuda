@@ -67,6 +67,7 @@ import Prelude                                          hiding ( catch )
 #endif
 import Control.Exception
 import Control.Applicative
+import Control.Monad.Trans
 import System.IO.Unsafe
 import Foreign.CUDA.Driver.Error
 
@@ -80,6 +81,8 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
+
+import Data.Array.Accelerate.Debug
 
 #include "accelerate.h"
 
@@ -143,7 +146,7 @@ runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
   where
     !acc    = convertAccWith config a
-    execute = evalCUDA ctx (compileAcc acc >>= executeAcc >>= collect)
+    execute = evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
               `catch`
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
@@ -189,7 +192,7 @@ run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
     !acc      = convertAccFun1With config f
-    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc)
+    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc) >>= dumpStats
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
                 \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
@@ -237,4 +240,16 @@ config =  Phase
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
   }
+
+
+dumpStats :: MonadIO m => a -> m a
+#if ACCELERATE_DEBUG
+dumpStats next = do
+  stats <- liftIO simplCount
+  liftIO $ traceMessage dump_simpl_stats (show stats)
+  liftIO $ resetSimplCount
+  return next
+#else
+dumpStats next = return next
+#endif
 

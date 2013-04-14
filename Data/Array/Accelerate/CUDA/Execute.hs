@@ -117,6 +117,8 @@ executeOpenAcc
        ExecOpenAcc aenv arrs
     -> Val aenv
     -> CIO arrs
+executeOpenAcc EmbedAcc{} _
+  = INTERNAL_ERROR(error) "execute" "unexpected delayed array"
 executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
   = case pacc of
 
@@ -176,17 +178,10 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     travT NilAtup          = return ()
     travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
 
-    -- get the extent of a fused array
+    -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent (ExecAcc _ _ acc)
-      = case acc of
-          Avar ix               -> return $! shape (prj ix aenv)
-          Map _ a               -> extent a     -- must be an Avar
-          Generate sh _         -> travE sh
-          Backpermute sh _ _    -> travE sh
-          Transform sh _ _ _    -> travE sh
-          _                     -> fusionError
-
+    extent ExecAcc{}     = INTERNAL_ERROR(error) "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
     -- -----------------------

@@ -27,8 +27,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type (
 ) where
 
 -- friends
-import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Trafo
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 
@@ -49,13 +49,14 @@ typename name = [cty| typename $id:name |]
 -- Surface element types
 -- ---------------------
 
-accType :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-accType =  codegenTupleType . Sugar.accType
 
-expType :: OpenExp aenv env t -> [C.Type]
-expType =  codegenTupleType . Sugar.expType
+accType :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+accType = codegenTupleType . Sugar.delayedAccType
 
-segmentsType :: OpenAcc aenv (Sugar.Segments i) -> C.Type
+expType :: DelayedOpenExp aenv env t -> [C.Type]
+expType = codegenTupleType . Sugar.preExpType Sugar.delayedAccType
+
+segmentsType :: DelayedOpenAcc aenv (Sugar.Segments i) -> C.Type
 segmentsType seg
   | [s] <- accType seg  = s
   | otherwise           = INTERNAL_ERROR(error) "accType" "non-scalar segment type"
@@ -152,8 +153,8 @@ codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
 -- Texture types
 -- -------------
 
-accTypeTex :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-accTypeTex = codegenTupleTex . Sugar.accType
+accTypeTex :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+accTypeTex = codegenTupleTex . Sugar.delayedAccType
 
 
 -- Implementation

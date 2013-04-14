@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
 -- |
@@ -24,7 +25,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.CodeGen
@@ -89,29 +90,33 @@ import Paths_accelerate_cuda                                    ( getDataDir )
 --
 --   * kernel object(s) required to executed the kernel
 --
-compileAcc :: Acc a -> CIO (ExecAcc a)
+compileAcc :: DelayedAcc a -> CIO (ExecAcc a)
 compileAcc = prepareOpenAcc
 
-compileAfun :: Afun f -> CIO (ExecAfun f)
+compileAfun :: DelayedAfun f -> CIO (ExecAfun f)
 compileAfun = prepareOpenAfun
 
 
-prepareOpenAfun :: OpenAfun aenv f -> CIO (PreOpenAfun ExecOpenAcc aenv f)
+prepareOpenAfun :: DelayedOpenAfun aenv f -> CIO (PreOpenAfun ExecOpenAcc aenv f)
 prepareOpenAfun (Alam l)  = Alam  <$> prepareOpenAfun l
 prepareOpenAfun (Abody b) = Abody <$> prepareOpenAcc b
 
 
-prepareOpenAcc :: OpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-prepareOpenAcc rootAcc = traverseAcc rootAcc
+prepareOpenAcc :: DelayedOpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
+prepareOpenAcc = traverseAcc
   where
-    -- Traverse an open array expression in depth-first order
+    -- Traverse an open array expression in depth-first order. The top-level
+    -- function traverseAcc is intended for manifest arrays that we will
+    -- generate CUDA code for. Array valued subterms, which might be manifest or
+    -- delayed, are handled separately.
     --
     -- The applicative combinators are used to gloss over that we are passing
     -- around the AST nodes together with a set of free variable indices that
     -- are merged at every step.
     --
-    traverseAcc :: forall aenv arrs. OpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
-    traverseAcc acc@(OpenAcc pacc) =
+    traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
+    traverseAcc Delayed{} = INTERNAL_ERROR(error) "prepareOpenAcc" "unexpected delayed array"
+    traverseAcc topAcc@(Manifest pacc) =
       case pacc of
         -- Environment and control flow
         Avar ix                 -> node $ pure (Avar ix)
@@ -132,26 +137,26 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
         Replicate slix e a      -> exec =<< liftA2 (Replicate slix)     <$> travE e <*> travA a
         Slice slix a e          -> exec =<< liftA2 (Slice slix)         <$> travA a <*> travE e
-        Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travD a
+        Backpermute e f a       -> exec =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travA a
 
         -- Producers
         Generate e f            -> exec =<< liftA2 Generate             <$> travE e <*> travF f
-        Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travD a
-        ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travD a <*> travD b
-        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travD a
+        Map f a                 -> exec =<< liftA2 Map                  <$> travF f <*> travA a
+        ZipWith f a b           -> exec =<< liftA3 ZipWith              <$> travF f <*> travA a <*> travA b
+        Transform e p f a       -> exec =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travA a
 
         -- Consumers
-        Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travD a
-        Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travD a
-        FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travD a <*> travD s
-        Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travD a <*> travD s
-        Scanl f e a             -> exec =<< liftA3 Scanl                <$> travF f <*> travE e <*> travD a
-        Scanl' f e a            -> exec =<< liftA3 Scanl'               <$> travF f <*> travE e <*> travD a
-        Scanl1 f a              -> exec =<< liftA2 Scanl1               <$> travF f <*> travD a
-        Scanr f e a             -> exec =<< liftA3 Scanr                <$> travF f <*> travE e <*> travD a
-        Scanr' f e a            -> exec =<< liftA3 Scanr'               <$> travF f <*> travE e <*> travD a
-        Scanr1 f a              -> exec =<< liftA2 Scanr1               <$> travF f <*> travD a
-        Permute f d g a         -> exec =<< liftA4 Permute              <$> travF f <*> travA d <*> travF g <*> travD a
+        Fold f z a              -> exec =<< liftA3 Fold                 <$> travF f <*> travE z <*> travA a
+        Fold1 f a               -> exec =<< liftA2 Fold1                <$> travF f <*> travA a
+        FoldSeg f e a s         -> exec =<< liftA4 FoldSeg              <$> travF f <*> travE e <*> travA a <*> travA s
+        Fold1Seg f a s          -> exec =<< liftA3 Fold1Seg             <$> travF f <*> travA a <*> travA s
+        Scanl f e a             -> exec =<< liftA3 Scanl                <$> travF f <*> travE e <*> travA a
+        Scanl' f e a            -> exec =<< liftA3 Scanl'               <$> travF f <*> travE e <*> travA a
+        Scanl1 f a              -> exec =<< liftA2 Scanl1               <$> travF f <*> travA a
+        Scanr f e a             -> exec =<< liftA3 Scanr                <$> travF f <*> travE e <*> travA a
+        Scanr' f e a            -> exec =<< liftA3 Scanr'               <$> travF f <*> travE e <*> travA a
+        Scanr1 f a              -> exec =<< liftA2 Scanr1               <$> travF f <*> travA a
+        Permute f d g a         -> exec =<< liftA4 Permute              <$> travF f <*> travA d <*> travF g <*> travA a
         Stencil f b a           -> exec =<< liftA2 (flip Stencil b)     <$> travF f <*> travA a
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
@@ -164,7 +169,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
 
         exec :: (Gamma aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
         exec (aenv, eacc) = do
-          kernel <- build acc aenv
+          kernel <- build topAcc aenv
           return $! ExecAcc (fullOfList kernel) aenv eacc
 
         node :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (ExecOpenAcc aenv' arrs')
@@ -173,24 +178,16 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         wrap :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (Gamma aenv', ExecOpenAcc aenv' arrs')
         wrap = return . liftA (ExecAcc noKernel mempty)
 
-        travA :: OpenAcc aenv' a' -> CIO (Gamma aenv', ExecOpenAcc aenv' a')
-        travA a = pure <$> traverseAcc a
+        travA :: DelayedOpenAcc aenv a -> CIO (Gamma aenv, ExecOpenAcc aenv a)
+        travA acc = case acc of
+          Manifest{}    -> pure           <$> traverseAcc acc
+          Delayed{..}   -> liftA EmbedAcc <$> travE extentD <* travF indexD
 
-        travD :: (Shape sh, Elt e) => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
-        travD (OpenAcc delayed) =
-          case delayed of
-            Avar ix             -> wrap (freevar ix, Avar ix)
-            Map f a             -> wrap =<< liftA2 Map                  <$> travF f <*> travD a
-            Generate e f        -> wrap =<< liftA2 Generate             <$> travE e <*> travF f
-            Backpermute e f a   -> wrap =<< liftA3 Backpermute          <$> travE e <*> travF f <*> travD a
-            Transform e p f a   -> wrap =<< liftA4 Transform            <$> travE e <*> travF p <*> travF f <*> travD a
-            _                   -> INTERNAL_ERROR(error) "compile" "expected fused/delayable array"
-
-        travAtup :: Atuple (OpenAcc aenv) a -> CIO (Gamma aenv, Atuple (ExecOpenAcc aenv) a)
+        travAtup :: Atuple (DelayedOpenAcc aenv) a -> CIO (Gamma aenv, Atuple (ExecOpenAcc aenv) a)
         travAtup NilAtup        = return (pure NilAtup)
         travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
 
-        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: DelayedOpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
@@ -205,7 +202,11 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
         -- If it is a foreign call for the CUDA backend, don't bother compiling
         -- the pure version
         --
-        foreignA :: (Arrays a, Arrays r, Foreign f) => f a r -> Afun (a -> r) -> OpenAcc aenv' a -> CIO (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' r)
+        foreignA :: (Arrays a, Arrays r, Foreign f)
+                 => f a r
+                 -> DelayedAfun (a -> r)
+                 -> DelayedOpenAcc aenv a
+                 -> CIO (Gamma aenv, PreOpenAcc ExecOpenAcc aenv r)
         foreignA ff afun a = case canExecute ff of
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
@@ -214,7 +215,7 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
 
     -- Traverse a scalar expression
     --
-    travE :: OpenExp env aenv e
+    travE :: DelayedOpenExp env aenv e
           -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv e)
     travE exp =
       case exp of
@@ -247,22 +248,26 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
 
       where
         travA :: (Shape sh, Elt e)
-              => OpenAcc aenv (Array sh e) -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
+              => DelayedOpenAcc aenv (Array sh e)
+              -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
 
-        travT :: Tuple (OpenExp env aenv) t
+        travT :: Tuple (DelayedOpenExp env aenv) t
               -> CIO (Gamma aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
         travT NilTup        = return (pure NilTup)
         travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
 
-        travF :: OpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: DelayedOpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
         foreignE :: (Elt a, Elt b, Foreign f)
-                 => f a b -> Fun () (a -> b) -> OpenExp env aenv a -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv b)
+                 => f a b
+                 -> DelayedFun () (a -> b)
+                 -> DelayedOpenExp env aenv a
+                 -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv b)
         foreignE ff f x = case canExecuteExp ff of
           -- If it's a foreign function that we can generate code from, just
           -- leave it alone. As the pure function is closed, gamma needs to be
@@ -279,8 +284,8 @@ prepareOpenAcc rootAcc = traverseAcc rootAcc
             where
               -- Twiddle the environment variables
               --
-              apply :: Fun () (a -> b) -> OpenExp env aenv a -> OpenExp env aenv b
-              apply (Lam (Body b)) e    = Let e $ weakenEA rebuildOpenAcc wAcc $ weakenE wExp b
+              apply :: DelayedFun () (a -> b) -> DelayedOpenExp env aenv a -> DelayedOpenExp env aenv b
+              apply (Lam (Body b)) e    = Let e $ weakenEA rebuildAcc wAcc $ weakenE wExp b
               apply _ _                 = error "This was a triumph."
 
               -- As the expression we want to weaken is closed with respect to the array
@@ -313,12 +318,12 @@ liftA4 f a b c d = f <$> a <*> b <*> c <*> d
 -- evaluates and blocks on the external compiler only once the compiled object
 -- is truly needed.
 --
-build :: OpenAcc aenv a -> Gamma aenv -> CIO [AccKernel a]
+build :: DelayedOpenAcc aenv a -> Gamma aenv -> CIO [AccKernel a]
 build acc aenv = do
   dev   <- asks deviceProperties
   mapM (build1 acc) (codegenAcc dev acc aenv)
 
-build1 :: OpenAcc aenv a -> CUTranslSkel aenv a -> CIO (AccKernel a)
+build1 :: DelayedOpenAcc aenv a -> CUTranslSkel aenv a -> CIO (AccKernel a)
 build1 acc code = do
   dev           <- asks deviceProperties
   table         <- gets kernelTable

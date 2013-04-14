@@ -86,10 +86,14 @@ instance Hashable (Idx_ aenv) where
 -- computation AST
 --
 data ExecOpenAcc aenv a where
-  ExecAcc :: {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
-          -> !(Gamma aenv)                                      -- free array variables the kernel needs access to
-          -> !(PreOpenAcc ExecOpenAcc aenv a)                   -- the actual computation
-          -> ExecOpenAcc aenv a                                 -- the recursive knot
+  ExecAcc   :: {-# UNPACK #-} !(FL.FullList () (AccKernel a))   -- executable binary objects
+            -> !(Gamma aenv)                                    -- free array variables the kernel needs access to
+            -> !(PreOpenAcc ExecOpenAcc aenv a)                 -- the actual computation
+            -> ExecOpenAcc aenv a                               -- the recursive knot
+
+  EmbedAcc  :: (Shape sh, Elt e)
+            => !(PreExp ExecOpenAcc aenv sh)                    -- shape of the result array, used by execution
+            -> ExecOpenAcc aenv (Array sh e)
 
 
 -- An annotated AST suitable for execution in the CUDA environment
@@ -118,17 +122,24 @@ prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
 prettyExecAcc :: PrettyAcc ExecOpenAcc
-prettyExecAcc alvl wrap (ExecAcc _ (Gamma fv) pacc) =
-  let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
-      ann       = braces (freevars (Set.toList fv))
-      freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
-                                  . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
-  in case pacc of
-       Avar _         -> base
-       Alet  _ _      -> base
-       Apply _ _      -> base
-       Acond _ _ _    -> base
-       Atuple _       -> base
-       Aprj _ _       -> base
-       _              -> ann <+> base
+prettyExecAcc alvl wrap exec =
+  case exec of
+    EmbedAcc sh ->
+      wrap $ hang (text "Embedded") 2
+           $ sep [ prettyPreExp prettyExecAcc 0 alvl parens sh ]
+
+    ExecAcc _ (Gamma fv) pacc ->
+      let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
+          ann       = braces (freevars (Set.toList fv))
+          freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
+                                      . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
+      in
+      case pacc of
+        Avar{}          -> base
+        Alet{}          -> base
+        Apply{}         -> base
+        Acond{}         -> base
+        Atuple{}        -> base
+        Aprj{}          -> base
+        _               -> ann <+> base
 
