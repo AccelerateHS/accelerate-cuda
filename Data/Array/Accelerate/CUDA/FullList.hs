@@ -70,7 +70,8 @@ lookup :: Eq k => k -> FullList k v -> Maybe v
 lookup key (FL k v xs)
   | key == k    = Just v
   | otherwise   = lookupL key xs
-{-# INLINABLE lookup #-}
+{-# INLINABLE  lookup #-}
+{-# SPECIALISE lookup :: () -> FullList () v -> Maybe v #-}
 
 lookupL :: Eq k => k -> List k v -> Maybe v
 lookupL !key = go
@@ -79,7 +80,8 @@ lookupL !key = go
     go (Cons k v xs)
       | key == k        = Just v
       | otherwise       = go xs
-{-# INLINABLE lookupL #-}
+{-# INLINABLE  lookupL #-}
+{-# SPECIALISE lookupL :: () -> List () v -> Maybe v #-}
 
 lookupDelete :: Eq k => k -> FullList k v -> (Maybe v, Maybe (FullList k v))
 lookupDelete key (FL k v xs)
@@ -90,7 +92,8 @@ lookupDelete key (FL k v xs)
 
   | (r, xs') <- lookupDeleteL k xs
   = (r, Just $ FL k v xs')
-{-# INLINABLE lookupDelete #-}
+{-# INLINABLE  lookupDelete #-}
+{-# SPECIALISE lookupDelete :: () -> FullList () v -> (Maybe v, Maybe (FullList () v)) #-}
 
 lookupDeleteL :: Eq k => k -> List k v -> (Maybe v, List k v)
 lookupDeleteL !key = go
@@ -99,7 +102,8 @@ lookupDeleteL !key = go
     go (Cons k v xs)
       | key == k                = (Just v, xs)
       | (r, xs') <- go xs       = (r,      Cons k v xs')
-{-# INLINABLE lookupDeleteL #-}
+{-# INLINABLE  lookupDeleteL #-}
+{-# SPECIALISE lookupDeleteL :: () -> List () v -> (Maybe v, List () v) #-}
 
 mapM_ :: Monad m => (k -> v -> m a) -> FullList k v -> m ()
 mapM_ !f (FL k v xs) = f k v >> mapML_ f xs
