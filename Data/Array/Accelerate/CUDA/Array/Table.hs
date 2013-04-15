@@ -27,6 +27,7 @@ import Data.Maybe                                               ( isJust )
 import Data.Hashable                                            ( Hashable(..) )
 import Data.Typeable                                            ( Typeable, gcast )
 import Control.Monad                                            ( unless )
+import Control.Concurrent                                       ( yield )
 import Control.Exception                                        ( bracket_, catch, throwIO )
 import Control.Applicative                                      ( (<$>) )
 import System.Mem                                               ( performGC )
@@ -178,6 +179,7 @@ reclaim :: MemoryTable -> IO ()
 reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
   (free, total) <- CUDA.getMemInfo
   performGC
+  yield
   withIORef nrs N.flush
   mr <- deRefWeak weak_ref
   case mr of
