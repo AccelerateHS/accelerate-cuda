@@ -40,12 +40,10 @@ import Data.Maybe
 import Data.Functor
 import Data.Typeable
 import Control.Monad
-import Control.Exception
 import System.Mem.StableName
 import Foreign.Ptr
 import Foreign.Storable
-import Foreign.Marshal.Alloc
-import Foreign.CUDA.Driver.Error
+import Foreign.Marshal.Alloc                            ( alloca )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
@@ -178,15 +176,13 @@ mallocArray
     -> Int
     -> IO ()
 mallocArray !ctx !mt !ad !n0 = do
-  let !n = 1 `max` n0
+  let !n        = 1 `max` n0
+      !bytes    = n * sizeOf (undefined :: a)
   exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
-    message $ "mallocArray: " ++ showBytes (n * sizeOf (undefined::a))
-    ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-      case e of
-        ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-        _                    -> throwIO e
-    insert ctx mt ad (ptr :: CUDA.DevicePtr a)
+    message $ "mallocArray: " ++ showBytes bytes
+    ptr <- malloc ctx mt n      :: IO (CUDA.DevicePtr a)
+    insert ctx mt ad ptr bytes
 
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
@@ -201,18 +197,16 @@ useArray
     -> Int
     -> IO ()
 useArray !ctx !mt !ad !n0 =
-  let src = ptrsOfArrayData ad
-      !n  = 1 `max` n0
+  let src    = ptrsOfArrayData ad
+      !n     = 1 `max` n0
+      !bytes = n * sizeOf (undefined :: a)
   in do
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArray/malloc: " ++ showBytes (n * sizeOf (undefined::a))
-      dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-        case e of
-          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-          _                    -> throwIO e
+      message $ "useArray/malloc: " ++ showBytes bytes
+      dst <- malloc ctx mt n
       CUDA.pokeArray n src dst
-      insert ctx mt ad dst
+      insert ctx mt ad dst bytes
 
 
 useArrayAsync
@@ -224,18 +218,16 @@ useArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 useArrayAsync !ctx !mt !ad !n0 !ms =
-  let src = CUDA.HostPtr (ptrsOfArrayData ad)
-      !n  = 1 `max` n0
+  let src    = CUDA.HostPtr (ptrsOfArrayData ad)
+      !n     = 1 `max` n0
+      !bytes = n * sizeOf (undefined :: a)
   in do
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArrayAsync/malloc: " ++ showBytes (n * sizeOf (undefined::a))
-      dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-        case e of
-          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-          _                    -> throwIO e
+      message $ "useArrayAsync/malloc: " ++ showBytes bytes
+      dst <- malloc ctx mt n
       CUDA.pokeArrayAsync n src dst ms
-      insert ctx mt ad dst
+      insert ctx mt ad dst bytes
 
 
 -- Read a single element from an array at the given row-major index

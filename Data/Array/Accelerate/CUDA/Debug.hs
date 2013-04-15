@@ -21,7 +21,7 @@ module Data.Array.Accelerate.CUDA.Debug (
 
   showFFloatSIBase,
 
-  message, event, when, unless, mode,
+  message, trace, event, when, unless, mode,
   verbose, flush_cache,
   dump_gc, dump_cc, debug_cc, dump_exec,
 
@@ -140,6 +140,15 @@ event f str = when f (liftIO $ traceEventIO str)
 #else
 event _ _   = return ()
 #endif
+
+{-# INLINE trace #-}
+trace :: (Flags :-> Bool) -> String -> a -> a
+#ifdef ACCELERATE_DEBUG
+trace f str next = unsafePerformIO (message f str) `seq` next
+#else
+trace _ _   next = next
+#endif
+
 
 {-# INLINE when #-}
 when :: MonadIO m => (Flags :-> Bool) -> m () -> m ()

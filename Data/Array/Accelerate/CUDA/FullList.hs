@@ -1,4 +1,5 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns  #-}
+{-# LANGUAGE PatternGuards #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.FullList
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -21,11 +22,13 @@ module Data.Array.Accelerate.CUDA.FullList (
   singleton,
   cons,
   size,
-  lookup
+  mapM_,
+  lookup,
+  lookupDelete,
 
 ) where
 
-import Prelude                  hiding ( lookup )
+import Prelude                  hiding ( lookup, mapM_ )
 
 
 data FullList k v = FL !k v !(List k v)
@@ -77,4 +80,35 @@ lookupL !key = go
       | key == k        = Just v
       | otherwise       = go xs
 {-# INLINABLE lookupL #-}
+
+lookupDelete :: Eq k => k -> FullList k v -> (Maybe v, Maybe (FullList k v))
+lookupDelete key (FL k v xs)
+  | key == k
+  = case xs of
+      Nil               -> (Just v, Nothing)
+      Cons k' v' xs'    -> (Just v, Just $ FL k' v' xs')
+
+  | (r, xs') <- lookupDeleteL k xs
+  = (r, Just $ FL k v xs')
+{-# INLINABLE lookupDelete #-}
+
+lookupDeleteL :: Eq k => k -> List k v -> (Maybe v, List k v)
+lookupDeleteL !key = go
+  where
+    go Nil                      = (Nothing, Nil)
+    go (Cons k v xs)
+      | key == k                = (Just v, xs)
+      | (r, xs') <- go xs       = (r,      Cons k v xs')
+{-# INLINABLE lookupDeleteL #-}
+
+mapM_ :: Monad m => (k -> v -> m a) -> FullList k v -> m ()
+mapM_ !f (FL k v xs) = f k v >> mapML_ f xs
+{-# INLINABLE mapM_ #-}
+
+mapML_ :: Monad m => (k -> v -> m a) -> List k v -> m ()
+mapML_ !f = go
+  where
+    go Nil              = return ()
+    go (Cons k v xs)    = f k v >> go xs
+{-# INLINABLE mapML_ #-}
 

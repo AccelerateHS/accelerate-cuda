@@ -1,7 +1,8 @@
-{-# LANGUAGE BangPatterns  #-}
-{-# LANGUAGE CPP           #-}
-{-# LANGUAGE GADTs         #-}
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE PatternGuards       #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Table
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -16,30 +17,34 @@
 module Data.Array.Accelerate.CUDA.Array.Table (
 
   -- Tables for host/device memory associations
-  MemoryTable, new, lookup, insert, reclaim
+  MemoryTable, new, lookup, malloc, insert, reclaim
 
 ) where
 
-import Prelude                                          hiding ( lookup )
-import Data.IORef                                       ( IORef, newIORef, readIORef, mkWeakIORef )
-import Data.Maybe                                       ( isJust )
-import Data.Hashable                                    ( Hashable(..) )
-import Data.Typeable                                    ( Typeable, gcast )
-import Control.Monad                                    ( unless )
-import Control.Exception                                ( bracket_ )
-import Control.Applicative                              ( (<$>) )
-import System.Mem                                       ( performGC )
-import System.Mem.Weak                                  ( Weak, mkWeak, deRefWeak, finalize )
-import System.Mem.StableName                            ( StableName, makeStableName, hashStableName )
-import Foreign.Ptr                                      ( ptrToIntPtr )
-import Foreign.CUDA.Ptr                                 ( DevicePtr )
+import Prelude                                                  hiding ( lookup )
+import Data.IORef                                               ( IORef, newIORef, readIORef, mkWeakIORef )
+import Data.Maybe                                               ( isJust )
+import Data.Hashable                                            ( Hashable(..) )
+import Data.Typeable                                            ( Typeable, gcast )
+import Control.Monad                                            ( unless )
+import Control.Exception                                        ( bracket_, catch, throwIO )
+import Control.Applicative                                      ( (<$>) )
+import System.Mem                                               ( performGC )
+import System.Mem.Weak                                          ( Weak, mkWeak, deRefWeak, finalize )
+import System.Mem.StableName                                    ( StableName, makeStableName, hashStableName )
+import Foreign.Ptr                                              ( ptrToIntPtr )
+import Foreign.Storable                                         ( Storable, sizeOf )
+import Foreign.CUDA.Ptr                                         ( DevicePtr )
 
-import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Data.HashTable.IO                      as HT
+import Foreign.CUDA.Driver.Error
+import qualified Foreign.CUDA.Driver                            as CUDA
+import qualified Data.HashTable.IO                              as HT
 
-import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.Array.Data                 ( ArrayData )
-import qualified Data.Array.Accelerate.CUDA.Debug       as D
+import Data.Array.Accelerate.Array.Data                         ( ArrayData )
+import Data.Array.Accelerate.CUDA.Context                       ( Context, weakContext, deviceContext )
+import Data.Array.Accelerate.CUDA.Array.Nursery                 ( Nursery(..), NRS )
+import qualified Data.Array.Accelerate.CUDA.Array.Nursery       as N
+import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 #include "accelerate.h"
 
@@ -61,6 +66,7 @@ type HashTable key val  = HT.BasicHashTable key val
 type MT                 = IORef ( HashTable HostArray DeviceArray )
 data MemoryTable        = MemoryTable {-# UNPACK #-} !MT
                                       {-# UNPACK #-} !(Weak MT)
+                                      {-# UNPACK #-} !Nursery
 
 -- Arrays on the host and device
 --
@@ -97,14 +103,15 @@ new :: IO MemoryTable
 new = do
   tbl  <- HT.new
   ref  <- newIORef tbl
+  nrs  <- N.new
   weak <- mkWeakIORef ref (table_finalizer tbl)
-  return $! MemoryTable ref weak
+  return $! MemoryTable ref weak nrs
 
 
 -- Look for the device memory corresponding to a given host-side array.
 --
 lookup :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
-lookup ctx (MemoryTable !ref _) !arr = do
+lookup ctx (MemoryTable !ref _ _) !arr = do
   sa <- makeStableArray ctx arr
   mw <- withIORef ref (`HT.lookup` sa)
   case mw of
@@ -118,13 +125,31 @@ lookup ctx (MemoryTable !ref _) !arr = do
           makeStableArray ctx arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
 
 
+-- Allocate a new array to store a number of elements of a given type. This
+-- might be able to take an old unused array from the nursery, but will
+-- otherwise allocate fresh data.
+--
+malloc :: forall e. Storable e => Context -> MemoryTable -> Int -> IO (DevicePtr e)
+malloc !ctx mt@(MemoryTable _ _ !nursery) n = do
+  let !bytes = n * sizeOf (undefined :: e)
+  --
+  mp <- N.lookup bytes (deviceContext ctx) nursery
+  case mp of
+    Just ptr    -> trace "malloc/nursery" $ return (CUDA.castDevPtr ptr)
+    Nothing     -> trace "malloc/new" $
+      CUDA.mallocArray n `catch` \(e :: CUDAException) ->
+        case e of
+          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
+          _                    -> throwIO e
+
+
 -- Record an association between a host-side array and a new device memory area.
 -- The device memory will be freed when the host array is garbage collected.
 --
-insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
-insert !ctx (MemoryTable !ref !weak_ref) !arr !ptr = do
+insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> Int -> IO ()
+insert !ctx (MemoryTable !ref !weak_ref (Nursery _ !weak_nrs)) !arr !ptr !bytes = do
   key  <- makeStableArray ctx arr
-  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer (weakContext ctx) weak_ref key ptr)
+  dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer (weakContext ctx) weak_ref weak_nrs key ptr bytes)
   tbl  <- readIORef ref
   message $ "insert: " ++ show key
   HT.insert tbl key dev
@@ -137,9 +162,10 @@ insert !ctx (MemoryTable !ref !weak_ref) !arr !ptr = do
 -- unreachable.
 --
 reclaim :: MemoryTable -> IO ()
-reclaim (MemoryTable _ weak_ref) = do
+reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
   (free, total) <- CUDA.getMemInfo
   performGC
+  N.flush nrs
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> return ()
@@ -163,8 +189,8 @@ reclaim (MemoryTable _ weak_ref) = do
 -- the hash tables --- but we must do this first before failing to use a dead
 -- context.
 --
-finalizer :: Weak CUDA.Context -> Weak MT -> HostArray -> DevicePtr b -> IO ()
-finalizer !weak_ctx !weak_ref !key !ptr = do
+finalizer :: Weak CUDA.Context -> Weak MT -> Weak NRS -> HostArray -> DevicePtr b -> Int -> IO ()
+finalizer !weak_ctx !weak_ref !weak_nrs !key !ptr !bytes = do
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> message ("finalise/dead table: " ++ show key)
@@ -173,7 +199,12 @@ finalizer !weak_ctx !weak_ref !key !ptr = do
   mc <- deRefWeak weak_ctx
   case mc of
     Nothing  -> message ("finalise/dead context: " ++ show key)
-    Just ctx -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
+    Just ctx -> do
+      --
+      mn <- deRefWeak weak_nrs
+      case mn of
+        Nothing  -> trace ("finalise/dead nursery: " ++ show key) $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
+        Just nrs -> trace ("finalise/nursery: "      ++ show key) $ N.insert bytes ctx nrs ptr
 
 
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()

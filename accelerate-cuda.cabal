@@ -93,6 +93,7 @@ Library
                         base                    == 4.*,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
+                        containers              >= 0.5,
                         cryptohash              >= 0.7,
                         cuda                    >= 0.5.0.2,
                         directory               >= 1.0,
@@ -126,6 +127,7 @@ Library
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
                         Data.Array.Accelerate.CUDA.Array.Data
+                        Data.Array.Accelerate.CUDA.Array.Nursery
                         Data.Array.Accelerate.CUDA.Array.Prim
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
