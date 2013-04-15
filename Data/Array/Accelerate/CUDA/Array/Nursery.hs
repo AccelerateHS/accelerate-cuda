@@ -18,20 +18,21 @@ module Data.Array.Accelerate.CUDA.Array.Nursery (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.FullList              ( FullList )
-import qualified Data.Array.Accelerate.CUDA.FullList    as FL
-import qualified Data.Array.Accelerate.CUDA.Debug       as D
+import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..) )
+import qualified Data.Array.Accelerate.CUDA.FullList            as FL
+import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
-import Prelude                                          hiding ( lookup )
+import Prelude                                                  hiding ( lookup )
 import Data.IORef
-import Data.IntMap                                      ( IntMap )
-import Control.Exception                                ( bracket_ )
-import System.Mem.Weak                                  ( Weak )
-import Foreign.CUDA.Ptr                                 ( DevicePtr )
+import Data.Hashable
+import Control.Exception                                        ( bracket_ )
+import System.Mem.Weak                                          ( Weak )
+import Foreign.Ptr                                              ( ptrToIntPtr )
+import Foreign.CUDA.Ptr                                         ( DevicePtr )
 
-import qualified Foreign.CUDA.Driver                    as CUDA
-import qualified Data.IntMap.Strict                     as IM
+import qualified Foreign.CUDA.Driver                            as CUDA
+import qualified Data.HashTable.IO                              as HT
 
 
 -- The nursery is a place to store device memory arrays that are no longer
@@ -45,19 +46,24 @@ import qualified Data.IntMap.Strict                     as IM
 -- Note that since there might be many arrays for the same size, each entry in
 -- the map keeps a (non-empty) list of device pointers.
 --
+type HashTable key val  = HT.BasicHashTable key val
 
-type NRS        = IORef ( IntMap (FullList CUDA.Context (DevicePtr ())) )
-data Nursery    = Nursery {-# UNPACK #-} !NRS
-                          {-# UNPACK #-} !(Weak NRS)
+type NRS                = IORef ( HashTable (CUDA.Context, Int) (FullList () (DevicePtr ())) )
+data Nursery            = Nursery {-# UNPACK #-} !NRS
+                                  {-# UNPACK #-} !(Weak NRS)
+
+instance Hashable CUDA.Context where
+  {-# INLINE hashWithSalt #-}
+  hashWithSalt s (CUDA.Context ctx) = hashWithSalt s (fromIntegral (ptrToIntPtr ctx) :: Int)
 
 
 -- Generate a fresh nursery
 --
 new :: IO Nursery
 new = do
-  let nrs = IM.empty
-  ref    <- newIORef nrs
-  weak   <- nrs `seq` mkWeakIORef ref (flush ref)
+  tbl    <- HT.new
+  ref    <- newIORef tbl
+  weak   <- mkWeakIORef ref (flush tbl)
   return $! Nursery ref weak
 
 
@@ -67,35 +73,42 @@ new = do
 --
 {-# INLINE lookup #-}
 lookup :: Int -> CUDA.Context -> Nursery -> IO (Maybe (DevicePtr ()))
-lookup !n !ctx (Nursery !ref _) =
-  atomicModifyIORef' ref $ \nrs ->
-    let go ps = FL.lookupDelete ctx ps
-    in
-    case IM.updateLookupWithKey (const (snd . go)) n nrs of
-      (Nothing, nrs') -> (nrs', Nothing)
-      (Just ps, nrs') -> (nrs', fst (go ps))
+lookup !n !ctx (Nursery !ref _) = do
+  let !key = (ctx,n)
+  --
+  tbl <- readIORef ref
+  mp  <- HT.lookup tbl key
+  case mp of
+    Nothing               -> return Nothing
+    Just (FL () ptr rest) ->
+      case rest of
+        FL.Nil          -> HT.delete tbl key              >> return (Just ptr)
+        FL.Cons () v xs -> HT.insert tbl key (FL () v xs) >> return (Just ptr)
 
 
 -- Add a device pointer to the nursery.
 --
 {-# INLINE insert #-}
 insert :: Int -> CUDA.Context -> NRS -> DevicePtr a -> IO ()
-insert !n !ctx !ref (CUDA.castDevPtr -> !ptr) =
-  let
-      f Nothing   = Just $ FL.singleton ctx ptr
-      f (Just xs) = Just $ FL.cons ctx ptr xs
-  in
-  modifyIORef' ref (IM.alter f n)
+insert !n !ctx !ref (CUDA.castDevPtr -> !ptr) = do
+  let !key = (ctx, n)
+  --
+  tbl <- readIORef ref
+  mp  <- HT.lookup tbl key
+  case mp of
+    Nothing     -> HT.insert tbl key (FL.singleton () ptr)
+    Just xs     -> HT.insert tbl key (FL.cons () ptr xs)
 
 
 -- Delete all entries from the nursery and free all associated device memory.
 --
-flush :: NRS -> IO ()
-flush !ref = do
-  message "flush nursery"
-  nrs <- readIORef ref
-  mapM_ (FL.mapM_ (\ctx ptr -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr))) (IM.elems nrs)
-  writeIORef ref IM.empty
+flush :: HashTable (CUDA.Context,Int) (FullList () (CUDA.DevicePtr ())) -> IO ()
+flush !tbl =
+  let clean (!key@(ctx,_),!val) = do
+        bracket_ (CUDA.push ctx) CUDA.pop (FL.mapM_ (const CUDA.free) val)
+        HT.delete tbl key
+  in
+  message "flush nursery" >> HT.mapM_ clean tbl
 
 
 -- Debug
@@ -112,5 +125,4 @@ trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
 {-# INLINE message #-}
 message :: String -> IO ()
 message s = s `trace` return ()
-
 

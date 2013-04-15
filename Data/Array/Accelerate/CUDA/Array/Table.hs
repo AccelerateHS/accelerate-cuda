@@ -178,7 +178,7 @@ reclaim :: MemoryTable -> IO ()
 reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
   (free, total) <- CUDA.getMemInfo
   performGC
-  N.flush nrs
+  withIORef nrs N.flush
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> return ()
