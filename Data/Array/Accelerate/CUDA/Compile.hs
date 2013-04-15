@@ -181,8 +181,8 @@ prepareOpenAcc = traverseAcc
 
         travA :: DelayedOpenAcc aenv a -> CIO (Gamma aenv, ExecOpenAcc aenv a)
         travA acc = case acc of
-          Manifest{}    -> pure           <$> traverseAcc acc
-          Delayed{..}   -> liftA EmbedAcc <$> travE extentD <* travF indexD
+          Manifest{}    -> pure                    <$> traverseAcc acc
+          Delayed{..}   -> liftA2 (const EmbedAcc) <$> travF indexD <*> travE extentD
 
         travAtup :: Atuple (DelayedOpenAcc aenv) a -> CIO (Gamma aenv, Atuple (ExecOpenAcc aenv) a)
         travAtup NilAtup        = return (pure NilAtup)
