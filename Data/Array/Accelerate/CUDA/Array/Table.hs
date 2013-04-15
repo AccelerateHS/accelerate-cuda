@@ -125,22 +125,35 @@ lookup ctx (MemoryTable !ref _ _) !arr = do
           makeStableArray ctx arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
 
 
--- Allocate a new array to store a number of elements of a given type. This
--- might be able to take an old unused array from the nursery, but will
--- otherwise allocate fresh data.
+-- Allocate a new device array to be associated with the given host-side array.
+-- This will attempt to use an old array from the nursery, but will otherwise
+-- allocate fresh data.
 --
-malloc :: forall e. Storable e => Context -> MemoryTable -> Int -> IO (DevicePtr e)
-malloc !ctx mt@(MemoryTable _ _ !nursery) n = do
-  let !bytes = n * sizeOf (undefined :: e)
+-- Instead of allocating the exact number of elements requested, we round up to
+-- a fixed chunk size; currently set at 128 elements. This means there is a
+-- greater chance the nursery will get a hit, and moreover that we can search
+-- the nursery for an exact size. TLM: I believe the CUDA API allocates in
+-- chunks, of size 4MB.
+--
+malloc :: forall a b. (Typeable a, Typeable b, Storable b) => Context -> MemoryTable -> ArrayData a -> Int -> IO (DevicePtr b)
+malloc !ctx mt@(MemoryTable _ _ !nursery) !ad !n = do
+  let -- next highest multiple of f from x
+      multiple x f      = floor ((x + (f-1)) / f :: Double)
+      chunk             = 128
+
+      !n'               = chunk * multiple (fromIntegral n) (fromIntegral chunk)
+      !bytes            = n' * sizeOf (undefined :: b)
   --
-  mp <- N.lookup bytes (deviceContext ctx) nursery
-  case mp of
-    Just ptr    -> trace "malloc/nursery" $ return (CUDA.castDevPtr ptr)
-    Nothing     -> trace "malloc/new" $
-      CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-        case e of
-          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-          _                    -> throwIO e
+  mp  <- N.lookup bytes (deviceContext ctx) nursery
+  ptr <- case mp of
+           Just p       -> trace "malloc/nursery" $ return (CUDA.castDevPtr p)
+           Nothing      -> trace "malloc/new"     $
+             CUDA.mallocArray n' `catch` \(e :: CUDAException) ->
+               case e of
+                 ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n'
+                 _                    -> throwIO e
+  insert ctx mt ad ptr bytes
+  return ptr
 
 
 -- Record an association between a host-side array and a new device memory area.

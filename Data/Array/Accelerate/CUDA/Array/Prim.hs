@@ -181,9 +181,8 @@ mallocArray !ctx !mt !ad !n0 = do
   exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
     message $ "mallocArray: " ++ showBytes bytes
-    ptr <- malloc ctx mt n      :: IO (CUDA.DevicePtr a)
-    insert ctx mt ad ptr bytes
-
+    _ <- malloc ctx mt ad n     :: IO (CUDA.DevicePtr a)
+    return ()
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
 -- device and upload an existing array. This is specialised because if the host
@@ -204,9 +203,8 @@ useArray !ctx !mt !ad !n0 =
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
       message $ "useArray/malloc: " ++ showBytes bytes
-      dst <- malloc ctx mt n
+      dst <- malloc ctx mt ad n
       CUDA.pokeArray n src dst
-      insert ctx mt ad dst bytes
 
 
 useArrayAsync
@@ -225,9 +223,8 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
       message $ "useArrayAsync/malloc: " ++ showBytes bytes
-      dst <- malloc ctx mt n
+      dst <- malloc ctx mt ad n
       CUDA.pokeArrayAsync n src dst ms
-      insert ctx mt ad dst bytes
 
 
 -- Read a single element from an array at the given row-major index

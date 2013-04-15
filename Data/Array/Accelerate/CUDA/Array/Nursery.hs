@@ -51,14 +51,6 @@ data Nursery    = Nursery {-# UNPACK #-} !NRS
                           {-# UNPACK #-} !(Weak NRS)
 
 
--- If the array in the nursery (m) is less than 10% larger than the requested
--- size (n), consider that a reasonable slop and use the array.
---
-{-# INLINE overprovision #-}
-overprovision :: Int -> Int -> Bool
-overprovision n m = round (fromIntegral n * 1.10 :: Double) >= m
-
-
 -- Generate a fresh nursery
 --
 new :: IO Nursery
@@ -75,16 +67,13 @@ new = do
 --
 {-# INLINE lookup #-}
 lookup :: Int -> CUDA.Context -> Nursery -> IO (Maybe (DevicePtr ()))
-lookup !n !ctx (Nursery !ref _) = do
+lookup !n !ctx (Nursery !ref _) =
   atomicModifyIORef' ref $ \nrs ->
-    case IM.lookupGE n nrs of
-      Nothing     -> trace "lookup/not found" (nrs, Nothing)
-      Just (m,fl)
-        | not (overprovision n m) -> trace "lookup/not found" (nrs, Nothing)
-        | otherwise               ->
-            case FL.lookupDelete ctx fl of
-              (Nothing, _) -> trace "lookup/no context" (nrs, Nothing)
-              (ptr, fl')   -> trace "lookup/found" (IM.update (const fl') m nrs, ptr)
+    let go ps = FL.lookupDelete ctx ps
+    in
+    case IM.updateLookupWithKey (const (snd . go)) n nrs of
+      (Nothing, nrs') -> (nrs', Nothing)
+      (Just ps, nrs') -> (nrs', fst (go ps))
 
 
 -- Add a device pointer to the nursery.
@@ -96,17 +85,17 @@ insert !n !ctx !ref (CUDA.castDevPtr -> !ptr) =
       f Nothing   = Just $ FL.singleton ctx ptr
       f (Just xs) = Just $ FL.cons ctx ptr xs
   in
-  trace ("insert: " ++ showBytes n) $ modifyIORef' ref (IM.alter f n)
+  modifyIORef' ref (IM.alter f n)
 
 
 -- Delete all entries from the nursery and free all associated device memory.
 --
 flush :: NRS -> IO ()
-flush !ref
-  = trace "flush nursery"
-  $ do nrs <- readIORef ref
-       mapM_ (FL.mapM_ (\ctx ptr -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr))) (IM.elems nrs)
-       writeIORef ref IM.empty
+flush !ref = do
+  message "flush nursery"
+  nrs <- readIORef ref
+  mapM_ (FL.mapM_ (\ctx ptr -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr))) (IM.elems nrs)
+  writeIORef ref IM.empty
 
 
 -- Debug
@@ -117,6 +106,11 @@ showBytes :: Int -> String
 showBytes x = D.showFFloatSIBase (Just 0) 1024 (fromIntegral x :: Double) "B"
 
 {-# INLINE trace #-}
-trace :: String -> a -> a
-trace msg next = D.trace D.dump_gc ("nrs: " ++ msg) next
+trace :: String -> IO a -> IO a
+trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
+
+{-# INLINE message #-}
+message :: String -> IO ()
+message s = s `trace` return ()
+
 
