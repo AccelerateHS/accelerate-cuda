@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Nursery
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -113,10 +114,6 @@ flush !tbl =
 
 -- Debug
 -- -----
-
-{-# INLINE showBytes #-}
-showBytes :: Int -> String
-showBytes x = D.showFFloatSIBase (Just 0) 1024 (fromIntegral x :: Double) "B"
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
