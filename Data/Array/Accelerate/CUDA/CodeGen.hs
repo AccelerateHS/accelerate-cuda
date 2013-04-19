@@ -122,8 +122,8 @@ codegenAcc dev (Manifest pacc) aenv
       Use _                     -> unexpectedError
       Unit _                    -> unexpectedError
       Aforeign _ _ _            -> unexpectedError
+      Reshape _ _               -> unexpectedError
 
-      Reshape _ _               -> fusionError
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError

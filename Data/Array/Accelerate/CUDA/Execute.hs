@@ -142,6 +142,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Generate sh _             -> executeOp =<< travE sh
       Transform sh _ _ _        -> executeOp =<< travE sh
       Backpermute sh _ _        -> executeOp =<< travE sh
+      Reshape sh a              -> reshapeOp <$> travE sh <*> travA a
 
       -- Consumers
       Fold _ _ a                -> foldOp  =<< extent a
@@ -159,7 +160,6 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
       -- Removed by fusion
-      Reshape _ _               -> fusionError
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
@@ -194,6 +194,14 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       out       <- allocateArray sh
       execute kernel gamma aenv (size sh) out
       return out
+
+    -- Change the shape of an array without altering its contents. This does not
+    -- execute any kernel programs.
+    --
+    reshapeOp :: Shape sh => sh -> Array sh' e -> Array sh e
+    reshapeOp sh (Array sh' adata)
+      = BOUNDS_CHECK(check) "reshape" "shape mismatch" (size sh == R.size sh')
+      $ Array (fromElt sh) adata
 
     -- Executing fold operations depend on whether we are recursively collapsing
     -- to a single value using multiple thread blocks, or a multidimensional
