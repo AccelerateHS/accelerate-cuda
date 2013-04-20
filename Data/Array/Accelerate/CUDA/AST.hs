@@ -17,10 +17,10 @@ module Data.Array.Accelerate.CUDA.AST (
 
   module Data.Array.Accelerate.AST,
 
-  AccKernel(..), Gamma(..), Idx_(..),
+  AccKernel(..), Free, Gamma(..), Idx_(..),
   ExecAcc, ExecAfun, ExecOpenAcc(..),
   ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
-  freevar,
+  freevar, makeEnvMap,
 
 ) where
 
@@ -37,6 +37,7 @@ import Text.PrettyPrint
 import Data.Hashable
 import Data.Monoid                                      ( Monoid(..) )
 import qualified Data.HashSet                           as Set
+import qualified Data.HashMap.Strict                    as Map
 
 
 -- A non-empty list of binary objects will be used to execute a kernel. We keep
@@ -59,15 +60,40 @@ data AccKernel a where
 --
 -- data AccBarrier = AB !Stream !Event
 
+
 -- The set of free array variables for array computations that were embedded
--- within scalar expressions. This are required to execute the kernel, bi
--- binding to texture references to similar.
+-- within scalar expressions. These arrays are are required to execute the
+-- kernel, by binding to texture references to similar.
 --
-newtype Gamma aenv = Gamma ( Set.HashSet (Idx_ aenv) )
+type Free aenv = Set.HashSet (Idx_ aenv)
+
+freevar :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Free aenv
+freevar = Set.singleton . Idx_
+
+
+-- A mapping between environment indexes and some token identifying that array
+-- in the generated code. This simply compresses the sequence of array indices
+-- into a continuous range, rather than directly using the integer equivalent of
+-- the de Bruijn index.
+--
+-- This results in generated code that is (slightly) less sensitive to the
+-- placement of let bindings, ultimately leading to a higher hit rate in the
+-- compilation cache.
+--
+newtype Gamma aenv = Gamma ( Map.HashMap (Idx_ aenv) Int )
   deriving ( Monoid )
 
-freevar :: (Shape sh, Elt e) => Idx aenv (Array sh e) -> Gamma aenv
-freevar = Gamma . Set.singleton . Idx_
+makeEnvMap :: Free aenv -> Gamma aenv
+makeEnvMap indices
+  = Gamma
+  . Map.fromList
+  . flip zip [0..]
+--  . sortBy (compare `on` idxType)
+  $ Set.toList indices
+--  where
+--    idxType :: Idx_ aenv -> TypeRep
+--    idxType (Idx_ (_ :: Idx aenv (Array sh e))) = typeOf (undefined :: e)
+
 
 -- Opaque array environment indices
 --
@@ -130,7 +156,7 @@ prettyExecAcc alvl wrap exec =
 
     ExecAcc _ (Gamma fv) pacc ->
       let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
-          ann       = braces (freevars (Set.toList fv))
+          ann       = braces (freevars (Map.keys fv))
           freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
                                       . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))
       in

@@ -34,7 +34,7 @@ import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), 
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute )
-import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
+import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 #ifdef ACCELERATE_DEBUG
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -63,7 +63,7 @@ import Foreign.Storable                                         ( Storable(..) )
 import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.Marshal.Array                          as F
-import qualified Data.HashSet                                   as Set
+import qualified Data.HashMap.Strict                            as Map
 
 #ifdef ACCELERATE_DEBUG
 import Control.Monad                                            ( void )
@@ -545,10 +545,11 @@ convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int
 
 marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
 marshalAccEnvTex !kernel !aenv (Gamma !gamma)
-  = flip concatMapM (Set.toList gamma)
-  $ \(Idx_ !idx) -> do let arr = prj idx aenv
-                       marshalAccTex (namesOfAvar idx) kernel arr
-                       marshal (shape arr)
+  = flip concatMapM (Map.toList gamma)
+  $ \(Idx_ !(idx :: Idx aenv (Array sh e)), i) ->
+        do let arr = prj idx aenv
+           marshalAccTex (namesOfArray (groupOfInt i) (undefined :: e)) kernel arr
+           marshal (shape arr)
 
 marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
 marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
@@ -556,7 +557,7 @@ marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
 
 marshalAccEnvArg :: Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
 marshalAccEnvArg !aenv (Gamma !gamma)
-  = concatMapM (\(Idx_ !idx) -> marshal (prj idx aenv)) (Set.toList gamma)
+  = concatMapM (\(Idx_ !idx) -> marshal (prj idx aenv)) (Map.keys gamma)
 
 
 -- A lazier version of 'Control.Monad.sequence'

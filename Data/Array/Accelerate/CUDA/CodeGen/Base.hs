@@ -22,7 +22,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Names and Types
   CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1(..), CUFun2(..),
-  Name, namesOfArray, namesOfAvar,
+  Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
   cvar, ccall, cchar, cintegral, cbool, cdim, cshape, getters, setters, shared,
@@ -37,7 +37,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 import Text.PrettyPrint.Mainland
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
-import qualified Data.HashSet                           as Set
+import qualified Data.HashMap.Strict                    as Map
 
 import Foreign.CUDA.Analysis.Device
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
@@ -65,11 +65,14 @@ namesOfArray grp _
     ( "sh" ++ grp, map arr [n-1, n-2 .. 0] )
 
 
-namesOfAvar :: forall aenv sh e. Elt e => Idx aenv (Array sh e) -> (Name, [Name])
-namesOfAvar ix = namesOfArray (groupOfAvar ix) (undefined :: e)
+namesOfAvar :: forall aenv sh e. (Shape sh, Elt e) => Gamma aenv -> Idx aenv (Array sh e) -> (Name, [Name])
+namesOfAvar gamma ix = namesOfArray (groupOfAvar gamma ix) (undefined::e)
 
-groupOfAvar :: Idx aenv (Array sh e) -> Name
-groupOfAvar ix = "In" ++ show (idxToInt ix)
+groupOfAvar :: (Shape sh, Elt e) => Gamma aenv -> Idx aenv (Array sh e) -> Name
+groupOfAvar (Gamma gamma) = groupOfInt . (gamma Map.!) . Idx_
+
+groupOfInt :: Int -> Name
+groupOfInt n = "In" ++ show n
 
 
 -- Types of compilation units
@@ -273,22 +276,22 @@ shared _ grp size mprev
 --       execution phase.
 --
 environment
-    :: DeviceProperties
+    :: forall aenv. DeviceProperties
     -> Gamma aenv
     -> ([C.Definition], [C.Param])
-environment dev (Gamma aenv)
+environment dev gamma@(Gamma aenv)
   | computeCapability dev < Compute 2 0
-  = Set.foldr (\(Idx_ v) (ds,ps) -> let (d,p) = asTex v in (d++ds, p:ps)) ([],[]) aenv
+  = Map.foldrWithKey (\(Idx_ v) _ (ds,ps) -> let (d,p) = asTex v in (d++ds, p:ps)) ([],[]) aenv
 
   | otherwise
-  = ([], Set.foldr (\(Idx_ v) vs -> asArg v ++ vs) [] aenv)
+  = ([], Map.foldrWithKey (\(Idx_ v) _ vs -> asArg v ++ vs) [] aenv)
 
   where
-    asTex :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], C.Param)
-    asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar ix)
+    asTex :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], C.Param)
+    asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar gamma ix)
 
-    asArg :: forall aenv sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
-    asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar ix)
+    asArg :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
+    asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar gamma ix)
 
 
 arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], C.Param)

@@ -85,7 +85,7 @@ prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuat
 --
 -- TODO: include a measure of how much shared memory a kernel requires.
 --
-codegenAcc :: DeviceProperties -> DelayedOpenAcc aenv arrs -> Gamma aenv -> [ CUTranslSkel aenv arrs ]
+codegenAcc :: forall aenv arrs. DeviceProperties -> DelayedOpenAcc aenv arrs -> Gamma aenv -> [ CUTranslSkel aenv arrs ]
 codegenAcc _   Delayed{}       _    = INTERNAL_ERROR(error) "codegenAcc" "expected manifest array"
 codegenAcc dev (Manifest pacc) aenv
   = codegen
@@ -143,21 +143,21 @@ codegenAcc dev (Manifest pacc) aenv
     -- code generation for delayed arrays
     travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e)
     travD Manifest{}  = INTERNAL_ERROR(error) "codegenAcc" "expected delayed array"
-    travD Delayed{..} = CUDelayed <$> codegenExp dev extentD
-                                  <*> codegenFun1 dev indexD
-                                  <*> codegenFun1 dev linearIndexD
+    travD Delayed{..} = CUDelayed <$> travE extentD
+                                  <*> travF1 indexD
+                                  <*> travF1 linearIndexD
 
     -- scalar code generation
     travF1 :: DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
-    travF1 = codegenFun1 dev
+    travF1 = codegenFun1 dev aenv
 
     travF2 :: DelayedFun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
-    travF2 = codegenFun2 dev
+    travF2 = codegenFun2 dev aenv
 
     travE :: DelayedExp aenv t -> CUDA (CUExp aenv t)
-    travE = codegenExp dev
+    travE = codegenExp dev aenv
 
-    travB :: forall aenv sh e. Elt e
+    travB :: forall sh e. Elt e
           => DelayedOpenAcc aenv (Array sh e) -> Boundary (EltRepr e) -> CUDA (Boundary (CUExp aenv e))
     travB _ Clamp        = return Clamp
     travB _ Mirror       = return Mirror
@@ -184,13 +184,17 @@ codegenAcc dev (Manifest pacc) aenv
 --
 -- Still, there has got to be a cleaner way to do this...
 --
-codegenFun1 :: forall aenv a b. DeviceProperties -> DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
-codegenFun1 dev fun
+codegenFun1
+    :: forall aenv a b. DeviceProperties
+    -> Gamma aenv
+    -> DelayedFun aenv (a -> b)
+    -> CUDA (CUFun1 aenv (a -> b))
+codegenFun1 dev aenv fun
   | Lam (Body f) <- fun
   = let
         go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
         go x = do
-          code  <- mapM use =<< codegenOpenExp dev f (Empty `Push` map rvalue x)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x)
           env   <- getEnv
           return (env, code)
 
@@ -204,13 +208,17 @@ codegenFun1 dev fun
   | otherwise
   = INTERNAL_ERROR(error) "codegenFun1" "expected unary function"
 
-codegenFun2 :: forall aenv a b c. DeviceProperties -> DelayedFun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
-codegenFun2 dev fun
+codegenFun2
+    :: forall aenv a b c. DeviceProperties
+    -> Gamma aenv
+    -> DelayedFun aenv (a -> b -> c)
+    -> CUDA (CUFun2 aenv (a -> b -> c))
+codegenFun2 dev aenv fun
   | Lam (Lam (Body f)) <- fun
   = let
         go :: (Rvalue x, Rvalue y) => [x] -> [y] -> Gen ([C.BlockItem], [C.Exp])
         go x y = do
-          code  <- mapM use =<< codegenOpenExp dev f (Empty `Push` map rvalue x `Push` map rvalue y)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x `Push` map rvalue y)
           env   <- getEnv
           return (env, code)
 
@@ -270,10 +278,10 @@ visit exp
 
 -- Generation of scalar expressions
 --
-codegenExp :: DeviceProperties -> DelayedExp aenv t -> CUDA (CUExp aenv t)
-codegenExp dev exp =
+codegenExp :: DeviceProperties -> Gamma aenv -> DelayedExp aenv t -> CUDA (CUExp aenv t)
+codegenExp dev aenv exp =
   evalCGM $ do
-    code        <- codegenOpenExp dev exp Empty
+    code        <- codegenOpenExp dev aenv exp Empty
     env         <- getEnv
     return      $! CUExp (env,code)
 
@@ -281,13 +289,18 @@ codegenExp dev exp =
 -- The core of the code generator, buildings lists of untyped C expression
 -- fragments. This is tricky to get right!
 --
-codegenOpenExp :: DeviceProperties -> DelayedOpenExp env aenv t -> Val env -> Gen [C.Exp]
-codegenOpenExp dev = cvtE
+codegenOpenExp
+    :: forall aenv env' t'. DeviceProperties
+    -> Gamma aenv
+    -> DelayedOpenExp env' aenv t'
+    -> Val env'
+    -> Gen [C.Exp]
+codegenOpenExp dev aenv = cvtE
   where
     -- Generate code for a scalar expression in depth-first order. We run under
     -- a monad that generates fresh names and keeps track of let bindings.
     --
-    cvtE :: forall env aenv t. DelayedOpenExp env aenv t -> Val env -> Gen [C.Exp]
+    cvtE :: forall env t. DelayedOpenExp env aenv t -> Val env -> Gen [C.Exp]
     cvtE exp env = visit =<<
       case exp of
         Let bnd body            -> elet bnd body env
@@ -355,7 +368,7 @@ codegenOpenExp dev = cvtE
     -- this actually corresponds to slicing out a subset of the list of C
     -- expressions, rather than picking out a single element.
     --
-    prjT :: forall env aenv t e. TupleIdx (TupleRepr t) e
+    prjT :: forall env t e. TupleIdx (TupleRepr t) e
          -> DelayedOpenExp env aenv t
          -> DelayedOpenExp env aenv e
          -> Val env
@@ -543,10 +556,14 @@ codegenOpenExp dev = cvtE
     -- variable of type 'int', so there is an implicit conversion from
     -- Int -> Int32.
     --
-    index :: Elt e => DelayedOpenAcc aenv (Array sh e) -> DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
+    index :: (Shape sh, Elt e)
+          => DelayedOpenAcc aenv (Array sh e)
+          -> DelayedOpenExp env aenv sh
+          -> Val env
+          -> Gen [C.Exp]
     index acc ix env
       | Manifest (Avar idx) <- acc
-      = let (sh, arr)   = namesOfAvar idx
+      = let (sh, arr)   = namesOfAvar aenv idx
             ty          = accType acc
         in do
         ix'     <- cvtE ix env
@@ -557,10 +574,14 @@ codegenOpenExp dev = cvtE
       = INTERNAL_ERROR(error) "Index" "expected array variable"
 
 
-    linearIndex :: Elt e => DelayedOpenAcc aenv (Array sh e) -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
+    linearIndex :: (Shape sh, Elt e)
+                => DelayedOpenAcc aenv (Array sh e)
+                -> DelayedOpenExp env aenv Int
+                -> Val env
+                -> Gen [C.Exp]
     linearIndex acc ix env
       | Manifest (Avar idx) <- acc
-      = let (_, arr)    = namesOfAvar idx
+      = let (_, arr)    = namesOfAvar aenv idx
             ty          = accType acc
         in do
         ix'     <- cvtE ix env
@@ -576,10 +597,10 @@ codegenOpenExp dev = cvtE
     -- transferred to the kernel as a structure, and so the individual fields
     -- need to be "unpacked", to work with our handling of tuple structures.
     --
-    shape :: Elt e => DelayedOpenAcc aenv (Array sh e) -> Val env -> Gen [C.Exp]
+    shape :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> Val env -> Gen [C.Exp]
     shape acc _env
       | Manifest (Avar idx) <- acc
-      = return $ cshape (delayedDim acc) (cvar $ fst (namesOfAvar idx))
+      = return $ cshape (delayedDim acc) (cvar $ fst (namesOfAvar aenv idx))
 
       | otherwise
       = INTERNAL_ERROR(error) "Shape" "expected array variable"
@@ -596,7 +617,7 @@ codegenOpenExp dev = cvtE
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --
-    intersect :: forall env aenv sh. Elt sh
+    intersect :: forall env sh. Elt sh
               => DelayedOpenExp env aenv sh
               -> DelayedOpenExp env aenv sh
               -> Val env -> Gen [C.Exp]
@@ -611,7 +632,7 @@ codegenOpenExp dev = cvtE
     -- Additionally, we insert an explicit type cast from the foreign function
     -- result back into Accelerate types (c.f. Int vs int).
     --
-    foreignE :: forall f a b env aenv. (Sugar.Foreign f, Elt a, Elt b)
+    foreignE :: forall f a b env. (Sugar.Foreign f, Elt a, Elt b)
              => f a b
              -> DelayedOpenExp env aenv a
              -> Val env

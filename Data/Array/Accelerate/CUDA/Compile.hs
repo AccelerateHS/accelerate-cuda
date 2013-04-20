@@ -168,27 +168,28 @@ prepareOpenAcc = traverseAcc
         use ArraysRarray        arr      = useArray arr
         use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
 
-        exec :: (Gamma aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
+        exec :: (Free aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
         exec (aenv, eacc) = do
-          kernel <- build topAcc aenv
-          return $! ExecAcc (fullOfList kernel) aenv eacc
+          let gamma = makeEnvMap aenv
+          kernel <- build topAcc gamma
+          return $! ExecAcc (fullOfList kernel) gamma eacc
 
-        node :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (ExecOpenAcc aenv' arrs')
+        node :: (Free aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (ExecOpenAcc aenv' arrs')
         node = fmap snd . wrap
 
-        wrap :: (Gamma aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (Gamma aenv', ExecOpenAcc aenv' arrs')
+        wrap :: (Free aenv', PreOpenAcc ExecOpenAcc aenv' arrs') -> CIO (Free aenv', ExecOpenAcc aenv' arrs')
         wrap = return . liftA (ExecAcc noKernel mempty)
 
-        travA :: DelayedOpenAcc aenv a -> CIO (Gamma aenv, ExecOpenAcc aenv a)
+        travA :: DelayedOpenAcc aenv a -> CIO (Free aenv, ExecOpenAcc aenv a)
         travA acc = case acc of
           Manifest{}    -> pure                    <$> traverseAcc acc
           Delayed{..}   -> liftA2 (const EmbedAcc) <$> travF indexD <*> travE extentD
 
-        travAtup :: Atuple (DelayedOpenAcc aenv) a -> CIO (Gamma aenv, Atuple (ExecOpenAcc aenv) a)
+        travAtup :: Atuple (DelayedOpenAcc aenv) a -> CIO (Free aenv, Atuple (ExecOpenAcc aenv) a)
         travAtup NilAtup        = return (pure NilAtup)
         travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
 
-        travF :: DelayedOpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
@@ -207,7 +208,7 @@ prepareOpenAcc = traverseAcc
                  => f a r
                  -> DelayedAfun (a -> r)
                  -> DelayedOpenAcc aenv a
-                 -> CIO (Gamma aenv, PreOpenAcc ExecOpenAcc aenv r)
+                 -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv r)
         foreignA ff afun a = case canExecute ff of
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
@@ -217,7 +218,7 @@ prepareOpenAcc = traverseAcc
     -- Traverse a scalar expression
     --
     travE :: DelayedOpenExp env aenv e
-          -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv e)
+          -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
     travE exp =
       case exp of
         Var ix                  -> return $ pure (Var ix)
@@ -250,17 +251,17 @@ prepareOpenAcc = traverseAcc
       where
         travA :: (Shape sh, Elt e)
               => DelayedOpenAcc aenv (Array sh e)
-              -> CIO (Gamma aenv, ExecOpenAcc aenv (Array sh e))
+              -> CIO (Free aenv, ExecOpenAcc aenv (Array sh e))
         travA a = do
           a'    <- traverseAcc a
           return $ (bind a', a')
 
         travT :: Tuple (DelayedOpenExp env aenv) t
-              -> CIO (Gamma aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
+              -> CIO (Free aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
         travT NilTup        = return (pure NilTup)
         travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
 
-        travF :: DelayedOpenFun env aenv t -> CIO (Gamma aenv, PreOpenFun ExecOpenAcc env aenv t)
+        travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
 
@@ -268,11 +269,11 @@ prepareOpenAcc = traverseAcc
                  => f a b
                  -> DelayedFun () (a -> b)
                  -> DelayedOpenExp env aenv a
-                 -> CIO (Gamma aenv, PreOpenExp ExecOpenAcc env aenv b)
+                 -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv b)
         foreignE ff f x = case canExecuteExp ff of
           -- If it's a foreign function that we can generate code from, just
-          -- leave it alone. As the pure function is closed, gamma needs to be
-          -- replaced with one of the right type.
+          -- leave it alone. As the pure function is closed, the array
+          -- environment needs to be replaced with one of the right type.
           --
           Just _        -> liftA2 (Foreign ff) <$> pure <$> snd <$> travF f <*> travE x
 
@@ -299,7 +300,7 @@ prepareOpenAcc = traverseAcc
               wExp ZeroIdx              = ZeroIdx
               wExp _                    = error "HUGE SUCCESS"
 
-        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Gamma aenv
+        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
         bind (ExecAcc _ _ (Avar ix)) = freevar ix
         bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
 
