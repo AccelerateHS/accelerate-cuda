@@ -21,7 +21,11 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 
 ) where
 
+#if !MIN_VERSION_base(4,6,0)
+import Prelude                                                  hiding ( lookup, catch )
+#else
 import Prelude                                                  hiding ( lookup )
+#endif
 import Data.IORef                                               ( IORef, newIORef, readIORef, mkWeakIORef )
 import Data.Maybe                                               ( isJust )
 import Data.Hashable                                            ( Hashable(..) )
