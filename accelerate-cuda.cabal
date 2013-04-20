@@ -93,7 +93,6 @@ Library
                         base                    == 4.*,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
-                        containers              >= 0.5,
                         cryptohash              >= 0.7,
                         cuda                    >= 0.5.0.2,
                         directory               >= 1.0,
