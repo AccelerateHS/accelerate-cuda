@@ -42,6 +42,7 @@ import Data.Typeable
 import Control.Monad
 import System.Mem.StableName
 import Foreign.Ptr
+import Foreign.C.Types
 import Foreign.Storable
 import Foreign.Marshal.Alloc                            ( alloca )
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -66,9 +67,11 @@ type family HostPtrs   e :: *
 type instance DevicePtrs () = ()
 type instance HostPtrs   () = ()
 
-#define primArrayElt(ty)                                                      \
-type instance DevicePtrs ty = CUDA.DevicePtr ty ;                             \
-type instance HostPtrs   ty = CUDA.HostPtr   ty ;                             \
+#define primArrayEltAs(ty,as)                                                 \
+type instance DevicePtrs ty = CUDA.DevicePtr as ;                             \
+type instance HostPtrs   ty = CUDA.HostPtr   as ;                             \
+
+#define primArrayElt(ty) primArrayEltAs(ty,ty)
 
 primArrayElt(Int)
 primArrayElt(Int8)
@@ -82,32 +85,26 @@ primArrayElt(Word16)
 primArrayElt(Word32)
 primArrayElt(Word64)
 
--- FIXME:
--- CShort
--- CUShort
--- CInt
--- CUInt
--- CLong
--- CULong
--- CLLong
--- CULLong
+primArrayEltAs(CShort,  Int16)
+primArrayEltAs(CInt,    Int32)
+primArrayEltAs(CLong,   Int64)
+primArrayEltAs(CLLong,  Int64)
+primArrayEltAs(CUShort, Word16)
+primArrayEltAs(CUInt,   Word32)
+primArrayEltAs(CULong,  Word64)
+primArrayEltAs(CULLong, Word64)
 
 primArrayElt(Float)
 primArrayElt(Double)
-
--- FIXME:
--- CFloat
--- CDouble
-
-type instance HostPtrs   Bool = CUDA.HostPtr   Word8
-type instance DevicePtrs Bool = CUDA.DevicePtr Word8
+primArrayEltAs(CFloat,  Float)
+primArrayEltAs(CDouble, Double)
 
 primArrayElt(Char)
+primArrayEltAs(CChar,  Int8)
+primArrayEltAs(CSChar, Int8)
+primArrayEltAs(CUChar, Word8)
 
--- FIXME:
--- CChar
--- CSChar
--- CUChar
+primArrayEltAs(Bool, Word8)
 
 type instance DevicePtrs (a,b) = (DevicePtrs a, DevicePtrs b)
 type instance HostPtrs   (a,b) = (HostPtrs   a, HostPtrs   b)
@@ -122,39 +119,52 @@ type instance HostPtrs   (a,b) = (HostPtrs   a, HostPtrs   b)
 class TextureData a where
   format :: a -> (CUDA.Format, Int)
 
-instance TextureData Int8   where format _ = (CUDA.Int8,   1)
-instance TextureData Int16  where format _ = (CUDA.Int16,  1)
-instance TextureData Int32  where format _ = (CUDA.Int32,  1)
-instance TextureData Int64  where format _ = (CUDA.Int32,  2)
-instance TextureData Word8  where format _ = (CUDA.Word8,  1)
-instance TextureData Word16 where format _ = (CUDA.Word16, 1)
-instance TextureData Word32 where format _ = (CUDA.Word32, 1)
-instance TextureData Word64 where format _ = (CUDA.Word32, 2)
-instance TextureData Float  where format _ = (CUDA.Float,  1)
-instance TextureData Double where format _ = (CUDA.Int32,  2)
-instance TextureData Bool   where format _ = (CUDA.Word8,  1)
+instance TextureData Int8    where format _ = (CUDA.Int8,   1)
+instance TextureData Int16   where format _ = (CUDA.Int16,  1)
+instance TextureData Int32   where format _ = (CUDA.Int32,  1)
+instance TextureData Int64   where format _ = (CUDA.Int32,  2)
+instance TextureData Word8   where format _ = (CUDA.Word8,  1)
+instance TextureData Word16  where format _ = (CUDA.Word16, 1)
+instance TextureData Word32  where format _ = (CUDA.Word32, 1)
+instance TextureData Word64  where format _ = (CUDA.Word32, 2)
+instance TextureData Float   where format _ = (CUDA.Float,  1)
+instance TextureData Double  where format _ = (CUDA.Int32,  2)
+instance TextureData Bool    where format _ = (CUDA.Word8,  1)
+instance TextureData CShort  where format _ = (CUDA.Int16,  1)
+instance TextureData CUShort where format _ = (CUDA.Word16, 1)
+instance TextureData CInt    where format _ = (CUDA.Int32,  1)
+instance TextureData CUInt   where format _ = (CUDA.Word32, 1)
+instance TextureData CLong   where format _ = (CUDA.Int32,  2)
+instance TextureData CULong  where format _ = (CUDA.Word32, 2)
+instance TextureData CLLong  where format _ = (CUDA.Int32,  2)
+instance TextureData CULLong where format _ = (CUDA.Word32, 2)
+instance TextureData CFloat  where format _ = (CUDA.Float,  1)
+instance TextureData CDouble where format _ = (CUDA.Int32,  2)
+instance TextureData CChar   where format _ = (CUDA.Int8,   1)
+instance TextureData CSChar  where format _ = (CUDA.Int8,   1)
+instance TextureData CUChar  where format _ = (CUDA.Word8,  1)
 #if   SIZEOF_HSINT == 4
-instance TextureData Int    where format _ = (CUDA.Int32,  1)
-instance TextureData Word   where format _ = (CUDA.Word32, 1)
+instance TextureData Int     where format _ = (CUDA.Int32,  1)
+instance TextureData Word    where format _ = (CUDA.Word32, 1)
 #elif SIZEOF_HSINT == 8
-instance TextureData Int    where format _ = (CUDA.Int32,  2)
-instance TextureData Word   where format _ = (CUDA.Word32, 2)
+instance TextureData Int     where format _ = (CUDA.Int32,  2)
+instance TextureData Word    where format _ = (CUDA.Word32, 2)
 #else
-instance TextureData Int    where
+instance TextureData Int     where
   format _ =
     case sizeOf (undefined::Int) of
       4 -> (CUDA.Int32, 1)
       8 -> (CUDA.Int32, 2)
-instance TextureData Word   where
+instance TextureData Word    where
   format _ =
     case sizeOf (undefined::Word) of
       4 -> (CUDA.Word32, 1)
       8 -> (CUDA.Word32, 2)
 #endif
 #if SIZEOF_HSCHAR == 4
-instance TextureData Char   where format _ = (CUDA.Word32, 1)
+instance TextureData Char    where format _ = (CUDA.Word32, 1)
 #else
-instance TextureData Char   where
+instance TextureData Char    where
   format _ =
     case sizeOf (undefined::Char) of
          4 -> (CUDA.Word32, 1)

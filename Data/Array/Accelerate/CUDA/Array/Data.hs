@@ -36,6 +36,7 @@ import Control.Applicative
 import Control.Monad.Reader                             ( asks )
 import Control.Monad.State                              ( gets )
 import Control.Monad.Trans                              ( liftIO )
+import Foreign.C.Types
 
 -- friends
 import Data.Array.Accelerate.Array.Data
@@ -79,22 +80,35 @@ run f = do
 -- CPP hackery to generate the cases where we dispatch to the worker function handling
 -- elementary types.
 --
-#define mkPrimDispatch(dispatcher,worker)                                   \
-; dispatcher ArrayEltRint    = worker                                       \
-; dispatcher ArrayEltRint8   = worker                                       \
-; dispatcher ArrayEltRint16  = worker                                       \
-; dispatcher ArrayEltRint32  = worker                                       \
-; dispatcher ArrayEltRint64  = worker                                       \
-; dispatcher ArrayEltRword   = worker                                       \
-; dispatcher ArrayEltRword8  = worker                                       \
-; dispatcher ArrayEltRword16 = worker                                       \
-; dispatcher ArrayEltRword32 = worker                                       \
-; dispatcher ArrayEltRword64 = worker                                       \
-; dispatcher ArrayEltRfloat  = worker                                       \
-; dispatcher ArrayEltRdouble = worker                                       \
-; dispatcher ArrayEltRbool   = worker                                       \
-; dispatcher ArrayEltRchar   = worker                                       \
-; dispatcher _               = error "mkPrimDispatcher: not primitive"
+#define mkPrimDispatch(dispatcher,worker)                                       \
+; dispatcher ArrayEltRint     = worker                                          \
+; dispatcher ArrayEltRint8    = worker                                          \
+; dispatcher ArrayEltRint16   = worker                                          \
+; dispatcher ArrayEltRint32   = worker                                          \
+; dispatcher ArrayEltRint64   = worker                                          \
+; dispatcher ArrayEltRword    = worker                                          \
+; dispatcher ArrayEltRword8   = worker                                          \
+; dispatcher ArrayEltRword16  = worker                                          \
+; dispatcher ArrayEltRword32  = worker                                          \
+; dispatcher ArrayEltRword64  = worker                                          \
+; dispatcher ArrayEltRfloat   = worker                                          \
+; dispatcher ArrayEltRdouble  = worker                                          \
+; dispatcher ArrayEltRbool    = worker                                          \
+; dispatcher ArrayEltRchar    = worker                                          \
+; dispatcher ArrayEltRcshort  = worker                                          \
+; dispatcher ArrayEltRcushort = worker                                          \
+; dispatcher ArrayEltRcint    = worker                                          \
+; dispatcher ArrayEltRcuint   = worker                                          \
+; dispatcher ArrayEltRclong   = worker                                          \
+; dispatcher ArrayEltRculong  = worker                                          \
+; dispatcher ArrayEltRcllong  = worker                                          \
+; dispatcher ArrayEltRcullong = worker                                          \
+; dispatcher ArrayEltRcfloat  = worker                                          \
+; dispatcher ArrayEltRcdouble = worker                                          \
+; dispatcher ArrayEltRcchar   = worker                                          \
+; dispatcher ArrayEltRcschar  = worker                                          \
+; dispatcher ArrayEltRcuchar  = worker                                          \
+; dispatcher _                = error "mkPrimDispatcher: not primitive"
 
 
 -- |Allocate a new device array to accompany the given host-side array.
@@ -158,10 +172,6 @@ indexArray (Array _ !adata) i = run doIndex
         indexR (ArrayEltRpair aeR1 aeR2) ad = (,) <$> indexR aeR1 (fst ad)
                                                   <*> indexR aeR2 (snd ad)
         --
-        indexR ArrayEltRbool             ad = toBool <$> Prim.indexArray ctx mt ad i
-          where toBool 0 = False
-                toBool _ = True
-        --
         indexR ArrayEltRint              ad = Prim.indexArray ctx mt ad i
         indexR ArrayEltRint8             ad = Prim.indexArray ctx mt ad i
         indexR ArrayEltRint16            ad = Prim.indexArray ctx mt ad i
@@ -175,6 +185,24 @@ indexArray (Array _ !adata) i = run doIndex
         indexR ArrayEltRfloat            ad = Prim.indexArray ctx mt ad i
         indexR ArrayEltRdouble           ad = Prim.indexArray ctx mt ad i
         indexR ArrayEltRchar             ad = Prim.indexArray ctx mt ad i
+        --
+        indexR ArrayEltRcshort           ad = CShort  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcushort          ad = CUShort <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcint             ad = CInt    <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcuint            ad = CUInt   <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRclong            ad = CLong   <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRculong           ad = CULong  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcllong           ad = CLLong  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcullong          ad = CULLong <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcchar            ad = CChar   <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcschar           ad = CSChar  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcuchar           ad = CUChar  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcfloat           ad = CFloat  <$> Prim.indexArray ctx mt ad i
+        indexR ArrayEltRcdouble          ad = CDouble <$> Prim.indexArray ctx mt ad i
+        --
+        indexR ArrayEltRbool             ad = toBool  <$> Prim.indexArray ctx mt ad i
+          where toBool 0 = False
+                toBool _ = True
 
 
 -- |Copy data between two device arrays. The operation is asynchronous with
