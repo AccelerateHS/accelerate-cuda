@@ -142,15 +142,10 @@ codegenAcc dev (Manifest pacc) aenv
 
     -- code generation for delayed arrays
     travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e)
-    travD acc = case acc of
-      Delayed{..}       -> CUDelayed <$> travE extentD <*> travF1 indexD <*> travF1 linearIndexD
-      Manifest (Avar _) -> CUDelayed <$> travE extentD <*> travF1 indexD <*> travF1 linearIndexD
-        where
-          extentD      = Shape acc
-          indexD       = Lam (Body (Index       acc (Var ZeroIdx)))
-          linearIndexD = Lam (Body (LinearIndex acc (Var ZeroIdx)))
-      --
-      _                 -> INTERNAL_ERROR(error) "codegenAcc" "expected delayed array"
+    travD Manifest{}  = INTERNAL_ERROR(error) "codegenAcc" "expected delayed array"
+    travD Delayed{..} = CUDelayed <$> travE extentD
+                                  <*> travF1 indexD
+                                  <*> travF1 linearIndexD
 
     -- scalar code generation
     travF1 :: DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
