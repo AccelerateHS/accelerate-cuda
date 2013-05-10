@@ -23,14 +23,14 @@
 -- allocating new arrays, getting the CUDA device pointers of a given array, and
 -- executing IO actions within a CUDA context.
 --
--- /NOTES:/
+-- [/NOTE:/]
 --
 -- When arrays are passed to the foreign function there is no guarantee that the
 -- host side data matches the device side data. If the data is needed host side
 -- 'peekArray' or 'peekArrayAsync' must be called.
 --
 -- Arrays of tuples are represented as tuples of arrays so for example an array
--- of type 'Array DIM1 (Float, Float)' would have two device pointers associated
+-- of type @Array DIM1 (Float, Float)@ would have two device pointers associated
 -- with it.
 --
 

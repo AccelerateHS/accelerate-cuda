@@ -13,14 +13,97 @@
 -- Portability : non-portable (GHC extensions)
 --
 -- This module implements the CUDA backend for the embedded array language
--- Accelerate. Expressions are on-line translated into CUDA code, compiled, and
--- executed in parallel on the GPU.
+-- /Accelerate/. Expressions are on-line translated into CUDA code, compiled,
+-- and executed in parallel on the GPU.
 --
 -- The accelerate-cuda library is hosted at: <https://github.com/AccelerateHS/accelerate-cuda>.
 -- Comments, bug reports, and patches, are always welcome.
 --
 --
--- /NOTES:/
+-- [/Data transfer:/]
+--
+-- GPUs typically have their own attached memory, which is separate from the
+-- computer's main memory. Hence, every 'Data.Array.Accelerate.use' operation
+-- implies copying data to the device, and every 'run' operation must copy the
+-- results of a computation back to the host.
+--
+-- Thus, it is best to keep all computations in the 'Acc' meta-language form and
+-- only 'run' the computation once at the end, to avoid transferring (unused)
+-- intermediate results.
+--
+-- Note that once an array has been transferred to the GPU, it will remain there
+-- for as long as that array remains alive on the host. Any subsequent calls to
+-- 'Data.Array.Accelerate.use' will find the array cached on the device and not
+-- re-transfer the data.
+--
+--
+-- [/Caching and performance:/]
+--
+-- When the program runs, the /Accelerate/ library evaluates the expression
+-- passed to 'run' to make a series of CUDA kernels. Each kernel takes some
+-- arrays as inputs and produces arrays as output. Each kernel is a piece of
+-- CUDA code that has to be compiled and loaded onto the GPU; this can take a
+-- while, so we remember which kernels we have seen before and try to re-use
+-- them.
+--
+-- The goal is to make kernels that can be re-used. If we don't, the overhead of
+-- compiling new kernels can ruin performance.
+--
+-- For example, consider the following implementation of the function
+-- 'Data.Array.Accelerate.drop' for vectors:
+--
+-- > drop :: Elt e => Exp Int -> Acc (Vector e) -> Acc (Vector e)
+-- > drop n arr =
+-- >   let n' = the (unit n)
+-- >   in  backpermute (ilift1 (subtract n') (shape arr)) (ilift1 (+ n')) arr
+--
+-- Why did we go to the trouble of converting the @n@ value into a scalar array
+-- using 'Data.Array.Accelerate.unit', and then immediately extracting that
+-- value using 'Data.Array.Accelerate.the'?
+--
+-- We can look at the expression /Accelerate/ sees by evaluating the argument to
+-- 'run'. Here is what a typical call to 'Data.Array.Accelerate.drop' evaluates
+-- to:
+--
+-- >>> drop (constant 4) (use (fromList (Z:.10) [1..]))
+-- let a0 = use (Array (Z :. 10) [1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0]) in
+-- let a1 = unit 4
+-- in backpermute
+--      (let x0 = Z in x0 :. (indexHead (shape a0)) - (a1!x0))
+--      (\x0 -> let x1 = Z in x1 :. (indexHead x0) + (a1!x1))
+--      a0
+--
+-- The important thing to note is the line @let a1 = unit 4@. This corresponds
+-- to the scalar array we created for the @n@ argument to
+-- 'Data.Array.Accelerate.drop' and it is /outside/ the call to
+-- 'Data.Array.Accelerate.backpermute'. The 'Data.Array.Accelerate.backpermute'
+-- function is what turns into a CUDA kernel, and to ensure that we get the same
+-- kernel each time we need the arguments to it to remain constant.
+--
+-- Let us see what happens if we change 'Data.Array.Accelerate.drop' to instead
+-- use its argument @n@ directly:
+--
+-- >>> drop (constant 4) (use (fromList (Z:.10) [1..]))
+-- let a0 = use (Array (Z :. 10) [1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0])
+-- in backpermute (Z :. -4 + (indexHead (shape a0))) (\x0 -> Z :. 4 + (indexHead x0)) a0
+--
+-- Instead of @n@ being outside the call to 'Data.Array.Accelerate.backpermute',
+-- it is now embedded in it. This will defeat /Accelerate's/ caching of CUDA
+-- kernels.
+--
+-- The rule of thumb is to make sure that any arguments that change are always
+-- passed in as arrays, not embedded in the code as constants.
+--
+-- How can you tell if you got it wrong? One way is to look at the code
+-- directly, as in this example. Another is to use the debugging options
+-- provided by the library, by installing it with the @-fdebug@ flag. Running
+-- with the command-line switch @-ddump-cc@ will print information about CUDA
+-- kernels as they are compiled, which will indicate whether your program is
+-- generating the number of kernels that you were expecting. See the
+-- @accelerate-cuda.cabal@ file for the full list available debugging options.
+--
+--
+-- [/Hardware support:/]
 --
 -- CUDA devices are categorised into different \'compute capabilities\',
 -- indicating what operations are supported by the hardware. For example, double
@@ -32,7 +115,7 @@
 -- size of 'Int' and 'Data.Word.Word' changes depending on the architecture GHC
 -- runs on.
 --
--- Additional notes:
+-- In particular:
 --
 --  * 'Double' precision requires compute-1.3.
 --
@@ -96,13 +179,7 @@ import Data.Array.Accelerate.Debug
 -- This will select the fastest device available on which to execute
 -- computations, based on compute capability and estimated maximum GFLOPS.
 --
--- /NOTE:/
---   GPUs typically have their own attached memory, which is separate from the
---   computer's main memory. Hence, every 'Data.Array.Accelerate.use' operation
---   implies copying data to the device, and every 'run' operation must copy the
---   results of a computation back to the host. Thus, it is best to keep all
---   computations in the 'Acc' meta-language form and only 'run' the computation
---   once at the end, to avoid transferring (unused) intermediate results.
+-- Note that it is recommended you use 'run1' whenever possible.
 --
 run :: Arrays a => Acc a -> a
 run a
@@ -161,13 +238,29 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
 -- have a computation applied repeatedly to different input data, use this. If
 -- the function is only evaluated once, this is equivalent to 'run'.
 --
--- >  let step :: Vector a -> Vector b
--- >      step = run1 f
--- >  in
--- >  simulate step ...
+-- To use 'run1' you must express your program as a function of one argument. If
+-- your program takes more than one argument, you can use
+-- 'Data.Array.Accelerate.lift' and 'Data.Array.Accelerate.unlift' to tuple up
+-- the arguments.
 --
--- See the Crystal demo, part of the 'accelerate-examples' package, for an
--- example.
+-- At an example, once your program is expressed as a function of one argument,
+-- instead of the usual:
+--
+-- > step :: Acc (Vector a) -> Acc (Vector b)
+-- > step = ...
+-- >
+-- > simulate :: Vector a -> Vector b
+-- > simulate xs = run $ step (use xs)
+--
+-- Instead write:
+--
+-- > simulate xs = run1 step xs
+--
+-- You can use the debugging options to check whether this is working
+-- successfully by, for example, observing no output from the @-ddump-cc@ flag
+-- at the second and subsequent invocations.
+--
+-- See the programs in the 'accelerate-examples' package for examples.
 --
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 run1 f

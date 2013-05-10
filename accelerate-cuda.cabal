@@ -7,12 +7,18 @@ Build-type:             Custom
 Synopsis:               Accelerate backend for NVIDIA GPUs
 Description:
   This library implements a backend for the Accelerate language instrumented for
-  parallel execution on CUDA-capable NVIDIA GPUs.
+  parallel execution on CUDA-capable NVIDIA GPUs. For further information, refer
+  to the main Accelerate package:
+  <http://hackage.haskell.org/package/accelerate>
   .
-  To use this backend you need CUDA version 3.x or later installed, which you
-  can find at the NVIDIA Developer Zone.
+  To use this backend you will need:
   .
-  <http://developer.nvidia.com/cuda-downloads>
+    1. A CUDA-enabled NVIDIA GPU with, for full functionality, compute
+       capability 1.2 or greater. See the table on Wikipedia for supported GPUs:
+       <http://en.wikipedia.org/wiki/CUDA#Supported_GPUs>
+  .
+    2. The CUDA SDK, available from the NVIDIA Developer Zone:
+       <http://developer.nvidia.com/cuda-downloads>
   .
   Compile modules that use the CUDA backend with the @-threaded@ flag.
   .
@@ -20,12 +26,13 @@ Description:
 License:                BSD3
 License-file:           LICENSE
 Author:                 Manuel M T Chakravarty,
+                        Robert Clifton-Everest,
                         Gabriele Keller,
                         Sean Lee,
                         Trevor L. McDonell
 Maintainer:             Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
 Bug-reports:            https://github.com/AccelerateHS/accelerate/issues
-Homepage:               http://www.cse.unsw.edu.au/~chak/project/accelerate/
+Homepage:               https://github.com/AccelerateHS/accelerate-cuda/
 
 Category:               Compilers/Interpreters, Concurrency, Data, Parallelism
 Stability:              Experimental
