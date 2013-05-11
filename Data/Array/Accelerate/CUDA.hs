@@ -66,7 +66,7 @@
 -- to:
 --
 -- >>> drop (constant 4) (use (fromList (Z:.10) [1..]))
--- let a0 = use (Array (Z :. 10) [1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0]) in
+-- let a0 = use (Array (Z :. 10) [1,2,3,4,5,6,7,8,9,10]) in
 -- let a1 = unit 4
 -- in backpermute
 --      (let x0 = Z in x0 :. (indexHead (shape a0)) - (a1!x0))
@@ -84,23 +84,20 @@
 -- use its argument @n@ directly:
 --
 -- >>> drop (constant 4) (use (fromList (Z:.10) [1..]))
--- let a0 = use (Array (Z :. 10) [1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0])
+-- let a0 = use (Array (Z :. 10) [1,2,3,4,5,6,7,8,9,10])
 -- in backpermute (Z :. -4 + (indexHead (shape a0))) (\x0 -> Z :. 4 + (indexHead x0)) a0
 --
 -- Instead of @n@ being outside the call to 'Data.Array.Accelerate.backpermute',
--- it is now embedded in it. This will defeat /Accelerate's/ caching of CUDA
--- kernels.
+-- it is now embedded in it. This will defeat /Accelerate/'s caching of CUDA
+-- kernels. Whenever the value of @n@ changes, a new kernel will need to be
+-- compiled.
 --
 -- The rule of thumb is to make sure that any arguments that change are always
 -- passed in as arrays, not embedded in the code as constants.
 --
 -- How can you tell if you got it wrong? One way is to look at the code
 -- directly, as in this example. Another is to use the debugging options
--- provided by the library, by installing it with the @-fdebug@ flag. Running
--- with the command-line switch @-ddump-cc@ will print information about CUDA
--- kernels as they are compiled, which will indicate whether your program is
--- generating the number of kernels that you were expecting. See the
--- @accelerate-cuda.cabal@ file for the full list available debugging options.
+-- provided by the library. See debugging options below.
 --
 --
 -- [/Hardware support:/]
@@ -126,6 +123,25 @@
 --    non-unique indices, the combination function requires compute-1.1 to
 --    combine 32-bit types, or compute-1.2 for 64-bit types. Tuple components
 --    are resolved separately.
+--
+--
+-- [/Debugging options:/]
+--
+-- When the library is installed with the @-fdebug@ flag, a few extra debugging
+-- options are available, input via the command line arguments. The most useful
+-- ones are:
+--
+--  * @-dverbose:@ Print some information on the type and capabilities of the
+--    GPU being used.
+--
+--  * @-ddump-cc:@ Print information about the CUDA kernels as they are compiled
+--    and run. Using this option will indicate whether your program is
+--    generating the number of kernels that you were expecting.
+--
+--  * @-ddump-exec:@ Print each kernel as it is being executed, with timing
+--    information.
+--
+-- See the @accelerate-cuda.cabal@ file for the full list of options.
 --
 
 module Data.Array.Accelerate.CUDA (
