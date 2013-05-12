@@ -6,27 +6,34 @@ AC_ARG_WITH([compiler], [Haskell compiler], [GHC=$withval],  [AC_PATH_PROG(GHC, 
 AC_ARG_WITH([nvcc],     [CUDA compiler],    [NVCC=$withval], [AC_PROG_CXX(nvcc)])
 AC_ARG_WITH([gcc],      [C compiler],       [CC=$withval])
 
-AC_DEFUN([AC_SIZEOF_HS], [
+AC_DEFUN([AC_HTYPE], [
     AC_MSG_CHECKING(size of [$1])
 
-    sizeof_hs_[$1]=`$GHC -w -ignore-dot-ghci -e "Foreign.sizeOf (undefined::$1)"`
+    sizeof_hs_[$1]=`$GHC -w -ignore-dot-ghci -e "import Foreign" -e "import Foreign.C" -e "sizeOf (undefined::$1)"`
     AC_MSG_RESULT($sizeof_hs_[$1])
 
     case $sizeof_hs_[$1] in
-        4) [$2]=[$3]32 ;;
-        8) [$2]=[$3]64 ;;
+        4) [$4]=[$2]32 ;;
+        8) [$4]=[$2]64 ;;
     esac
 
-    def="-DSIZEOF_HS$(echo [$1] | tr [[:lower:]] [[:upper:]])=$sizeof_hs_[$1]"
+    # The type name
+    def="-D[$3]=$[$4]"
+    cpp_flags="$cpp_flags $def"
+    ghc_flags="$ghc_flags -optP$def"
+
+    # And size
+    def="-DSIZEOF_[$3]=$sizeof_hs_[$1]"
     cpp_flags="$cpp_flags $def"
     ghc_flags="$ghc_flags -optP$def"
 ])
 
-AC_SIZEOF_HS(Int,  type_hs_int,  Int)
-AC_SIZEOF_HS(Char, type_hs_char, Word)
+AC_HTYPE(Int,    Int,  HTYPE_INT,  type_hs_int)
+AC_HTYPE(Word,   Word, HTYPE_WORD, type_hs_word)
+AC_HTYPE(CLong,  Int,  HTYPE_LONG, type_hs_long)
+AC_HTYPE(CULong, Word, HTYPE_UNSIGNED_LONG, type_hs_unsigned_long)
 
-AC_SUBST([type_hs_int])
-AC_SUBST([type_hs_char])
+AC_SUBST([type_hs_int])         # array index type in accelerate_cuda_shape.h.in
 AC_SUBST([ghc_flags])
 AC_SUBST([cpp_flags])
 AC_OUTPUT
