@@ -87,11 +87,11 @@ primArrayElt(Word64)
 
 primArrayEltAs(CShort,  Int16)
 primArrayEltAs(CInt,    Int32)
-primArrayEltAs(CLong,   Int64)
+primArrayEltAs(CLong,   HTYPE_LONG)
 primArrayEltAs(CLLong,  Int64)
 primArrayEltAs(CUShort, Word16)
 primArrayEltAs(CUInt,   Word32)
-primArrayEltAs(CULong,  Word64)
+primArrayEltAs(CULong,  HTYPE_UNSIGNED_LONG)
 primArrayEltAs(CULLong, Word64)
 
 primArrayElt(Float)
@@ -134,8 +134,6 @@ instance TextureData CShort  where format _ = (CUDA.Int16,  1)
 instance TextureData CUShort where format _ = (CUDA.Word16, 1)
 instance TextureData CInt    where format _ = (CUDA.Int32,  1)
 instance TextureData CUInt   where format _ = (CUDA.Word32, 1)
-instance TextureData CLong   where format _ = (CUDA.Int32,  2)
-instance TextureData CULong  where format _ = (CUDA.Word32, 2)
 instance TextureData CLLong  where format _ = (CUDA.Int32,  2)
 instance TextureData CULLong where format _ = (CUDA.Word32, 2)
 instance TextureData CFloat  where format _ = (CUDA.Float,  1)
@@ -143,32 +141,11 @@ instance TextureData CDouble where format _ = (CUDA.Int32,  2)
 instance TextureData CChar   where format _ = (CUDA.Int8,   1)
 instance TextureData CSChar  where format _ = (CUDA.Int8,   1)
 instance TextureData CUChar  where format _ = (CUDA.Word8,  1)
-#if   SIZEOF_HSINT == 4
-instance TextureData Int     where format _ = (CUDA.Int32,  1)
-instance TextureData Word    where format _ = (CUDA.Word32, 1)
-#elif SIZEOF_HSINT == 8
-instance TextureData Int     where format _ = (CUDA.Int32,  2)
-instance TextureData Word    where format _ = (CUDA.Word32, 2)
-#else
-instance TextureData Int     where
-  format _ =
-    case sizeOf (undefined::Int) of
-      4 -> (CUDA.Int32, 1)
-      8 -> (CUDA.Int32, 2)
-instance TextureData Word    where
-  format _ =
-    case sizeOf (undefined::Word) of
-      4 -> (CUDA.Word32, 1)
-      8 -> (CUDA.Word32, 2)
-#endif
-#if SIZEOF_HSCHAR == 4
 instance TextureData Char    where format _ = (CUDA.Word32, 1)
-#else
-instance TextureData Char    where
-  format _ =
-    case sizeOf (undefined::Char) of
-         4 -> (CUDA.Word32, 1)
-#endif
+instance TextureData Int     where format _ = (CUDA.Int32,  SIZEOF_HTYPE_INT           `div` 4)
+instance TextureData Word    where format _ = (CUDA.Word32, SIZEOF_HTYPE_WORD          `div` 4)
+instance TextureData CLong   where format _ = (CUDA.Int32,  SIZEOF_HTYPE_LONG          `div` 4)
+instance TextureData CULong  where format _ = (CUDA.Word32, SIZEOF_HTYPE_UNSIGNED_LONG `div` 4)
 
 
 -- Primitive array operations
