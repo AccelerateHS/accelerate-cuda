@@ -200,7 +200,7 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
         {
             typename DimOut dst;
 
-            const int src = fromIndex( shIn, ix );
+            const typename DimIn src = fromIndex( shIn, ix );
             $items:(dst .=. prj src)
 
             if ( !ignore(dst) )
