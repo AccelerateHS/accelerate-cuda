@@ -302,7 +302,7 @@ run1In ctx f = let go = run1AsyncIn ctx f
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
-    !acc      = convertAccFun1With config f
+    !acc      = convertAfunWith config f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc) >>= dumpStats
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
