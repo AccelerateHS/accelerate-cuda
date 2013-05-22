@@ -59,6 +59,7 @@ import System.IO.Error
 import System.IO.Unsafe
 import System.Time
 import System.Process
+import System.Mem.Weak
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
 import qualified Data.Text.Lazy                                 as T
@@ -381,6 +382,7 @@ link table key =
         let cubin       =  replaceExtension cufile ".cubin"
         bin             <- B.readFile cubin
         mdl             <- CUDA.loadData bin
+        addFinalizer mdl (module_finalizer key ctx mdl)
 
         -- Update hash tables and stash the binary object into the persistent
         -- cache
@@ -408,6 +410,7 @@ link table key =
         | otherwise                             -> do
             message "re-linking module for current context"
             mdl                 <- CUDA.loadData bin
+            addFinalizer mdl (module_finalizer key ctx mdl)
             KT.insert table key $! KernelObject bin (FL.cons ctx mdl active)
             return mdl
 
