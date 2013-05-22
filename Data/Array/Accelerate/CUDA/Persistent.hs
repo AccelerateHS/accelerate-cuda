@@ -15,7 +15,9 @@
 module Data.Array.Accelerate.CUDA.Persistent (
 
   KernelTable, KernelKey, KernelEntry(..),
-  new, lookup, insert, persist
+  new, lookup, insert, persist,
+
+  module_finalizer,
 
 ) where
 
@@ -32,6 +34,7 @@ import System.IO
 import System.FilePath
 import System.Directory
 import System.IO.Error
+import System.Mem.Weak
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
@@ -108,6 +111,7 @@ lookup (KT kt pt) !key = do
         bin     <- B.readFile cubin
         mdl     <- CUDA.loadData bin
         let obj  = KernelObject bin (FL.singleton ctx mdl)
+        addFinalizer mdl (module_finalizer key ctx mdl)
         HT.insert kt key obj
         return  $! Just obj
 
@@ -121,6 +125,16 @@ lookup (KT kt pt) !key = do
 --
 insert :: KernelTable -> KernelKey -> KernelEntry -> IO ()
 insert (KT kt _) !key !val = HT.insert kt key val
+
+
+-- Unload a kernel module from the specified context
+--
+module_finalizer :: KernelKey -> CUDA.Context -> CUDA.Module -> IO ()
+module_finalizer key ctx mdl = do
+  message $ "unloading module: " ++ shows ctx "/" ++ show (snd key)
+  bracket_ (CUDA.push ctx)
+           (CUDA.pop)
+           (CUDA.unload mdl)
 
 
 -- Local cache -----------------------------------------------------------------
