@@ -177,6 +177,8 @@ Library
                         -Wall
                         -fwarn-tabs
 
+  ghc-prof-options:     -auto-all
+
   -- Don't add the extensions list here. Instead, place individual LANGUAGE
   -- pragmas in the files that require a specific extension. This means the
   -- project loads in GHCi, and avoids extension clashes.
