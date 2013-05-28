@@ -149,7 +149,7 @@ devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
 --
 inContext :: Context -> IO a -> IO a
 inContext ctx action =
-  bracket_ (push ctx) CUDA.pop action
+  bracket_ (push ctx) pop action
 
 -- |Run an IO action in the default CUDA context
 --
