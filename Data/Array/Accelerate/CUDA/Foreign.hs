@@ -60,8 +60,6 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 
-import qualified Foreign.CUDA.Driver                    as CUDA
-
 import Data.Dynamic
 import Control.Applicative
 import Control.Exception                                ( bracket_ )
