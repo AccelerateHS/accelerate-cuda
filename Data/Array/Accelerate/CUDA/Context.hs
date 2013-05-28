@@ -1,5 +1,6 @@
 {-# LANGUAGE MagicHash     #-}
 {-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE ViewPatterns  #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Context
 -- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -16,7 +17,7 @@
 module Data.Array.Accelerate.CUDA.Context (
 
   -- An execution context
-  Context(..), create, push, destroy,
+  Context(..), create, push, pop, destroy,
   keepAlive,
 
 ) where
@@ -79,14 +80,28 @@ create dev flags = do
 --
 {-# INLINE destroy #-}
 destroy :: Context -> IO ()
-destroy = CUDA.destroy . deviceContext
+destroy (deviceContext -> ctx) = do
+  message dump_gc ("gc: destroy context: #" ++ show (CUDA.useContext ctx))
+  CUDA.destroy ctx
+
 
 -- | Push the given context onto the CPU's thread stack of current contexts. The
 -- context must be floating (via 'pop'), i.e. not attached to any thread.
 --
 {-# INLINE push #-}
 push :: Context -> IO ()
-push = CUDA.push . deviceContext
+push (deviceContext -> ctx) = do
+  message dump_gc ("gc: push context: #" ++ show (CUDA.useContext ctx))
+  CUDA.push ctx
+
+
+-- | Pop the current context.
+--
+{-# INLINE pop #-}
+pop :: IO ()
+pop = do
+  ctx <- CUDA.pop
+  message dump_gc ("gc: pop context: #" ++ show (CUDA.useContext ctx))
 
 
 -- Make a weak pointer to a CUDA context. We need to be careful to put the

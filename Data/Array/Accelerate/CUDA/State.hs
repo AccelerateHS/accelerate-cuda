@@ -76,7 +76,7 @@ evalCUDA !ctx !acc
   = bracket_ setup teardown
   $ evalStateT (runReaderT (runCIO acc) ctx) theState
   where
-    teardown    = CUDA.pop >> performGC
+    teardown    = pop >> performGC
     setup       = push ctx
 
 

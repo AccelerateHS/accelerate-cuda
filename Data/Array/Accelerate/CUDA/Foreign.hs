@@ -60,8 +60,6 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 
-import qualified Foreign.CUDA.Driver                    as CUDA
-
 import Data.Dynamic
 import Control.Applicative
 import Control.Exception                                ( bracket_ )
@@ -149,7 +147,7 @@ devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
 --
 inContext :: Context -> IO a -> IO a
 inContext ctx action =
-  bracket_ (push ctx) CUDA.pop action
+  bracket_ (push ctx) pop action
 
 -- |Run an IO action in the default CUDA context
 --
