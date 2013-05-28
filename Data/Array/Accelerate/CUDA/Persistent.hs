@@ -22,6 +22,7 @@ module Data.Array.Accelerate.CUDA.Persistent (
 ) where
 
 -- friends
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
@@ -71,6 +72,7 @@ data KernelTable = KT {-# UNPACK #-} !ProgramCache      -- first level cache
 
 new :: IO KernelTable
 new = do
+  message "initialise kernel table"
   cacheDir <- cacheDirectory
   createDirectoryIfMissing True cacheDir
   --
@@ -83,8 +85,8 @@ new = do
 -- Lookup a kernel through the two-level cache system. If the kernel is found in
 -- the persistent cache, it is loaded and linked into the current context.
 --
-lookup :: KernelTable -> KernelKey -> IO (Maybe KernelEntry)
-lookup (KT kt pt) !key = do
+lookup :: Context -> KernelTable -> KernelKey -> IO (Maybe KernelEntry)
+lookup context (KT kt pt) !key = do
   -- First check the local cache. If we get a hit, this could be:
   --   a) currently compiling
   --   b) compiled, but not linked into the current context
@@ -107,11 +109,10 @@ lookup (KT kt pt) !key = do
       Just ()   -> do
         message "found/persistent"
         cubin   <- (</>) <$> cacheDirectory <*> pure (cacheFilePath key)
-        ctx     <- CUDA.get
         bin     <- B.readFile cubin
-        mdl     <- CUDA.loadData bin
-        let obj  = KernelObject bin (FL.singleton ctx mdl)
-        addFinalizer mdl (module_finalizer key ctx mdl)
+        !mdl    <- CUDA.loadData bin
+        let obj  = KernelObject bin (FL.singleton (deviceContext context) mdl)
+        addFinalizer mdl (module_finalizer (weakContext context) key mdl)
         HT.insert kt key obj
         return  $! Just obj
 
@@ -129,12 +130,13 @@ insert (KT kt _) !key !val = HT.insert kt key val
 
 -- Unload a kernel module from the specified context
 --
-module_finalizer :: KernelKey -> CUDA.Context -> CUDA.Module -> IO ()
-module_finalizer key ctx mdl = do
-  message $ "unloading module: " ++ shows ctx "/" ++ show (snd key)
-  bracket_ (CUDA.push ctx)
-           (CUDA.pop)
-           (CUDA.unload mdl)
+module_finalizer :: Weak CUDA.Context -> KernelKey -> CUDA.Module -> IO ()
+module_finalizer weak_ctx (_,key) mdl = do
+  mc <- deRefWeak weak_ctx
+  case mc of
+    Nothing     -> D.message D.dump_gc ("gc: finalise module/dead context: "       ++ show key)
+    Just ctx    -> D.message D.dump_gc ("gc: finalise module: " ++ show ctx ++ "/" ++ show key)
+                >> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)
 
 
 -- Local cache -----------------------------------------------------------------
