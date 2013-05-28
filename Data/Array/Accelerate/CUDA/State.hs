@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns               #-}
+{-# LANGUAGE CPP                        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -33,14 +35,21 @@ import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
+#if !MIN_VERSION_base(4,6,0)
+import Prelude                                          hiding ( catch )
+#endif
 import Control.Applicative                              ( Applicative )
-import Control.Exception                                ( bracket_ )
+import Control.Concurrent                               ( runInBoundThread )
+import Control.Exception                                ( catch, bracket_ )
 import Control.Monad.Trans                              ( MonadIO )
 import Control.Monad.Reader                             ( MonadReader, ReaderT(..), runReaderT )
 import Control.Monad.State.Strict                       ( MonadState, StateT(..), evalStateT )
 import System.Mem                                       ( performGC )
 import System.IO.Unsafe                                 ( unsafePerformIO )
+import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                    as CUDA
+
+#include "accelerate.h"
 
 
 -- Execution State
@@ -72,12 +81,14 @@ activeContext = id
 --
 {-# NOINLINE evalCUDA #-}
 evalCUDA :: Context -> CIO a -> IO a
-evalCUDA !ctx !acc
-  = bracket_ setup teardown
-  $ evalStateT (runReaderT (runCIO acc) ctx) theState
+evalCUDA !ctx !acc =
+  runInBoundThread (bracket_ setup teardown action)
+  `catch`
+  \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
   where
-    teardown    = pop >> performGC
     setup       = push ctx
+    teardown    = pop >> performGC
+    action      = evalStateT (runReaderT (runCIO acc) ctx) theState
 
 
 -- Top-level mutable state

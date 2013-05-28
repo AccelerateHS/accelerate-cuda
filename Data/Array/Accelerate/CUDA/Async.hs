@@ -26,14 +26,12 @@ import Control.Concurrent
 data Async a = Async {-# UNPACK #-} !ThreadId
                      {-# UNPACK #-} !(MVar (Either SomeException a))
 
--- Fork an action to execute asynchronously. Moreover, this will be forked into
--- a _bound_ thread, which allows the thread to call foreign libraries that make
--- use of thread-local state, such as CUDA.
+-- | Fork an action to execute asynchronously.
 --
 async :: IO a -> IO (Async a)
 async action = do
    var <- newEmptyMVar
-   tid <- forkOS $ (putMVar var . Right =<< action)
+   tid <- forkIO $ (putMVar var . Right =<< action)
                    `catch`
                    \e -> putMVar var (Left e)
    return (Async tid var)
