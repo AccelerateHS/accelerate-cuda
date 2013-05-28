@@ -29,6 +29,7 @@ import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
@@ -324,12 +325,13 @@ build acc aenv = do
 
 build1 :: DelayedOpenAcc aenv a -> CUTranslSkel aenv a -> CIO (AccKernel a)
 build1 acc code = do
-  dev           <- asks deviceProperties
+  context       <- asks activeContext
+  let dev       =  deviceProperties context
   table         <- gets kernelTable
   (entry,key)   <- compile table dev code
   let (cta,blocks,smem) = launchConfig acc dev occ
       (mdl,fun,occ)     = unsafePerformIO $ do
-        m <- link table key
+        m <- link context table key
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
         o <- determineOccupancy acc dev f l
@@ -361,12 +363,13 @@ build1 acc code = do
 -- table. This may entail waiting for the external compilation process to
 -- complete. If successful, the temporary files are removed.
 --
-link :: KernelTable -> KernelKey -> IO CUDA.Module
-link table key =
-  let intErr = INTERNAL_ERROR(error) "link" "missing kernel entry"
+link :: Context -> KernelTable -> KernelKey -> IO CUDA.Module
+link context table key =
+  let intErr    = INTERNAL_ERROR(error) "link" "missing kernel entry"
+      ctx       = deviceContext context
+      weak_ctx  = weakContext context
   in do
-    ctx         <- CUDA.get
-    entry       <- fromMaybe intErr `fmap` KT.lookup table key
+    entry       <- fromMaybe intErr `fmap` KT.lookup context table key
     case entry of
       CompileProcess cufile done -> do
         -- Wait for the compiler to finish and load the binary object into the
@@ -382,7 +385,7 @@ link table key =
         let cubin       =  replaceExtension cufile ".cubin"
         bin             <- B.readFile cubin
         mdl             <- CUDA.loadData bin
-        addFinalizer mdl (module_finalizer key ctx mdl)
+        addFinalizer mdl (module_finalizer weak_ctx key mdl)
 
         -- Update hash tables and stash the binary object into the persistent
         -- cache
@@ -410,7 +413,7 @@ link table key =
         | otherwise                             -> do
             message "re-linking module for current context"
             mdl                 <- CUDA.loadData bin
-            addFinalizer mdl (module_finalizer key ctx mdl)
+            addFinalizer mdl (module_finalizer weak_ctx key mdl)
             KT.insert table key $! KernelObject bin (FL.cons ctx mdl active)
             return mdl
 
@@ -419,7 +422,8 @@ link table key =
 --
 compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel aenv a -> CIO (String, KernelKey)
 compile table dev cunit = do
-  exists        <- isJust `fmap` liftIO (KT.lookup table key)
+  context       <- asks activeContext
+  exists        <- isJust `fmap` liftIO (KT.lookup context table key)
   unless exists $ do
     message     $  unlines [ show key, T.unpack code ]
     nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
