@@ -106,6 +106,7 @@ instance Show HostArray where
 --
 new :: IO MemoryTable
 new = do
+  message "initialise memory table"
   tbl  <- HT.new
   ref  <- newIORef tbl
   nrs  <- N.new
@@ -213,7 +214,7 @@ finalizer !weak_ctx !weak_ref !weak_nrs !key !ptr !bytes = do
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> message ("finalise/dead table: " ++ show key)
-    Just ref -> trace   ("finalise: "            ++ show key) $ withIORef ref (`HT.delete` key)
+    Just ref -> withIORef ref (`HT.delete` key)
   --
   mc <- deRefWeak weak_ctx
   case mc of
@@ -222,8 +223,8 @@ finalizer !weak_ctx !weak_ref !weak_nrs !key !ptr !bytes = do
       --
       mn <- deRefWeak weak_nrs
       case mn of
-        Nothing  -> trace ("finalise/dead nursery: " ++ show key) $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
-        Just nrs -> trace ("finalise/nursery: "      ++ show key) $ N.insert bytes ctx nrs ptr
+        Nothing  -> trace ("finalise/free: "     ++ show key) $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
+        Just nrs -> trace ("finalise/nursery: "  ++ show key) $ N.insert bytes ctx nrs ptr
 
 
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()
