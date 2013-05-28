@@ -161,14 +161,10 @@ module Data.Array.Accelerate.CUDA (
 ) where
 
 -- standard library
-#if !MIN_VERSION_base(4,6,0)
-import Prelude                                          hiding ( catch )
-#endif
 import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
 import System.IO.Unsafe
-import Foreign.CUDA.Driver.Error
 
 -- friends
 import Data.Array.Accelerate.Trafo
@@ -184,8 +180,6 @@ import Data.Array.Accelerate.CUDA.Execute
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
 #endif
-
-#include "accelerate.h"
 
 
 -- Accelerate: CUDA
@@ -242,8 +236,6 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
   where
     !acc    = convertAccWith config a
     execute = evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
-              `catch`
-              \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
 
 -- | Prepare and execute an embedded array program of one argument.
@@ -305,8 +297,6 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
     !acc      = convertAfunWith config f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc) >>= dumpStats
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
-                `catch`
-                \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
 
 -- TLM: We need to be very careful with run1* variants, to ensure that the
 --      returned closure shortcuts directly to the execution phase.
