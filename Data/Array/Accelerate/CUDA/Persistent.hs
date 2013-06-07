@@ -131,11 +131,11 @@ insert (KT kt _) !key !val = HT.insert kt key val
 -- Unload a kernel module from the specified context
 --
 module_finalizer :: Weak CUDA.Context -> KernelKey -> CUDA.Module -> IO ()
-module_finalizer weak_ctx (_,key) mdl = do
+module_finalizer weak_ctx key mdl = do
   mc <- deRefWeak weak_ctx
   case mc of
-    Nothing     -> D.message D.dump_gc ("gc: finalise module/dead context: "       ++ show key)
-    Just ctx    -> D.message D.dump_gc ("gc: finalise module: " ++ show ctx ++ "/" ++ show key)
+    Nothing     -> D.message D.dump_gc ("gc: finalise module/dead context: " ++ cacheFilePath key)
+    Just ctx    -> D.message D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
                 >> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)
 
 
