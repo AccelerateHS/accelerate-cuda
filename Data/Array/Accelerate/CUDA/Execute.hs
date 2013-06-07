@@ -95,19 +95,18 @@ executeAcc :: Arrays a => ExecAcc a -> CIO a
 executeAcc !acc = executeOpenAcc acc Empty
 
 executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
-executeAfun1 !afun !arrs
-  | Alam (Abody f) <- afun
-  = do useArrays (arrays arrs) (fromArr arrs)
-       executeOpenAcc f (Empty `Push` arrs)
-
-  | otherwise
-  = error "the sword comes out after you swallow it, right?"
-
+executeAfun1 !afun !arrs = do
+  useArrays (arrays arrs) (fromArr arrs)
+  executeOpenAfun1 afun Empty arrs
   where
     useArrays :: ArraysR arrs -> arrs -> CIO ()
     useArrays ArraysRunit         ()       = return ()
     useArrays (ArraysRpair r1 r0) (a1, a0) = useArrays r1 a1 >> useArrays r0 a0
     useArrays ArraysRarray        arr      = useArray arr
+
+executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Val aenv -> a -> CIO b
+executeOpenAfun1 (Alam (Abody f)) aenv x = executeOpenAcc f (aenv `Push` x)
+executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
 
 
 -- Evaluate an open array computation
@@ -131,7 +130,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Alet bnd body             -> executeOpenAcc body . (aenv `Push`) =<< travA bnd
       Atuple tup                -> toTuple <$> travT tup
       Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
-      Apply f a                 -> executeAfun1 f =<< travA a
+      Apply f a                 -> executeOpenAfun1 f aenv =<< travA a
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
 
       -- Foreign
