@@ -90,19 +90,19 @@ import Paths_accelerate_cuda                                    ( getDataDir )
 --   * kernel object(s) required to executed the kernel
 --
 compileAcc :: DelayedAcc a -> CIO (ExecAcc a)
-compileAcc = prepareOpenAcc
+compileAcc = compileOpenAcc
 
 compileAfun :: DelayedAfun f -> CIO (ExecAfun f)
-compileAfun = prepareOpenAfun
+compileAfun = compileOpenAfun
 
 
-prepareOpenAfun :: DelayedOpenAfun aenv f -> CIO (PreOpenAfun ExecOpenAcc aenv f)
-prepareOpenAfun (Alam l)  = Alam  <$> prepareOpenAfun l
-prepareOpenAfun (Abody b) = Abody <$> prepareOpenAcc b
+compileOpenAfun :: DelayedOpenAfun aenv f -> CIO (PreOpenAfun ExecOpenAcc aenv f)
+compileOpenAfun (Alam l)  = Alam  <$> compileOpenAfun l
+compileOpenAfun (Abody b) = Abody <$> compileOpenAcc b
 
 
-prepareOpenAcc :: DelayedOpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
-prepareOpenAcc = traverseAcc
+compileOpenAcc :: DelayedOpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
+compileOpenAcc = traverseAcc
   where
     -- Traverse an open array expression in depth-first order. The top-level
     -- function traverseAcc is intended for manifest arrays that we will
@@ -114,13 +114,13 @@ prepareOpenAcc = traverseAcc
     -- are merged at every step.
     --
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
-    traverseAcc Delayed{} = INTERNAL_ERROR(error) "prepareOpenAcc" "unexpected delayed array"
+    traverseAcc Delayed{} = INTERNAL_ERROR(error) "compileOpenAcc" "unexpected delayed array"
     traverseAcc topAcc@(Manifest pacc) =
       case pacc of
         -- Environment and control flow
         Avar ix                 -> node $ pure (Avar ix)
-        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a <*> traverseAcc b
-        Apply f a               -> node . pure =<< Apply        <$> compileAfun f <*> traverseAcc a
+        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a     <*> traverseAcc b
+        Apply f a               -> node . pure =<< Apply        <$> compileOpenAfun f <*> traverseAcc a
         Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
         Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
