@@ -143,6 +143,40 @@
 --
 -- See the @accelerate-cuda.cabal@ file for the full list of options.
 --
+--
+-- [/Automatic Graphics Switching on Mac OS X:/]
+--
+-- Some Apple computers contain two graphics processors: a low-power integrated
+-- graphics chipset, as well as a higher-performance NVIDIA GPU. The latter is
+-- of course the one we want to use. Usually Mac OS X detects whenever a program
+-- attempts to run a CUDA function and switches to the NVIDIA GPU automatically.
+--
+-- However, sometimes this does not work correctly and the problem can manifest
+-- in several ways:
+--
+--  * The program may report an error such as \"No CUDA-capable device is
+--    available\" or \"invalid context handle\".
+--
+--  * For programs that also use OpenGL, the graphics switching might occur and
+--    the Accelerate computation complete as expected, but no OpenGL updates
+--    appear on screen.
+--
+-- There are several solutions:
+--
+--  * Use a tool such as /gfxCardStatus/ to manually select either the
+--    integrated or discrete GPU: <http://gfx.io>
+--
+--  * Disable automatic graphics switching in the Energy Saver pane of System
+--    Preferences. Since this disables use of the low-power integrated GPU, this
+--    can decrease battery life.
+--
+--  * When executing the program, disable the RTS clock by appending @+RTS -V0@
+--    to the command line arguments. This disables the RTS clock and all timers
+--    that depend on it: the context switch timer and the heap profiling timer.
+--    Context switches still happen, but deterministically and at a rate much
+--    faster than normal. Automatic graphics switching will work correctly, but
+--    this method has the disadvantage of reducing performance of the program.
+--
 
 module Data.Array.Accelerate.CUDA (
 
