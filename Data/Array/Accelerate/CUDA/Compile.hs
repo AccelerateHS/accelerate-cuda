@@ -15,6 +15,7 @@
 -- Portability : non-portable (GHC extensions)
 --
 
+
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
