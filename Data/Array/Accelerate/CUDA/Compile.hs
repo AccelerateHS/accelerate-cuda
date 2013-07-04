@@ -15,6 +15,7 @@
 -- Portability : non-portable (GHC extensions)
 --
 
+
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
@@ -59,7 +60,7 @@ import System.IO
 import System.IO.Error
 import System.IO.Unsafe
 import System.Time
-import System.Process
+import System.Process (createProcess, waitForProcess, proc)
 import System.Mem.Weak
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
@@ -453,6 +454,7 @@ compileFlags cufile = do
     [ "-I", ddir </> "cubits"
     , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
+    , "--restrict"
     , "-o", cufile `replaceExtension` "cubin"
     , if D.mode D.dump_cc  then ""   else "--disable-warnings"
     , if D.mode D.debug_cc then "-G" else "-O3"
@@ -469,7 +471,8 @@ compileFlags cufile = do
 --
 openTemporaryFile :: String -> CIO (FilePath, Handle)
 openTemporaryFile template = liftIO $ do
-  pid <- getProcessID
+	
+  pid <- return 9999 -- getProcessID 
   dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
   createDirectoryIfMissing True dir
   openTempFile dir template
@@ -507,7 +510,7 @@ enqueueProcess nvcc flags = do
 
       -- Wait for the process to complete
       --
-      waitFor pid
+      waitForProcess pid
       ccEnd     <- getTime
 
       let ccT   = diffTime ccBegin ccEnd
@@ -532,12 +535,14 @@ enqueueProcess nvcc flags = do
 
 -- Wait for a (compilation) process to finish
 --
+{-
 waitFor :: ProcessHandle -> IO ()
 waitFor pid = do
   status <- waitForProcess pid
   case status of
     ExitSuccess   -> return ()
     ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
+-}
 
 
 -- Debug
