@@ -455,6 +455,7 @@ compileFlags cufile = do
     , "-cubin"
     , "-o", cufile `replaceExtension` "cubin"
     , if D.mode D.dump_cc  then ""   else "--disable-warnings"
+    , if D.mode D.debug_cc then ""   else "-DNDEBUG"
     , if D.mode D.debug_cc then "-G" else "-O3"
     , machine
     , cufile ]

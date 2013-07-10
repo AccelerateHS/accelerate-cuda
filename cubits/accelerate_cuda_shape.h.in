@@ -14,6 +14,7 @@
 #define __ACCELERATE_CUDA_SHAPE_H__
 
 #include <cuda_runtime.h>
+#include "accelerate_cuda_assert.h"
 #include "accelerate_cuda_type.h"
 
 /*
@@ -267,7 +268,11 @@ static __inline__ __device__ DIM9 indexCons(const DIM8 sh, const Ix ix)
 template <typename Shape>
 static __inline__ __device__ Ix toIndex(const Shape sh, const Shape ix)
 {
-    return toIndex(indexTail(sh), indexTail(ix)) * indexHead(sh) + indexHead(ix);
+    const Ix sz = indexHead(sh);
+    const Ix i  = indexHead(ix);
+
+    assert(i >= 0 && i < sz);
+    return toIndex(indexTail(sh), indexTail(ix)) * sz + i;
 }
 
 template <>
@@ -279,6 +284,7 @@ static __inline__ __device__ Ix toIndex(const DIM0 sh, const DIM0 ix)
 template <>
 static __inline__ __device__ Ix toIndex(const DIM1 sh, const DIM1 ix)
 {
+    assert(ix >= 0 && ix < sh);
     return ix;
 }
 
@@ -302,6 +308,7 @@ static __inline__ __device__ DIM0 fromIndex(const DIM0 sh, const Ix ix)
 template <>
 static __inline__ __device__ DIM1 fromIndex(const DIM1 sh, const Ix ix)
 {
+    assert(ix >= 0 && ix < sh);
     return ix;
 }
 
