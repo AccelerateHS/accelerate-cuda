@@ -52,8 +52,7 @@ static __inline__ __device__ Shape clamp(const Shape sh, const Shape ix)
 template <>
 static __inline__ __device__ DIM1 clamp(const DIM1 sz, const DIM1 i)
 {
-    // CUDA-4.0 does not include 64-bit min/max functions for Fermi (?)
-    return max(0, min(i, sz-1));
+    return max((Ix) 0, min(i, sz-1));
 }
 
 
