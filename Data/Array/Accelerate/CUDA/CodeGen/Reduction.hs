@@ -111,7 +111,7 @@ mkFoldAll'
 mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun1 _ get))
   = CUTranslSkel foldAll [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -226,7 +226,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun
   = return
   $ CUTranslSkel fold [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -424,7 +424,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
   (CUDelayed _            _ (CUFun1 _ offset))
   = CUTranslSkel foldSeg [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C"

@@ -1,6 +1,6 @@
 /* -----------------------------------------------------------------------------
  *
- * Module      : Extras
+ * Module      : Accelerate-CUDA
  * Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
  *               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
  * License     : BSD3
@@ -10,8 +10,8 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef __ACCELERATE_CUDA_EXTRAS_H__
-#define __ACCELERATE_CUDA_EXTRAS_H__
+#ifndef __ACCELERATE_CUDA_H__
+#define __ACCELERATE_CUDA_H__
 
 #include "accelerate_cuda_function.h"
 #include "accelerate_cuda_shape.h"

@@ -47,7 +47,7 @@ mkMap dev aenv fun arr
   = return
   $ CUTranslSkel "map" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void

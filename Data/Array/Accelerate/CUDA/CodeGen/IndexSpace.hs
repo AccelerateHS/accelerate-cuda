@@ -53,7 +53,7 @@ mkGenerate dev aenv (CUFun1 _ f)
   = return
   $ CUTranslSkel "generate" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecl:(cdim "DimOut" dim)
     $edecls:texIn
 
@@ -110,7 +110,7 @@ mkTransform dev aenv perm fun arr
   = return
   $ CUTranslSkel "transform" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn"  dimIn)
     $edecls:texIn
@@ -176,7 +176,7 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
   = return
   $ CUTranslSkel "permute" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecl:(cdim "DimOut" dimOut)
     $edecl:(cdim "DimIn"  dimIn)
     $edecls:texIn

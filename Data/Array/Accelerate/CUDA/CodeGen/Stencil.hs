@@ -66,7 +66,7 @@ mkStencil dev aenv (CUFun1 dce f) boundary
   = return
   $ CUTranslSkel "stencil" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecl:(cdim "Shape" dim)
     $edecls:texIn
     $edecls:texStencil
@@ -131,7 +131,7 @@ mkStencil2 dev aenv (CUFun2 dce1 dce2 f) boundary1 boundary2
   = return
   $ CUTranslSkel "stencil2" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecl:(cdim "Shape" dim)
     $edecls:texIn
     $edecls:texS1
