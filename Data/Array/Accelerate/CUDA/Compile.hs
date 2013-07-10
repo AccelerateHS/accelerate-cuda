@@ -453,6 +453,7 @@ compileFlags cufile = do
     [ "-I", ddir </> "cubits"
     , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
+    , "--restrict"
     , "-o", cufile `replaceExtension` "cubin"
     , if D.mode D.dump_cc  then ""   else "--disable-warnings"
     , if D.mode D.debug_cc then ""   else "-DNDEBUG"
