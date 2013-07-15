@@ -18,7 +18,7 @@ module Data.Array.Accelerate.CUDA.Context (
 
   -- An execution context
   Context(..), create, push, pop, destroy,
-  keepAlive,
+  keepAlive, fromDeviceContext
 
 ) where
 
@@ -55,12 +55,8 @@ instance Eq Context where
 --
 create :: CUDA.Device -> [CUDA.ContextFlag] -> IO Context
 create dev flags = do
-  ctx           <- CUDA.create dev flags >> CUDA.pop >>= keepAlive
-  prp           <- CUDA.props dev
-  weak          <- mkWeakContext ctx $ do
-    message dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
-    CUDA.destroy ctx
-  message dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
+  ctx                    <- CUDA.create dev flags >> CUDA.pop >>= keepAlive
+  actx@(Context prp _ _) <- fromDeviceContext dev ctx
 
   -- Generated code does not take particular advantage of shared memory, so
   -- for devices that support it use those banks as an L1 cache instead.
@@ -72,8 +68,18 @@ create dev flags = do
      $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.setCacheConfig CUDA.PreferL1)
 
   message verbose (deviceInfo dev prp)
-  return $! Context prp ctx weak
+  return actx
 
+-- |Given a device context, construct a new context around it.
+fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
+fromDeviceContext dev ctx = do
+  prp           <- CUDA.props dev
+  weak          <- mkWeakContext ctx $ do
+    message dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
+    CUDA.destroy ctx
+  message dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
+
+  return $! Context prp ctx weak
 
 -- | Destroy the specified context. This will fail if the context is more than
 -- single attachment.

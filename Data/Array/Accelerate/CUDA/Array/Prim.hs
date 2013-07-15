@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TupleSections       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -20,6 +21,7 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 
   mallocArray, indexArray,
   useArray,  useArrayAsync,
+  useDevicePtrs,
   copyArray, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
@@ -213,6 +215,21 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
       dst <- malloc ctx mt ad n
       CUDA.pokeArrayAsync n src dst ms
 
+useDevicePtrs
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> DevicePtrs e
+    -> Int
+    -> IO (ArrayData e)
+useDevicePtrs !ctx !mt !ptr !n0 =
+  let !n         = 1 `max` n0
+      !bytes     = n * sizeOf (undefined :: a)
+      (adata, _) = runArrayData $ (,undefined) `fmap` newArrayData n
+  in do
+    message $ "useDevicePtrs: " ++ showBytes bytes
+    insertRemote ctx mt adata ptr
+    return adata
 
 -- Read a single element from an array at the given row-major index
 --

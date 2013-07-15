@@ -7,6 +7,7 @@
 -- Module      : Data.Array.Accelerate.CUDA.Array.Data
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
 --               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+--               [2013]       Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -19,11 +20,13 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   -- * Array operations and representations
   mallocArray, indexArray,
   useArray,  useArrayAsync,
+  useDevicePtrs,
   copyArray, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
   devicePtrsOfArrayData, advancePtrsOfArrayData,
+  devicePtrsFromList, devicePtrsToWordPtrs,
 
   -- * Garbage collection
   cleanupArrayData
@@ -32,15 +35,17 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 
 -- libraries
 import Prelude                                          hiding ( fst, snd )
+import qualified Prelude                                as P
 import Control.Applicative
 import Control.Monad.Reader                             ( asks )
 import Control.Monad.State                              ( gets )
 import Control.Monad.Trans                              ( liftIO )
 import Foreign.C.Types
+import Foreign.Ptr
 
 -- friends
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt )
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
 import Data.Array.Accelerate.Array.Representation       ( size )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Table
@@ -157,6 +162,37 @@ useArrayAsync (Array !sh !adata) ms = run doUse
         --
         usePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> Maybe CUDA.Stream -> IO ()
         mkPrimDispatch(usePrim,Prim.useArrayAsync)
+
+
+useDevicePtrs :: (Shape sh, Elt e) => EltRepr sh -> Prim.DevicePtrs (EltRepr e) -> CIO (Array sh e)
+useDevicePtrs sh ptrs = run doUse
+  where
+    !n             = size sh
+    doUse !ctx !mt = Array sh <$> useD arrayElt ptrs
+      where
+        useD :: ArrayEltR e -> Prim.DevicePtrs e -> IO (ArrayData e)
+        useD ArrayEltRunit             _  = return AD_Unit
+        useD (ArrayEltRpair aeR1 aeR2) ps = AD_Pair <$> useD aeR1 (P.fst ps)
+                                                    <*> useD aeR2 (P.snd ps)
+        useD aer                       ps = usePrim aer ctx mt ps n
+        --
+        usePrim :: ArrayEltR e -> Context -> MemoryTable -> Prim.DevicePtrs e -> Int -> IO (ArrayData e)
+        mkPrimDispatch(usePrim,Prim.useDevicePtrs)
+
+devicePtrsFromList :: ArrayEltR e -> [WordPtr] -> Prim.DevicePtrs e
+devicePtrsFromList aeR = P.fst . (devP aeR)
+  where
+    devP :: ArrayEltR e -> [WordPtr] -> (Prim.DevicePtrs e, [WordPtr])
+    devP ArrayEltRunit             ps     = ((),ps)
+    devP (ArrayEltRpair aeR1 aeR2) ps     = let
+        (d1, ps')  = devP aeR1 ps
+        (d2, ps'') = devP aeR2 ps'
+      in ((d1,d2), ps'')
+    devP aer                       (p:ps) = (devPrim aer p, ps)
+    devP _                         []     = error "devicePtrsFromList: incorrect number of device pointers for element type"
+    --
+    devPrim :: ArrayEltR e -> WordPtr -> Prim.DevicePtrs e
+    mkPrimDispatch(devPrim,CUDA.wordPtrToDevPtr)
 
 
 -- |Read a single element from an array at the given row-major index. This is a
@@ -326,21 +362,25 @@ pokeArrayAsync (Array !sh !adata) !ms = run doPoke
         mkPrimDispatch(pokePrim,Prim.pokeArrayAsync)
 
 
+-- |Convert the device pointers into a list of word pointers
+--
+devicePtrsToWordPtrs :: ArrayElt e => ArrayData e -> Prim.DevicePtrs e -> [WordPtr]
+devicePtrsToWordPtrs !adata = wordR arrayElt adata
+  where
+    wordR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> [WordPtr]
+    wordR ArrayEltRunit             _  _       = []
+    wordR (ArrayEltRpair aeR1 aeR2) ad (p1,p2) = wordR aeR1 (fst ad) p1 ++
+                                                 wordR aeR2 (snd ad) p2
+    wordR aer                       ad ptr     = [wordPrim aer ad ptr]
+    --
+    wordPrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> WordPtr
+    mkPrimDispatch(wordPrim,const CUDA.devPtrToWordPtr)
+
 -- |Wrap device pointers into arguments that can be passed to a kernel
 -- invocation
 --
 marshalDevicePtrs :: ArrayElt e => ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
-marshalDevicePtrs !adata = marshalR arrayElt adata
-  where
-    marshalR :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> [CUDA.FunParam]
-    marshalR ArrayEltRunit             _  _       = []
-    marshalR (ArrayEltRpair aeR1 aeR2) ad (p1,p2) = marshalR aeR1 (fst ad) p1 ++
-                                                    marshalR aeR2 (snd ad) p2
-    marshalR aer                       ad ptr     = [marshalPrim aer ad ptr]
-    --
-    marshalPrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> CUDA.FunParam
-    mkPrimDispatch(marshalPrim,Prim.marshalDevicePtrs)
-
+marshalDevicePtrs !adata ptrs = map (CUDA.VArg . CUDA.wordPtrToDevPtr) $ devicePtrsToWordPtrs adata ptrs
 
 -- |Wrap the device pointers corresponding to a host-side array into arguments
 -- that can be passed to a kernel upon invocation.
@@ -413,4 +453,3 @@ advancePtrsOfArrayData !adata !n = advanceR arrayElt adata
     --
     advancePrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
     mkPrimDispatch(advancePrim,Prim.advancePtrsOfArrayData n)
-
