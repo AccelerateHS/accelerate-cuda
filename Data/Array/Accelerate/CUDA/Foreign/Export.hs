@@ -26,6 +26,7 @@
 module Data.Array.Accelerate.CUDA.Foreign.Export (
 
   -- ** Functions callable from foreign code
+  -- In order to call these from from C, see the corresponding C function signature.
   accelerateCreate, accelerateDestroy, freeResult, freeProgram, getShape,
   getDevicePtrs,
 
@@ -131,26 +132,35 @@ type instance OutputArgsOf ()      = ()
 type instance OutputArgsOf (xs, Array sh e) = (OutputArgsOf xs, Ptr (ResultArray sh e))
 
 -- |Create an Accelerate handle given a device and a cuda context.
+--
+-- @AccHandle accelerateCreate(int device, CUcontext ctx);@
 accelerateCreate :: Device -> ForeignContext -> IO AccHandle
 accelerateCreate dev ctx = fromDeviceContext (CUDA.Device $ CInt dev) (CUDA.Context ctx) >>= newStablePtr
 
 -- |Releases all resources used by the accelerate library.
+--
+-- @void accelerateDestroy(AccHandle hndl);@
 accelerateDestroy :: AccHandle -> IO ()
-accelerateDestroy = freeStablePtr --TODO: Force GC here
+accelerateDestroy = freeStablePtr
 
 -- |Function callable from foreign code to 'free' a ResultArray returned after executing
 -- an Accelerate computation.
 --
 -- Once freed, the device pointers associated with an array are no longer valid.
 --
+-- @void freeResult(ResultArray arr);@
 freeResult :: ResultArray sh e -> IO ()
 freeResult arr = freeStablePtr arr
 
 -- |Free a compiled accelerate program.
+--
+-- @void freeProgram(Program prg);@
 freeProgram :: StablePtr a -> IO ()
 freeProgram = freeStablePtr
 
 -- |Get the shape of the result array and write it to the given buffer.
+--
+-- @void getShape(ResultArray arr, int *sh);@
 getShape :: ResultArray sh e -> ShapeBuffer -> IO ()
 getShape arr psh = do
   a <- deRefStablePtr arr
@@ -163,6 +173,8 @@ getShape arr psh = do
 
 -- |Get the device pointers associated with the result array and
 -- write them to the given buffer.
+--
+-- @void getDevicePtrs(AccHandle hndl, ResultArray arr, void **buffer);@
 getDevicePtrs :: AccHandle -> ResultArray sh e -> DevicePtrBuffer -> IO ()
 getDevicePtrs hndl arr pbuf = do
   (Array _ adata) <- deRefStablePtr arr
@@ -187,8 +199,6 @@ foreignAccModule = createHfile >> exports
         typedef typename HsStablePtr AccHandle;
         typedef typename HsStablePtr AccProgram;
         typedef typename HsStablePtr ResultArray;
-        typedef          int*        ShapeBuffer;
-        typedef          void**      DevicePtrBuffer;
       |]
 
     exports = sequence $ uncurry exportf <$>
