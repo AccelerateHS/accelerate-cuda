@@ -5,6 +5,7 @@
 {-# LANGUAGE CPP                      #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE TemplateHaskell          #-}
+{-# LANGUAGE QuasiQuotes              #-}
 {-# LANGUAGE TypeFamilies             #-}
 {-# LANGUAGE UndecidableInstances     #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing  #-}
@@ -29,7 +30,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
   getDevicePtrs,
 
   -- ** Exporting
-  Exported, exportUtils, exportAfun1, buildExported,
+  Exported, foreignAccModule, exportAfun1, buildExported,
 
   -- ** Types
   ResultArray, ShapeBuffer, DevicePtrBuffer, Device, ForeignContext,
@@ -37,6 +38,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
 ) where
 
 import Data.Functor
+import System.FilePath
 import Control.Exception
 import Control.Applicative
 import Foreign.StablePtr
@@ -47,7 +49,10 @@ import Foreign.Marshal.Array                            ( peekArray, pokeArray )
 import Control.Monad.State                              ( liftIO )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import System.IO.Unsafe
-import Language.Haskell.TH
+import Language.Haskell.TH                              hiding ( ppr )
+import Language.C.Quote.C
+import Language.C.Syntax                                ( Definition )
+import Text.PrettyPrint.Mainland
 
 -- friends
 import Data.Array.Accelerate.Smart                      ( Acc )
@@ -64,7 +69,7 @@ import Data.Array.Accelerate.CUDA.Execute
 #include "accelerate.h"
 
 -- |A handle foreign code can use to call accelerate functions.
-type Handle = StablePtr Context
+type AccHandle = StablePtr Context
 
 -- |A result array from an accelerate program.
 type ResultArray sh e = StablePtr (Array sh e)
@@ -126,11 +131,11 @@ type instance OutputArgsOf ()      = ()
 type instance OutputArgsOf (xs, Array sh e) = (OutputArgsOf xs, Ptr (ResultArray sh e))
 
 -- |Create an Accelerate handle given a device and a cuda context.
-accelerateCreate :: Device -> ForeignContext -> IO Handle
+accelerateCreate :: Device -> ForeignContext -> IO AccHandle
 accelerateCreate dev ctx = fromDeviceContext (CUDA.Device $ CInt dev) (CUDA.Context ctx) >>= newStablePtr
 
 -- |Releases all resources used by the accelerate library.
-accelerateDestroy :: Handle -> IO ()
+accelerateDestroy :: AccHandle -> IO ()
 accelerateDestroy = freeStablePtr --TODO: Force GC here
 
 -- |Function callable from foreign code to 'free' a ResultArray returned after executing
@@ -158,7 +163,7 @@ getShape arr psh = do
 
 -- |Get the device pointers associated with the result array and
 -- write them to the given buffer.
-getDevicePtrs :: Handle -> ResultArray sh e -> DevicePtrBuffer -> IO ()
+getDevicePtrs :: AccHandle -> ResultArray sh e -> DevicePtrBuffer -> IO ()
 getDevicePtrs hndl arr pbuf = do
   (Array _ adata) <- deRefStablePtr arr
   ctx   <- deRefStablePtr hndl
@@ -167,22 +172,40 @@ getDevicePtrs hndl arr pbuf = do
 
 -- |A template haskell stub that generates foreign export statements for the
 -- functions above.
-exportUtils :: Q [Dec]
-exportUtils = sequence $ uncurry exportf <$>
-  [
-    ('accelerateCreate,  [t| Device -> ForeignContext -> IO Handle |])
-  , ('accelerateDestroy, [t| Handle -> IO () |])
-  , ('freeResult,        [t| forall sh e. ResultArray sh e -> IO () |])
-  , ('freeProgram,       [t| forall a. StablePtr a -> IO ()|])
-  , ('getShape,          [t| forall sh e. ResultArray sh e -> ShapeBuffer -> IO () |])
-  , ('getDevicePtrs,     [t| forall sh e. Handle -> ResultArray sh e -> DevicePtrBuffer -> IO () |])
-  ]
+foreignAccModule :: Q [Dec]
+foreignAccModule = createHfile >> exports
   where
-    exportf name ty = ForeignD <$> (ExportF cCall (nameBase name) name <$> ty)
+    createHfile = do
+      Loc hsFile _ _ _ _ <- location
+      let hFile = replaceExtension hsFile ".h"
+      let contents = (show . ppr) $ typedefs (takeBaseName hFile ++ "_stub.h")
+      runIO $ writeFile hFile contents
+
+    typedefs file = [cunit|
+        $esc:("#include \"" ++ file ++ "\"")
+
+        typedef typename HsStablePtr AccHandle;
+        typedef typename HsStablePtr AccProgram;
+        typedef typename HsStablePtr ResultArray;
+        typedef          int*        ShapeBuffer;
+        typedef          void**      DevicePtrBuffer;
+      |]
+
+    exports = sequence $ uncurry exportf <$>
+      [
+        ('accelerateCreate,  [t| Device -> ForeignContext -> IO AccHandle |])
+      , ('accelerateDestroy, [t| AccHandle -> IO () |])
+      , ('freeResult,        [t| forall sh e. ResultArray sh e -> IO () |])
+      , ('freeProgram,       [t| forall a. StablePtr a -> IO ()|])
+      , ('getShape,          [t| forall sh e. ResultArray sh e -> ShapeBuffer -> IO () |])
+      , ('getDevicePtrs,     [t| forall sh e. AccHandle -> ResultArray sh e -> DevicePtrBuffer -> IO () |])
+      ]
+      where
+        exportf name ty = ForeignD <$> (ExportF cCall (nameBase name) name <$> ty)
 
 -- |Given the name, ''f'', of an Accelerate function (a function of type ''Acc a -> Acc b'')
 -- generate two top level bindings, ''f_compile'' and ''f_run'', and export them. When given
--- a ''Handle'', ''f_compile'' will compile the function and return a handle to the program
+-- a ''AccHandle'', ''f_compile'' will compile the function and return a handle to the program
 -- that can be called with ''f_run''.
 exportAfun1 :: Name -> Q [Dec]
 exportAfun1 fname = do
@@ -229,14 +252,14 @@ genCompileFun fname ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
     sig  = SigD initName <$> ety
     expt = ForeignD <$> (ExportF cCall (nameBase initName) initName <$> ety)
 
-    ety   = [t| Handle -> IO (StablePtr (Exported $(return ty))) |]
+    ety   = [t| AccHandle -> IO (StablePtr (Exported $(return ty))) |]
 genCompileFun _     _
   = error "Invalid accelerate function"
 
 -- |Given a handle and an Accelerate function, generate an exportable version.
 -- This can be used as an alternative to genCallFun and genCompileFun if more
 -- control over execution is desired.
-buildExported :: forall a b. (Arrays a, Arrays b) => Handle -> (Acc a -> Acc b) -> Exported (Acc a -> Acc b)
+buildExported :: forall a b. (Arrays a, Arrays b) => AccHandle -> (Acc a -> Acc b) -> Exported (Acc a -> Acc b)
 buildExported hndl f = toFun (toFun . fmap eval <$> ffun)
   where
     !fun = executeAfun1 afun
