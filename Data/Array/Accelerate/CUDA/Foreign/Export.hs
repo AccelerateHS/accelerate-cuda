@@ -52,7 +52,6 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 import System.IO.Unsafe
 import Language.Haskell.TH                              hiding ( ppr )
 import Language.C.Quote.C
-import Language.C.Syntax                                ( Definition )
 import Text.PrettyPrint.Mainland
 
 -- friends
