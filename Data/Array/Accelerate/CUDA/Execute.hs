@@ -102,7 +102,7 @@ executeAfun1 !afun !arrs = do
     useArrays :: ArraysR arrs -> arrs -> CIO ()
     useArrays ArraysRunit         ()       = return ()
     useArrays (ArraysRpair r1 r0) (a1, a0) = useArrays r1 a1 >> useArrays r0 a0
-    useArrays ArraysRarray        arr      = useArray arr
+    useArrays ArraysRarray        arr      = useArrayAsync arr Nothing
 
 executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Val aenv -> a -> CIO b
 executeOpenAfun1 (Alam (Abody f)) aenv x = executeOpenAcc f (aenv `Push` x)

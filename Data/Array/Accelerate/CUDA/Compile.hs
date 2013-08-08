@@ -163,7 +163,7 @@ compileOpenAcc = traverseAcc
       where
         use :: ArraysR a -> a -> CIO ()
         use ArraysRunit         ()       = return ()
-        use ArraysRarray        arr      = useArray arr
+        use ArraysRarray        arr      = useArrayAsync arr Nothing
         use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
 
         exec :: (Free aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
