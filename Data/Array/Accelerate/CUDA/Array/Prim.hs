@@ -436,9 +436,10 @@ message s = s `trace` return ()
 {-# INLINE transfer #-}
 transfer :: String -> Int -> IO () -> IO ()
 transfer name bytes action
-  = let msg gpuTime cpuTime = name ++ ": "  ++ showBytes bytes
-                                   ++ " @ " ++ D.showFFloatSIBase (Just 3) 1024 (fromIntegral bytes / gpuTime) "B/s, "
-                                   ++ D.elapsed gpuTime cpuTime
+  = let showRate x t        = D.showFFloatSIBase (Just 3) 1024 (fromIntegral x / t) "B/s"
+        msg gpuTime cpuTime = "gc: " ++ name ++ ": "
+                                     ++ showBytes bytes ++ " @ " ++ showRate bytes gpuTime ++ ", "
+                                     ++ D.elapsed gpuTime cpuTime
     in
     D.timed D.dump_gc msg action
 
