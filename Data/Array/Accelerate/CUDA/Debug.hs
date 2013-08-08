@@ -22,7 +22,7 @@ module Data.Array.Accelerate.CUDA.Debug (
 
   showFFloatSIBase,
 
-  message, trace, event, when, unless, mode,
+  message, trace, event, when, unless, mode, timed, elapsed,
   verbose, flush_cache,
   dump_gc, dump_cc, debug_cc, dump_exec,
 
@@ -32,11 +32,16 @@ import Numeric
 import Data.List
 import Data.Label
 import Data.IORef
-import Control.Monad.IO.Class
+import Control.Monad                                            ( void )
+import Control.Monad.IO.Class                                   ( liftIO, MonadIO )
+import Control.Concurrent                                       ( forkIO )
 import System.CPUTime
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
+import qualified Foreign.CUDA.Driver.Event                      as Event
+
+import GHC.Float
 
 #if MIN_VERSION_base(4,5,0)
 import Debug.Trace                              ( traceIO, traceEventIO )
@@ -178,4 +183,50 @@ unless f action
 #else
 unless _ action = action
 #endif
+
+{-# INLINE timed #-}
+timed
+    :: MonadIO m
+    => (Flags :-> Bool)
+    -> (Double -> Double -> String)
+    -> m ()
+    -> m ()
+timed f str action
+#ifdef ACCELERATE_DEBUG
+  | mode f
+  = do
+      gpuBegin  <- liftIO $ Event.create []
+      gpuEnd    <- liftIO $ Event.create []
+      cpuBegin  <- liftIO getCPUTime
+      liftIO $ Event.record gpuBegin Nothing
+      action
+      liftIO $ Event.record gpuEnd Nothing
+      cpuEnd    <- liftIO getCPUTime
+
+      -- Wait for the GPU to finish executing then display the timing execution
+      -- message. Do this in a separate thread so that the remaining kernels can
+      -- be queued asynchronously.
+      --
+      _         <- liftIO . forkIO $ do
+        Event.block gpuEnd
+        diff    <- Event.elapsedTime gpuBegin gpuEnd
+        let gpuTime = float2Double $ diff * 1E-3                         -- milliseconds
+            cpuTime = fromIntegral (cpuEnd - cpuBegin) * 1E-12 :: Double -- picoseconds
+
+        Event.destroy gpuBegin
+        Event.destroy gpuEnd
+        --
+        message f (str gpuTime cpuTime)
+      --
+      return ()
+
+  | otherwise
+#endif
+  = action
+
+{-# INLINE elapsed #-}
+elapsed :: Double -> Double -> String
+elapsed gpuTime cpuTime
+  = "gpu: " ++ showFFloatSIBase (Just 3) 1000 gpuTime "s, " ++
+    "cpu: " ++ showFFloatSIBase (Just 3) 1000 cpuTime "s"
 
