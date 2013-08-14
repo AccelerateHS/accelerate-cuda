@@ -127,6 +127,19 @@ lookup ctx (MemoryTable !ref _ _) !arr = do
       case mv of
         Just v | Just p <- gcast v -> trace ("lookup/found: " ++ show sa) $ return (Just p)
                | otherwise         -> INTERNAL_ERROR(error) "lookup" $ "type mismatch"
+
+        -- Note: [Weak pointer weirdness]
+        --
+        -- After the lookup is successful, there might conceivably be no further
+        -- references to 'arr'. If that is so, and a garbage collection
+        -- intervenes, the weak pointer might get tombstoned before 'deRefWeak'
+        -- gets to it. In that case we throw an error (below). However, because
+        -- we have used 'arr' in the continuation, this ensures that 'arr' is
+        -- reachable in the continuation of 'deRefWeak' and thus 'deRefWeak'
+        -- always succeeds. This sort of weirdness, typical of the world of weak
+        -- pointers, is why we can not reuse the stable name 'sa' computed
+        -- above in the error message.
+        --
         Nothing                    ->
           makeStableArray ctx arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
 
