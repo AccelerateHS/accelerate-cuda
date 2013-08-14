@@ -213,6 +213,7 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
       dst <- malloc ctx mt ad n
       transfer "useArrayAsync/malloc" bytes $ CUDA.pokeArrayAsync n src dst ms
 
+
 useDevicePtrs
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
     => Context
@@ -228,6 +229,7 @@ useDevicePtrs !ctx !mt !ptr !n0 =
     message $ "useDevicePtrs: " ++ showBytes bytes
     insertRemote ctx mt adata ptr
     return adata
+
 
 -- Read a single element from an array at the given row-major index
 --

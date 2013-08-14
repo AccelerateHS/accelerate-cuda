@@ -150,7 +150,7 @@ malloc !ctx mt@(MemoryTable _ _ !nursery) !ad !n = do
       !n'               = chunk * multiple (fromIntegral n) (fromIntegral chunk)
       !bytes            = n' * sizeOf (undefined :: b)
   --
-  mp  <- N.lookup bytes (deviceContext ctx) nursery
+  mp  <- N.malloc bytes (deviceContext ctx) nursery
   ptr <- case mp of
            Just p       -> trace "malloc/nursery" $ return (CUDA.castDevPtr p)
            Nothing      -> trace "malloc/new"     $
@@ -173,9 +173,11 @@ insert !ctx (MemoryTable !ref !weak_ref (Nursery _ !weak_nrs)) !arr !ptr !bytes 
   message $ "insert: " ++ show key
   HT.insert tbl key dev
 
+
 -- Record an association between a host-side array and a device memory area that was
 -- not allocated by accelerate. The device memory will NOT be freed when the host
 -- array is garbage collected.
+--
 insertRemote :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
 insertRemote !ctx (MemoryTable !ref !weak_ref _) !arr !ptr = do
   key  <- makeStableArray ctx arr
@@ -183,6 +185,7 @@ insertRemote !ctx (MemoryTable !ref !weak_ref _) !arr !ptr = do
   tbl  <- readIORef ref
   message $ "insertRemote: " ++ show key
   HT.insert tbl key dev
+
 
 -- Removing entries
 -- ----------------
@@ -234,7 +237,7 @@ finalizer !weak_ctx !weak_ref !weak_nrs !key !ptr !bytes = do
       mn <- deRefWeak weak_nrs
       case mn of
         Nothing  -> trace ("finalise/free: "     ++ show key) $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.free ptr)
-        Just nrs -> trace ("finalise/nursery: "  ++ show key) $ N.insert bytes ctx nrs ptr
+        Just nrs -> trace ("finalise/nursery: "  ++ show key) $ N.stash bytes ctx nrs ptr
 
 remoteFinalizer :: Weak MT -> HostArray -> IO ()
 remoteFinalizer !weak_ref !key = do

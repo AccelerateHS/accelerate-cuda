@@ -14,7 +14,7 @@
 
 module Data.Array.Accelerate.CUDA.Array.Nursery (
 
-  Nursery(..), NRS, new, lookup, insert, flush,
+  Nursery(..), NRS, new, malloc, stash, flush,
 
 ) where
 
@@ -24,7 +24,7 @@ import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
-import Prelude                                                  hiding ( lookup )
+import Prelude
 import Data.IORef
 import Data.Hashable
 import Control.Exception                                        ( bracket_ )
@@ -72,9 +72,9 @@ new = do
 -- larger). If found, it is removed from the nursery and a pointer to it
 -- returned.
 --
-{-# INLINE lookup #-}
-lookup :: Int -> CUDA.Context -> Nursery -> IO (Maybe (DevicePtr ()))
-lookup !n !ctx (Nursery !ref _) = do
+{-# INLINE malloc #-}
+malloc :: Int -> CUDA.Context -> Nursery -> IO (Maybe (DevicePtr ()))
+malloc !n !ctx (Nursery !ref _) = do
   let !key = (ctx,n)
   --
   tbl <- readIORef ref
@@ -89,9 +89,9 @@ lookup !n !ctx (Nursery !ref _) = do
 
 -- Add a device pointer to the nursery.
 --
-{-# INLINE insert #-}
-insert :: Int -> CUDA.Context -> NRS -> DevicePtr a -> IO ()
-insert !n !ctx !ref (CUDA.castDevPtr -> !ptr) = do
+{-# INLINE stash #-}
+stash :: Int -> CUDA.Context -> NRS -> DevicePtr a -> IO ()
+stash !n !ctx !ref (CUDA.castDevPtr -> !ptr) = do
   let !key = (ctx, n)
   --
   tbl <- readIORef ref
