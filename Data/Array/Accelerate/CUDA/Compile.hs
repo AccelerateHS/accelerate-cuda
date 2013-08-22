@@ -490,8 +490,8 @@ pool :: Q.MSem Int
 pool = unsafePerformIO $ Q.new =<< getNumProcessors
 
 -- Queue a system process to be executed and return an MVar flag that will be
--- filled once the process completes. The task will only be launched once there
--- is a worker available from the pool. This ensures we don't run out of process
+-- filled once the process completes. The task will only begin once there is a
+-- worker available from the pool. This ensures we don't run out of process
 -- handles or flood the IO bus, degrading performance.
 --
 enqueueProcess :: FilePath -> [String] -> IO (MVar ())
@@ -500,34 +500,28 @@ enqueueProcess nvcc flags = do
   _     <- forkIO $ do
 
     -- wait for a worker to become available
-    (_, queueT) <- time $ Q.wait pool
+    ((), queueT)<- time $ Q.wait pool
     ccBegin     <- getTime
     (_,_,_,pid) <- createProcess (proc nvcc flags)
 
-    -- asynchronously notify the queue when the compiler has completed
-    _           <- forkIO $ do
+    -- Wait for the process to complete
+    waitFor pid
+    ccEnd       <- getTime
 
-      -- Wait for the process to complete
-      --
-      waitFor pid
-      ccEnd     <- getTime
+    let ccT   = diffTime ccBegin ccEnd
+        msg2  = nvcc ++ " " ++ unwords flags
+        msg1  = "queue: " ++ D.showFFloatSIBase (Just 3) 1000 queueT "s, "
+           ++ "execute: " ++ D.showFFloatSIBase (Just 3) 1000 ccT    "s"
 
-      let ccT   = diffTime ccBegin ccEnd
-          msg2  = nvcc ++ " " ++ unwords flags
-          msg1  = "queue: " ++ D.showFFloatSIBase (Just 3) 1000 queueT "s, "
-             ++ "execute: " ++ D.showFFloatSIBase (Just 3) 1000 ccT    "s"
+    message $ intercalate "\n     ... " [msg1, msg2]
 
-      message $ intercalate "\n     ... " [msg1, msg2]
-
-      -- If there was an error (compilation failed) then this spot in the queue
-      -- is never released and the MVar never signalled that compilation is
-      -- done. This means you'll get a "blocked indefinitely on MVar" error, but
-      -- since the compiler failed in the first places that is somewhat moot.
-      --
-      Q.signal pool
-      putMVar mvar ()
-
-    return ()
+    -- If there was an error (compilation failed) then this spot in the queue
+    -- is never released and the MVar never signalled that compilation is
+    -- done. This means you'll get a "blocked indefinitely on MVar" error, but
+    -- since the compiler failed in the first places that is somewhat moot.
+    --
+    Q.signal pool
+    putMVar mvar ()
   --
   return mvar
 
