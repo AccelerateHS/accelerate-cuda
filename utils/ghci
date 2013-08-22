@@ -6,6 +6,7 @@ GHC=`which -a ghc`
 VER=`$GHC --numeric-version`
 GHC_FLAGS="--interactive"
 
+
 # We assume that the dependent packages are install with 'cabal'. If you have
 # installed them with another tool such as 'cabal-dev', add the following to the
 # command.
@@ -34,13 +35,27 @@ htype CULong Word HTYPE_UNSIGNED_LONG
 # Also load the base Accelerate library. Assume that it is located in the parent
 # directory, in the way the submodules are organised.
 #
-$GHC $GHC_FLAGS \
-     -i.. \
-     -optP -include -optP dist/build/autogen/cabal_macros.h \
-     -iutils \
-     -Iinclude \
-     -DACCELERATE_DEBUG \
-     -DACCELERATE_BOUNDS_CHECKS \
-     -DACCELERATE_INTERNAL_CHECKS \
-     $@
+GHC_FLAGS="$GHC_FLAGS
+     -DACCELERATE_DEBUG
+     -DACCELERATE_BOUNDS_CHECKS
+     -DACCELERATE_INTERNAL_CHECKS
+     -i.. -Iinclude -iutils -optP -include -optP dist/build/autogen/cabal_macros.h"
+
+# If we have specified one command line argument, but that file doesn't exist,
+# search the source files for something with that name prefix.
+#
+# > ghci shar
+#
+# should result in:
+#
+# > ghci Data/Array/Accelerate/Trafo/Sharing.hs
+#
+FILES=`find Data -iname "$1*" -name "*.hs"`
+COUNT=`echo $FILES | wc -w`
+
+if [ $COUNT -eq 1 ]; then
+    $GHC $GHC_FLAGS $FILES
+else
+    $GHC $GHC_FLAGS $@
+fi
 
