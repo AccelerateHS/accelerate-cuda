@@ -485,9 +485,9 @@ getProcessID = getProcessId
 -- Worker pool
 -- -----------
 
-{-# NOINLINE pool #-}
-pool :: Q.MSem Int
-pool = unsafePerformIO $ Q.new =<< getNumProcessors
+{-# NOINLINE workers #-}
+workers :: Q.MSem Int
+workers = unsafePerformIO $ Q.new =<< getNumProcessors
 
 -- Queue a system process to be executed and return an MVar flag that will be
 -- filled once the process completes. The task will only begin once there is a
@@ -499,28 +499,26 @@ enqueueProcess nvcc flags = do
   mvar  <- newEmptyMVar
   _     <- forkIO $ do
 
-    -- wait for a worker to become available
-    ((), queueT)<- time $ Q.wait pool
-    ccBegin     <- getTime
-    (_,_,_,pid) <- createProcess (proc nvcc flags)
+    -- Wait for a worker to become available
+    (ccT, queueT) <- time $ Q.with workers $ do
 
-    -- Wait for the process to complete
-    waitFor pid
-    ccEnd       <- getTime
+      -- Initiate the external process...
+      ccBegin           <- getTime
+      (_,_,_,pid)       <- createProcess (proc nvcc flags)
 
-    let ccT   = diffTime ccBegin ccEnd
-        msg2  = nvcc ++ " " ++ unwords flags
+      -- ... and wait for it to complete
+      waitFor pid
+      ccEnd             <- getTime
+
+      return (diffTime ccBegin ccEnd)
+    --
+    let msg2  = nvcc ++ " " ++ unwords flags
         msg1  = "queue: " ++ D.showFFloatSIBase (Just 3) 1000 queueT "s, "
            ++ "execute: " ++ D.showFFloatSIBase (Just 3) 1000 ccT    "s"
 
     message $ intercalate "\n     ... " [msg1, msg2]
 
-    -- If there was an error (compilation failed) then this spot in the queue
-    -- is never released and the MVar never signalled that compilation is
-    -- done. This means you'll get a "blocked indefinitely on MVar" error, but
-    -- since the compiler failed in the first places that is somewhat moot.
-    --
-    Q.signal pool
+    -- Signal to the host thread that the compiled result is available
     putMVar mvar ()
   --
   return mvar
