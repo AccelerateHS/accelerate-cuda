@@ -455,12 +455,14 @@ compileFlags cufile = do
     , "-cubin"
     , "--restrict"
     , "-o", cufile `replaceExtension` "cubin"
-    , if D.mode D.dump_cc  then ""   else "--disable-warnings"
-    , if D.mode D.debug_cc then ""   else "-DNDEBUG"
-    , if D.mode D.debug_cc then "-G" else "-O3"
+    , if warnings then ""   else "--disable-warnings"
+    , if debug    then ""   else "-DNDEBUG"
+    , if debug    then "-G" else "-O3"
     , machine
     , cufile ]
   where
+    warnings    = D.mode D.dump_cc && D.mode D.verbose
+    debug       = D.mode D.debug_cc
     machine     = case (SIZEOF_HTYPE_INT :: Int) of
                     4   -> "-m32"
                     8   -> "-m64"

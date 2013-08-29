@@ -67,8 +67,8 @@ instance Binary CUDA.Compute where
 -- Interface -------------------------------------------------------------------
 -- ---------                                                                  --
 
-data KernelTable = KT {-# UNPACK #-} !ProgramCache      -- first level cache
-                      {-# UNPACK #-} !PersistentCache   -- second level cache
+data KernelTable = KT {-# UNPACK #-} !ProgramCache      -- first level, in-memory cache
+                      {-# UNPACK #-} !PersistentCache   -- second level, on-disk cache
 
 new :: IO KernelTable
 new = do
