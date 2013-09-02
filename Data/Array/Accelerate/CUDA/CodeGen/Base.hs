@@ -165,14 +165,12 @@ umul24 dev x y
   | otherwise                           = [cexp| $exp:x * $exp:y |]
 
 gridSize :: DeviceProperties -> C.Exp
-gridSize dev
-  | computeCapability dev < Compute 2 0 = [cexp| __umul24(blockDim.x, gridDim.x) |]
-  | otherwise                           = [cexp| blockDim.x * gridDim.x |]
+gridSize dev = umul24 dev [cexp|blockDim.x|] [cexp|gridDim.x|]
 
 threadIdx :: DeviceProperties -> C.Exp
-threadIdx dev
-  | computeCapability dev < Compute 2 0 = [cexp| __umul24(blockDim.x, blockIdx.x) + threadIdx.x |]
-  | otherwise                           = [cexp| blockDim.x * blockIdx.x + threadIdx.x |]
+threadIdx dev =
+  let block = umul24 dev [cexp|blockDim.x|] [cexp|blockIdx.x|]
+  in  [cexp| $exp:block + threadIdx.x |]
 
 
 -- Generate an array indexing expression. Depending on the hardware class, this
@@ -186,11 +184,11 @@ indexArray
     -> C.Exp
 indexArray dev elt arr ix
   -- use the L2 cache of newer devices
-  | computeCapability dev >= Compute 2 0                = [cexp| $exp:arr [ $exp:ix ] |]
+  | computeCapability dev >= Compute 2 0 = [cexp| $exp:arr [ $exp:ix ] |]
 
   -- use the texture cache of compute 1.x devices
-  | C.Type (C.DeclSpec _ _ (C.Tdouble _) _) _ _ <- elt  = ccall "indexDArray" [arr, ix]
-  | otherwise                                           = ccall "indexArray"  [arr, ix]
+  | [cty|double|] <- elt                 = ccall "indexDArray" [arr, ix]
+  | otherwise                            = ccall "indexArray"  [arr, ix]
 
 
 -- Generate kernel parameters for an array valued argument, and a function to
