@@ -91,11 +91,7 @@ instance Foreign CuForeignAcc where
 canExecute :: forall ff args results. (Foreign ff, Typeable args, Typeable results)
            => ff args results
            -> Maybe (args -> CIO results)
-canExecute ff =
-  let
-    df = toDyn ff
-    fd = fromDynamic :: Dynamic -> Maybe (CuForeignAcc args results)
-  in (\(CuForeignAcc ff') -> ff') <$> fd df
+canExecute ff = (\(CuForeignAcc ff') -> ff') <$> (cast ff :: Maybe (CuForeignAcc args results))
 
 -- CUDA foreign Exp functions are just strings with the header filename and the name of the
 -- function separated by a space.
@@ -112,11 +108,7 @@ instance Foreign CuForeignExp where
 canExecuteExp :: forall ff args results. (Foreign ff, Typeable results, Typeable args)
               => ff args results
               -> Maybe String
-canExecuteExp ff =
-  let
-    df = toDyn ff
-    fd = fromDynamic :: Dynamic -> Maybe (CuForeignExp args results)
-  in (\(CuForeignExp ff') -> ff') <$> fd df
+canExecuteExp ff = (\(CuForeignExp ff') -> ff') <$> (cast ff :: Maybe (CuForeignExp args results))
 
 
 -- User facing utility functions
