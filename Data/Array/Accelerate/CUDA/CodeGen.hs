@@ -198,6 +198,8 @@ codegenFun1 dev aenv fun
           env   <- getEnv
           return (env, code)
 
+        -- Initial code generation proceeds with dummy variable names. The real
+        -- names are substituted later when we instantiate the skeleton.
         (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
       n                 <- get
