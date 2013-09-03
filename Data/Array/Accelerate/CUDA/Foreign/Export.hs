@@ -7,8 +7,9 @@
 {-# LANGUAGE TemplateHaskell          #-}
 {-# LANGUAGE QuasiQuotes              #-}
 {-# LANGUAGE TypeFamilies             #-}
-{-# LANGUAGE UndecidableInstances     #-}
-{-# OPTIONS_GHC -fno-warn-name-shadowing  #-}
+{-# LANGUAGE FlexibleInstances        #-}
+{-# LANGUAGE ImpredicativeTypes       #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign.Export
 -- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
@@ -31,54 +32,51 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
   getDevicePtrs,
 
   -- ** Exporting
-  Exported, foreignAccModule, exportAfun1, buildExported,
+  foreignAccModule, exportAfun, buildExported,
 
   -- ** Types
-  ResultArray, ShapeBuffer, DevicePtrBuffer, Device, ForeignContext,
+  InputArray, ResultArray, ShapeBuffer, DevicePtrBuffer,
 
 ) where
 
 import Data.Functor
 import System.FilePath
-import Control.Exception
 import Control.Applicative
 import Foreign.StablePtr
 import Foreign.C.Types
 import Foreign.Ptr
-import Foreign.Storable                                 ( poke )
+import Foreign.Storable                                 ( Storable(..) )
 import Foreign.Marshal.Array                            ( peekArray, pokeArray )
 import Control.Monad.State                              ( liftIO )
 import qualified Foreign.CUDA.Driver                    as CUDA
-import System.IO.Unsafe
 import Language.Haskell.TH                              hiding ( ppr )
 import Language.C.Quote.C
 import Text.PrettyPrint.Mainland
 
 -- friends
 import Data.Array.Accelerate.Smart                      ( Acc )
-import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.CUDA                       ( run1In )
 import Data.Array.Accelerate.CUDA.Array.Sugar           hiding ( shape, size )
 import Data.Array.Accelerate.CUDA.Array.Data            hiding ( pokeArray, peekArray )
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Execute
-
-#include "accelerate.h"
 
 -- |A handle foreign code can use to call accelerate functions.
 type AccHandle = StablePtr Context
 
 -- |A result array from an accelerate program.
-type ResultArray sh e = StablePtr (Array sh e)
+type ResultArray = StablePtr EArray
 
 -- |A foreign buffer that represents a shape as an array of ints.
-type ShapeBuffer = CArray CInt
+type ShapeBuffer = Ptr CInt
 
 -- |A buffer of device pointers
-type DevicePtrBuffer = CArray WordPtr
+type DevicePtrBuffer = Ptr WordPtr
+
+-- |The input required from foreign code.
+type InputArray = (ShapeBuffer, DevicePtrBuffer)
 
 -- |Foreign exportable representation of a CUDA device
 type Device = Int32
@@ -86,49 +84,27 @@ type Device = Int32
 -- |Foreign representation of a CUDA context.
 type ForeignContext = Ptr ()
 
-type CArray a = Ptr a
+-- We need to capture the Arrays constraint
+data Afun where
+  Afun :: (Arrays a, Arrays b)
+       => (a -> b)
+       -> a {- dummy -}
+       -> b {- dummy -}
+       -> Afun
 
--- |Given a left-nested tuple of argument types and a result type, generate the
--- corresponding function type. This method for building functions of arbitrary
--- arity proved the most effective in this particular instance.
-type family Fun a r
-type instance Fun ()    r = r
-type instance Fun (a,x) r = Fun a (x -> r)
+data EArray where
+  EArray :: (Shape sh, Elt e) => Array sh e -> EArray
 
--- |The structure of the above type, reified.
-data FunR a r where
-  ResultF :: r               -> FunR ()    r
-  PushF   :: FunR a (x -> r) -> FunR (a,x) r
-
-instance Functor (FunR a) where
-  fmap f (ResultF a) = ResultF  (f a)
-  fmap f (PushF f')  = PushF (fmap (f .) f')
-
--- |Convert the reified function into an actual haskell function.
-toFun :: FunR a r -> Fun a r
-toFun (ResultF r) = r
-toFun (PushF f)   = toFun f
-
--- |Given the type of a monomorphic accelerate function, yields the type of the
--- foreign version.
--- For example a function of type
---  ''Acc (Array DIM1 (Float, Double), Array DIM0 Int) -> Acc (Array DIM0 Int, Array DIM1 Float)''
--- has foreign version
---  ''DevicePtrBuffer -> ShapeBuffer -> DevicePtrBuffer -> ShapeBuffer -> Ptr (ResultArray DIM0 Int) -> Ptr (ResultArray DIM1 Float) -> IO ()''
--- Where the first 6 args correspond to input, and the last 6 to output.
---
--- NB: In the the input function ''Acc a -> Acc b'' both ''a'' and ''b'' have
--- to be flat-- i.e Not nested.
-type family Exported f
-type instance Exported (Acc a -> Acc b) = Fun (InputArgsOf (ArrRepr a)) (Fun (OutputArgsOf (ArrRepr b)) (IO ()))
-
-type family InputArgsOf a
-type instance InputArgsOf ()      = ()
-type instance InputArgsOf (xs, x) = ((InputArgsOf xs, DevicePtrBuffer), ShapeBuffer)
-
-type family OutputArgsOf a
-type instance OutputArgsOf ()      = ()
-type instance OutputArgsOf (xs, Array sh e) = (OutputArgsOf xs, Ptr (ResultArray sh e))
+instance Storable InputArray where
+  sizeOf (sh, ptrs) = sizeOf sh + sizeOf ptrs
+  alignment _ = 0
+  peek ptr = do
+    sh <- peek (castPtr ptr :: Ptr ShapeBuffer)
+    ptrs <- peek ((castPtr ptr :: Ptr DevicePtrBuffer) `plusPtr` (sizeOf sh))
+    return (sh, ptrs)
+  poke ptr (sh, ptrs) = do
+    poke (castPtr ptr :: Ptr ShapeBuffer) sh
+    poke ((castPtr ptr :: Ptr DevicePtrBuffer) `plusPtr` (sizeOf sh)) ptrs
 
 -- |Create an Accelerate handle given a device and a cuda context.
 --
@@ -148,7 +124,7 @@ accelerateDestroy = freeStablePtr
 -- Once freed, the device pointers associated with an array are no longer valid.
 --
 -- @void freeResult(ResultArray arr);@
-freeResult :: ResultArray sh e -> IO ()
+freeResult :: ResultArray -> IO ()
 freeResult arr = freeStablePtr arr
 
 -- |Free a compiled accelerate program.
@@ -160,11 +136,14 @@ freeProgram = freeStablePtr
 -- |Get the shape of the result array and write it to the given buffer.
 --
 -- @void getShape(ResultArray arr, int *sh);@
-getShape :: ResultArray sh e -> ShapeBuffer -> IO ()
+getShape :: ResultArray -> ShapeBuffer -> IO ()
 getShape arr psh = do
   a <- deRefStablePtr arr
-  forSh a
+  getSh a
   where
+    getSh :: EArray -> IO ()
+    getSh (EArray a) = forSh a
+
     forSh :: forall sh e. Array sh e -> IO ()
     forSh (Array sh _) = do
       let sh' = toElt sh :: sh
@@ -174,15 +153,60 @@ getShape arr psh = do
 -- write them to the given buffer.
 --
 -- @void getDevicePtrs(AccHandle hndl, ResultArray arr, void **buffer);@
-getDevicePtrs :: AccHandle -> ResultArray sh e -> DevicePtrBuffer -> IO ()
+getDevicePtrs :: AccHandle -> ResultArray -> DevicePtrBuffer -> IO ()
 getDevicePtrs hndl arr pbuf = do
-  (Array _ adata) <- deRefStablePtr arr
+  (EArray (Array _ adata)) <- deRefStablePtr arr
   ctx   <- deRefStablePtr hndl
   dptrs <- evalCUDA ctx (devicePtrsOfArrayData adata)
   pokeArray pbuf (devicePtrsToWordPtrs adata dptrs)
 
--- |A template haskell stub that generates foreign export statements for the
--- functions above.
+-- |Execute the given accelerate program with @is@ as the input and @os@ as the output.
+--
+-- @void runProgram(AccHandle hndl, AccProgram p, InputArray* is, ResultArray* os);@
+runProgram :: AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr ResultArray -> IO ()
+runProgram hndl fun input output = do
+  ctx <- deRefStablePtr hndl
+  af <- deRefStablePtr fun
+  run ctx af
+  where
+    run :: Context -> Afun -> IO ()
+    run ctx (Afun f (_ :: a) (_ :: b)) = do
+      (a, _) <- evalCUDA ctx $ marshalIn (arrays (undefined :: a)) input
+      let !b = f (toArr a)
+      _ <- marshalOut (arrays (undefined :: b)) (fromArr b) output
+      return ()
+
+    marshalIn :: ArraysR a -> Ptr InputArray -> CIO (a, Ptr InputArray)
+    marshalIn ArraysRunit  ptr = return ((), ptr)
+    marshalIn ArraysRarray ptr = do
+      (sh, ptrs) <- liftIO (peek ptr)
+      a <- arrayFromForeignData ptrs sh
+      let ptr' = plusPtr ptr (sizeOf (sh, ptrs))
+      return (a, ptr')
+    marshalIn (ArraysRpair aR1 aR2) ptr = do
+      (x, ptr')  <- marshalIn aR1 ptr
+      (y, ptr'') <- marshalIn aR2 ptr'
+      return ((x,y), ptr'')
+
+    marshalOut :: ArraysR b -> b -> Ptr ResultArray -> IO (Ptr ResultArray)
+    marshalOut ArraysRunit  () ptr = return ptr
+    marshalOut ArraysRarray a  ptr = do
+      sptr <- newStablePtr (EArray a)
+      poke ptr sptr
+      return (plusPtr ptr (sizeOf sptr))
+    marshalOut (ArraysRpair aR1 aR2) (x,y) ptr = do
+      ptr' <- marshalOut aR1 x ptr
+      marshalOut aR2 y ptr'
+
+
+-- |A template haskell stub that generates a .h file in the directory in which
+-- the module is being compiled. This file will include the C definitions of
+-- the types below, the functions above, and
+--
+-- @AccHandle accelerateInit(int argc, char** argv, int device, CUcontext ctx);@
+--
+-- Which, in addition to creating an Accelerate handle, also initialises the
+-- Haskell runtime.
 foreignAccModule :: Q [Dec]
 foreignAccModule = createHfile >> exports
   where
@@ -193,21 +217,35 @@ foreignAccModule = createHfile >> exports
       runIO $ writeFile hFile contents
 
     typedefs file = [cunit|
+        $esc:("#include \"HsFFI.h\"")
         $esc:("#include \"" ++ file ++ "\"")
+        $esc:("#include <cuda.h>")
 
         typedef typename HsStablePtr AccHandle;
         typedef typename HsStablePtr AccProgram;
         typedef typename HsStablePtr ResultArray;
+
+        typedef struct {
+          int*    shape;
+          void**  ptrs;
+        } InputArray;
+
+        AccHandle accelerateInit(int argc, char** argv, int device, typename CUcontext ctx) {
+          extern void __stginit_Dotp ( void );
+          hs_init(&argc, &argv);
+          return accelerateCreate(device, ctx);
+        }
       |]
 
     exports = sequence $ uncurry exportf <$>
       [
         ('accelerateCreate,  [t| Device -> ForeignContext -> IO AccHandle |])
       , ('accelerateDestroy, [t| AccHandle -> IO () |])
-      , ('freeResult,        [t| forall sh e. ResultArray sh e -> IO () |])
+      , ('runProgram,        [t| AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr ResultArray -> IO () |])
+      , ('freeResult,        [t| ResultArray -> IO () |])
       , ('freeProgram,       [t| forall a. StablePtr a -> IO ()|])
-      , ('getShape,          [t| forall sh e. ResultArray sh e -> ShapeBuffer -> IO () |])
-      , ('getDevicePtrs,     [t| forall sh e. AccHandle -> ResultArray sh e -> DevicePtrBuffer -> IO () |])
+      , ('getShape,          [t| ResultArray -> ShapeBuffer -> IO () |])
+      , ('getDevicePtrs,     [t| AccHandle -> ResultArray -> DevicePtrBuffer -> IO () |])
       ]
       where
         exportf name ty = ForeignD <$> (ExportF cCall (nameBase name) name <$> ty)
@@ -216,111 +254,39 @@ foreignAccModule = createHfile >> exports
 -- generate two top level bindings, ''f_compile'' and ''f_run'', and export them. When given
 -- a ''AccHandle'', ''f_compile'' will compile the function and return a handle to the program
 -- that can be called with ''f_run''.
-exportAfun1 :: Name -> Q [Dec]
-exportAfun1 fname = do
+exportAfun :: Name -> String -> Q [Dec]
+exportAfun fname ename = do
   (VarI n ty _ _) <- reify fname
 
   -- Generate initialisation function
-  initFun <- genCompileFun n ty
+  initFun <- genCompileFun n ename ty
 
-  -- Generate calling function
-  callFun <- genCallFun n ty
+  return initFun
 
-  return $ initFun ++ callFun
-
-genCallFun :: Name -> Type -> Q [Dec]
-genCallFun fname ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
+genCompileFun :: Name -> String -> Type -> Q [Dec]
+genCompileFun fname ename ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
   = sequence [sig, dec, expt]
   where
-    body = [| \sfun ->
-        unsafePerformIO (deRefStablePtr sfun)
-      |]
-    dec  = FunD callName . (:[]) <$> cls
-    cls  = Clause [] <$> (NormalB <$> body) <*> return []
-    sig  = SigD callName <$> ety
-    expt = ForeignD <$> (ExportF cCall (nameBase callName) callName <$> ety)
+    initName = mkName ename
 
-    callName = mkName $ nameBase fname ++ "_run"
-
-    ety   = [t| StablePtr (Exported $(return ty)) -> Exported $(return ty) |]
-genCallFun _      _
-  = error "Invalid accelerate function"
-
-genCompileFun :: Name -> Type -> Q [Dec]
-genCompileFun fname ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
-  = sequence [sig, dec, expt]
-  where
-    initName = mkName $ nameBase fname ++ "_compile"
-
-    body = [| \hndl ->
-        let
-            ff = buildExported hndl $(varE fname)
-        in newStablePtr ff |]
+    body = [| \hndl -> buildExported hndl $(varE fname) |]
     dec  = FunD initName . (:[]) <$> cls
     cls  = Clause [] <$> (NormalB <$> body) <*> return []
     sig  = SigD initName <$> ety
     expt = ForeignD <$> (ExportF cCall (nameBase initName) initName <$> ety)
 
-    ety   = [t| AccHandle -> IO (StablePtr (Exported $(return ty))) |]
-genCompileFun _     _
+    ety   = [t| AccHandle -> IO (StablePtr Afun) |]
+genCompileFun _     _     _
   = error "Invalid accelerate function"
 
 -- |Given a handle and an Accelerate function, generate an exportable version.
--- This can be used as an alternative to genCallFun and genCompileFun if more
--- control over execution is desired.
-buildExported :: forall a b. (Arrays a, Arrays b) => AccHandle -> (Acc a -> Acc b) -> Exported (Acc a -> Acc b)
-buildExported hndl f = toFun (toFun . fmap eval <$> ffun)
+buildExported :: forall a b. (Arrays a, Arrays b) => AccHandle -> (Acc a -> Acc b) -> IO (StablePtr Afun)
+buildExported hndl f = ef
   where
-    !fun = executeAfun1 afun
-    !acc = convertAfunWith config f
-    !afun = unsafePerformIO $ eval (compileAfun acc)
-
-    funr :: ArrRepr a -> CIO (ArrRepr b)
-    funr a = fromArr <$> fun (toArr a)
-
-    eval :: CIO x -> IO x
-    eval cio = do
+    ef :: IO (StablePtr Afun)
+    ef = do
       ctx <- deRefStablePtr hndl
-      evalCUDA ctx cio
-      `catch`
-        \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDA.CUDAException))
-
-    ffun :: FunR (InputArgsOf (ArrRepr a)) (FunR (OutputArgsOf (ArrRepr b)) (CIO ()))
-    ffun = g <$> b
-      where
-        g :: CIO (ArrRepr b) -> FunR (OutputArgsOf (ArrRepr b)) (CIO ())
-        g i = fmap (i >>=) (buildOut (arrays (undefined :: b)))
-
-        b :: FunR (InputArgsOf (ArrRepr a)) (CIO (ArrRepr b))
-        b = (>>= funr) <$> buildIn (arrays (undefined :: a))
-
-    buildIn :: forall a. ArraysR a -> FunR (InputArgsOf a) (CIO a)
-    buildIn ArraysRunit                   = ResultF (return ())
-    buildIn (ArraysRpair aR ArraysRarray)
-      = (PushF . PushF) (fmap g (buildIn aR))
-      where
-        g :: a ~ (l,arr) => CIO l -> DevicePtrBuffer -> ShapeBuffer -> CIO a
-        g i dps sh = do
-          l <- i
-          arr <- arrayFromForeignData dps sh
-          return (l,arr)
-    buildIn _                              = exportError
-
-    buildOut :: forall b. ArraysR b -> FunR (OutputArgsOf b) (b -> CIO ())
-    buildOut ArraysRunit                   = ResultF (const $ return ())
-    buildOut (ArraysRpair aR ArraysRarray)
-      = PushF (fmap g (buildOut aR))
-      where
-        g :: b ~ (l, Array sh e) => (l -> CIO ()) -> Ptr (ResultArray sh e) -> b -> CIO ()
-        g i ptr (l, arr) = write arr ptr >> i l
-
-        write :: Array sh e -> Ptr (ResultArray sh e) -> CIO ()
-        write a p = liftIO $ do
-          sp <- newStablePtr a
-          poke p sp
-    buildOut _                             = exportError
-
-    exportError = error "Unable to export a function over nested tuples of arrays."
+      newStablePtr (Afun (run1In ctx f) (undefined :: a) (undefined :: b))
 
 -- Utility functions
 -- ------------------
@@ -330,21 +296,10 @@ arrayFromForeignData ptrs shape = do
    let d  = dim (ignore :: sh) -- Using ignore as using dim requires a non-dummy argument
    let sz = eltSize (eltType (undefined :: e))
    lst <- liftIO (peekArray d shape)
-   liftIO $ putStrLn $ "Shape: " ++ (show lst)
    let sh = listToShape (map fromIntegral lst) :: sh
    plst <- liftIO $ peekArray sz ptrs
-   liftIO $ putStrLn $ "Pointers: " ++ (show plst)
    let ptrs' = devicePtrsFromList (arrayElt :: ArrayEltR (EltRepr e)) plst
    useDevicePtrs (fromElt sh) ptrs'
-
-config :: Phase
-config =  Phase
-  { recoverAccSharing      = True
-  , recoverExpSharing      = True
-  , floatOutAccFromExp     = True
-  , enableAccFusion        = True
-  , convertOffsetOfSegment = True
-  }
 
 eltSize :: TupleType e -> Int
 eltSize UnitTuple         = 0
