@@ -36,9 +36,7 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
-#ifdef ACCELERATE_DEBUG
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-#endif
 
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
