@@ -453,7 +453,7 @@ compileFlags cufile = do
     [ "-I", ddir </> "cubits"
     , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
-    , "--restrict"
+--    , "--restrict"    -- requires nvcc >= 5.0
     , "-o", cufile `replaceExtension` "cubin"
     , if warnings then ""   else "--disable-warnings"
     , if debug    then ""   else "-DNDEBUG"
