@@ -442,7 +442,7 @@ codegenOpenExp dev aenv = cvtE
            let (_, ok,  declok)  = locals ('l':var_ok) (undefined :: Bool)
                (_, acc, declacc) = locals ('l':var_x)  (undefined :: a)
 
-               header            = map C.BlockDecl (declacc ++ declok)
+               header            = map C.BlockDecl (declok ++ declacc)
                loop              =
                    [citem| {
                        $items:(dce acc .=. x')
