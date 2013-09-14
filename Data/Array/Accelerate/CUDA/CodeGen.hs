@@ -22,8 +22,8 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
-import Prelude                                                  hiding ( id, exp, replicate, iterate )
-import Control.Applicative                                      ( (<$>), (<*>), (<*) )
+import Prelude                                                  hiding ( id, exp, replicate )
+import Control.Applicative                                      ( (<$>), (<*>) )
 import Control.Monad.State.Strict
 import Data.Loc
 import Data.Char
@@ -113,20 +113,21 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
       -- Non-computation forms -> sadness
-      Alet _ _                  -> unexpectedError
-      Avar _                    -> unexpectedError
-      Apply _ _                 -> unexpectedError
-      Acond _ _ _               -> unexpectedError
-      Atuple _                  -> unexpectedError
-      Aprj _ _                  -> unexpectedError
-      Use _                     -> unexpectedError
-      Unit _                    -> unexpectedError
-      Aforeign _ _ _            -> unexpectedError
-      Reshape _ _               -> unexpectedError
+      Alet{}                    -> unexpectedError
+      Avar{}                    -> unexpectedError
+      Apply{}                   -> unexpectedError
+      Acond{}                   -> unexpectedError
+      Awhile{}                  -> unexpectedError
+      Atuple{}                  -> unexpectedError
+      Aprj{}                    -> unexpectedError
+      Use{}                     -> unexpectedError
+      Unit{}                    -> unexpectedError
+      Aforeign{}                -> unexpectedError
+      Reshape{}                 -> unexpectedError
 
-      Replicate _ _ _           -> fusionError
-      Slice _ _ _               -> fusionError
-      ZipWith _ _ _             -> fusionError
+      Replicate{}               -> fusionError
+      Slice{}                   -> fusionError
+      ZipWith{}                 -> fusionError
 
   where
     codegen :: CUDA [CUTranslSkel aenv a] -> [CUTranslSkel aenv a]
@@ -184,19 +185,27 @@ codegenAcc dev (Manifest pacc) aenv
 --
 -- Still, there has got to be a cleaner way to do this...
 --
-codegenFun1
-    :: forall aenv a b. DeviceProperties
+codegenFun1 :: DeviceProperties -> Gamma aenv -> DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
+codegenFun1 dev = codegenOpenFun1 dev Empty
+
+codegenFun2 :: DeviceProperties -> Gamma aenv -> DelayedFun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
+codegenFun2 dev = codegenOpenFun2 dev Empty
+
+
+codegenOpenFun1
+    :: forall env aenv a b. DeviceProperties
+    -> Val env
     -> Gamma aenv
-    -> DelayedFun aenv (a -> b)
-    -> CUDA (CUFun1 aenv (a -> b))
-codegenFun1 dev aenv fun
+    -> DelayedOpenFun env aenv (a -> b)
+    -> CUDA (CUOpenFun1 env aenv (a -> b))
+codegenOpenFun1 dev env aenv fun
   | Lam (Body f) <- fun
   = let
         go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
         go x = do
-          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x)
-          env   <- getEnv
-          return (env, code)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (env `Push` map rvalue x)
+          env'  <- getEnv
+          return (env', code)
 
         -- Initial code generation proceeds with dummy variable names. The real
         -- names are substituted later when we instantiate the skeleton.
@@ -210,19 +219,20 @@ codegenFun1 dev aenv fun
   | otherwise
   = INTERNAL_ERROR(error) "codegenFun1" "expected unary function"
 
-codegenFun2
-    :: forall aenv a b c. DeviceProperties
+codegenOpenFun2
+    :: forall env aenv a b c. DeviceProperties
+    -> Val env
     -> Gamma aenv
-    -> DelayedFun aenv (a -> b -> c)
-    -> CUDA (CUFun2 aenv (a -> b -> c))
-codegenFun2 dev aenv fun
+    -> DelayedOpenFun env aenv (a -> b -> c)
+    -> CUDA (CUOpenFun2 env  aenv (a -> b -> c))
+codegenOpenFun2 dev env aenv fun
   | Lam (Lam (Body f)) <- fun
   = let
         go :: (Rvalue x, Rvalue y) => [x] -> [y] -> Gen ([C.BlockItem], [C.Exp])
         go x y = do
-          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x `Push` map rvalue y)
-          env   <- getEnv
-          return (env, code)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (env `Push` map rvalue x `Push` map rvalue y)
+          env'  <- getEnv
+          return (env', code)
 
         (_,u,_)  = locals "undefined_x" (undefined :: a)
         (_,v,_)  = locals "undefined_y" (undefined :: b)
@@ -313,8 +323,7 @@ codegenOpenExp dev aenv = cvtE
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
-        Iterate n f x           -> iterate n f x env
---        While p f x             -> while p f x env
+        While p f x             -> while p f x env
 
         -- Shapes and indices
         IndexNil                -> return []
@@ -411,77 +420,41 @@ codegenOpenExp dev aenv = cvtE
       ok        <- single "Cond" <$> pushEnv p p'
       zipWith (\a b -> [cexp| $exp:ok ? $exp:a : $exp:b |]) <$> cvtE t env <*> cvtE e env
 
-    -- Value recursion. Two flavours.
+    -- Value recursion
     --
-    iterate :: DelayedOpenExp env     aenv Int          -- fixed iteration depth
-            -> DelayedOpenExp (env,a) aenv a            -- loop body
-            -> DelayedOpenExp env     aenv a            -- initial value
-            -> Val env
-            -> Gen [C.Exp]
-    iterate n f x env
-      = do [n']         <- cvtE n env
-           x'           <- cvtE x env
-           var_x        <- mapM (\_ -> lift fresh) x'
-           var_n        <- lift fresh
-           let seed      = [cdecl| const int $id:var_n = $exp:n'; |]
-                         : zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) var_x x'
-               acc       = map cvar var_x
-
-           -- generate the loop in a clean environment, so that the previous
-           -- environment fragments are not included in the body
-           outer        <- gets bindings <* modify (\st -> st { bindings = [] })
-           body         <- cvtE f (env `Push` acc)
-           inner        <- getEnv
-           i            <- lift fresh
-
-           let go        = C.BlockStm
-                         $ [cstm| for (int $id:i = 0; $id:i < $id:var_n; ++ $id:i) {
-                                      $items:inner
-                                      $items:(acc .=. body)
-                                  } |]
-
-           -- restore the outer environment, plus the new loop
-           modify (\st -> st { bindings = go : map C.BlockDecl (reverse seed) ++ outer })
-           return acc
-
-{--
-    while :: DelayedOpenExp (env,a) aenv Bool           -- continue while predicate returns true
-          -> DelayedOpenExp (env,a) aenv a              -- loop body
-          -> DelayedOpenExp env     aenv a              -- initial value
+    while :: forall env a. Elt a
+          => DelayedOpenFun env aenv (a -> Bool)        -- continue while predicate returns true
+          -> DelayedOpenFun env aenv (a -> a)           -- loop body
+          -> DelayedOpenExp env aenv a                  -- initial value
           -> Val env
           -> Gen [C.Exp]
     while p f x env
-      = do x'           <- cvtE x env
+      = do x'                   <- cvtE x env
+           CUFun1 _   done      <- lift (codegenOpenFun1 dev env aenv p)
+           CUFun1 dce body      <- lift (codegenOpenFun1 dev env aenv f)
 
-           var_x        <- mapM (\_ -> lift fresh) x'
-           var_ok       <- lift fresh
+           -- Need some fresh variables for the loop counters. In the local
+           -- declarations we need to twiddle the name a bit to avoid later
+           -- clobbering (for a name v1, locals will generate v10, v11...)
+           var_x                <- lift fresh
+           var_ok               <- lift fresh
 
-           let seed      = [cdecl| int $id:var_ok; |]
-                         : zipWith3 (\t a v -> [cdecl| $ty:t $id:a = $exp:v; |]) (expType x) var_x x'
-               acc       = map cvar var_x
-               ok        = cvar var_ok
+           let (_, ok,  declok)  = locals ('l':var_ok) (undefined :: Bool)
+               (_, acc, declacc) = locals ('l':var_x)  (undefined :: a)
 
-           -- generate the loop functions in a clean environment
-           outer        <- gets bindings <* modify (\st -> st { bindings = [] })
-           [done]       <- cvtE p (env `Push` acc)
-           envP         <- getEnv <* modify (\st -> st { bindings = [] })
-           body         <- cvtE f (env `Push` acc)
-           envF         <- getEnv
+               header            = map C.BlockDecl (declacc ++ declok)
+               loop              =
+                   [citem| {
+                       $items:(dce acc .=. x')
+                       $items:(ok      .=. done x')
+                       while ( $exp:(single "while" ok) ) {
+                           $items:(dce acc .=. body acc)
+                           $items:(ok      .=. done acc)
+                      }
+                   }|]
 
-           let go        =  envP
-                         ++ (ok .=. done)
-                         ++ [C.BlockStm
-                            [cstm| while ( $exp:ok ) {
-                                       $items:envF
-                                       $items:(acc .=. body)
-                                       $items:envP
-                                       $items:(ok .=. done)
-                                   } |]]
-
-           -- restore the outer environment, plus the new loop
-           modify (\st -> st { bindings = reverse (map C.BlockDecl seed ++ go) ++ outer })
+           modify (\st -> st { bindings = loop : header ++ bindings st })
            return acc
---}
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
     -- elide the presence of IndexAny from the head of slx, as this is not

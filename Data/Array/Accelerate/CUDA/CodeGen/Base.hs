@@ -21,7 +21,7 @@
 module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Names and Types
-  CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1(..), CUFun2(..),
+  CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1, CUOpenFun1(..), CUFun2, CUOpenFun2(..),
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
@@ -98,18 +98,21 @@ data CUExp aenv a where
 
 -- Scalar functions of particular arity, with local bindings.
 --
-data CUFun1 aenv f where
+type CUFun1 = CUOpenFun1 ()
+type CUFun2 = CUOpenFun2 ()
+
+data CUOpenFun1 env aenv f where
   CUFun1 :: (Elt a, Elt b)
          => (forall x. [x] -> [(Bool,x)])
          -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
-         -> CUFun1 aenv (a -> b)
+         -> CUOpenFun1 env aenv (a -> b)
 
-data CUFun2 aenv f where
+data CUOpenFun2 env aenv f where
   CUFun2 :: (Elt a, Elt b, Elt c)
          => (forall x. [x] -> [(Bool,x)])
          -> (forall y. [y] -> [(Bool,y)])
          -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
-         -> CUFun2 aenv (a -> b -> c)
+         -> CUOpenFun2 env aenv (a -> b -> c)
 
 -- Delayed arrays
 --

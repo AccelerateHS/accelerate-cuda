@@ -119,9 +119,10 @@ compileOpenAcc = traverseAcc
       case pacc of
         -- Environment and control flow
         Avar ix                 -> node $ pure (Avar ix)
-        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a     <*> traverseAcc b
-        Apply f a               -> node . pure =<< Apply        <$> compileOpenAfun f <*> traverseAcc a
-        Acond p t e             -> node =<< liftA3 Acond        <$> travE p <*> travA t <*> travA e
+        Alet a b                -> node . pure =<< Alet         <$> traverseAcc a <*> traverseAcc b
+        Apply f a               -> node =<< liftA2 Apply        <$> travAF f <*> travA a
+        Awhile p f a            -> node =<< liftA3 Awhile       <$> travAF p <*> travAF f <*> travA a
+        Acond p t e             -> node =<< liftA3 Acond        <$> travE  p <*> travA  t <*> travA e
         Atuple tup              -> node =<< liftA Atuple        <$> travAtup tup
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
@@ -183,6 +184,9 @@ compileOpenAcc = traverseAcc
           Manifest{}    -> pure                    <$> traverseAcc acc
           Delayed{..}   -> liftA2 (const EmbedAcc) <$> travF indexD <*> travE extentD
 
+        travAF :: DelayedOpenAfun aenv f -> CIO (Free aenv, PreOpenAfun ExecOpenAcc aenv f)
+        travAF afun = pure <$> compileOpenAfun afun
+
         travAtup :: Atuple (DelayedOpenAcc aenv) a -> CIO (Free aenv, Atuple (ExecOpenAcc aenv) a)
         travAtup NilAtup        = return (pure NilAtup)
         travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
@@ -237,8 +241,7 @@ compileOpenAcc = traverseAcc
         Tuple t                 -> liftA  Tuple                 <$> travT t
         Prj ix e                -> liftA  (Prj ix)              <$> travE e
         Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
-        Iterate n f x           -> liftA3 Iterate               <$> travE n <*> travE f <*> travE x
---        While p f x             -> liftA3 While                 <$> travE p <*> travE f <*> travE x
+        While p f x             -> liftA3 While                 <$> travF p <*> travF f <*> travE x
         PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
         Index a e               -> liftA2 Index                 <$> travA a <*> travE e
         LinearIndex a e         -> liftA2 LinearIndex           <$> travA a <*> travE e

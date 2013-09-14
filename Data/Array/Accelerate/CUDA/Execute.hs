@@ -1,13 +1,14 @@
-{-# LANGUAGE BangPatterns         #-}
-{-# LANGUAGE CPP                  #-}
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE GADTs                #-}
-{-# LANGUAGE IncoherentInstances  #-}
-{-# LANGUAGE PatternGuards        #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TypeOperators        #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE BangPatterns               #-}
+{-# LANGUAGE CPP                        #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE IncoherentInstances        #-}
+{-# LANGUAGE NoForeignFunctionInterface #-}
+{-# LANGUAGE PatternGuards              #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
+{-# LANGUAGE UndecidableInstances       #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
@@ -123,6 +124,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
       Apply f a                 -> executeOpenAfun1 f aenv =<< travA a
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
+      Awhile p f a              -> awhile p f =<< travA a
 
       -- Foreign
       Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecute ff) =<< travA a
@@ -167,6 +169,13 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     travT :: Atuple (ExecOpenAcc aenv) t -> CIO t
     travT NilAtup          = return ()
     travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
+
+    awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
+    awhile p f a = do
+      r    <- executeOpenAfun1 p aenv a
+      done <- indexArray r 0            -- TLM TODO: memory manager should remember what is already on the host
+      if done then return a
+              else awhile p f =<< executeOpenAfun1 f aenv a
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
@@ -361,8 +370,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Tuple t                   -> toTuple <$> travT t
       Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
       Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
-      Iterate n f x             -> join $ iterate f <$> travE n <*> travE x
---      While p f x               -> while p f =<< travE x
+      While p f x               -> while p f =<< travE x
       IndexAny                  -> return Any
       IndexNil                  -> return Z
       IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
@@ -377,7 +385,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix
       LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
-      Foreign _ f x             -> travF1 f x
+      Foreign _ f x             -> foreign f x
 
     -- Helpers
     -- -------
@@ -390,28 +398,19 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv
 
-    travF1 :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
-    travF1 (Lam (Body f)) x = travE x >>= \a -> executeOpenExp f (Empty `Push` a) Empty
-    travF1 _              _ = error "I bless the rains down in Africa"
+    foreign :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
+    foreign (Lam (Body f)) x = travE x >>= \a -> executeOpenExp f (Empty `Push` a) Empty
+    foreign _              _ = error "I bless the rains down in Africa"
 
-    iterate :: ExecOpenExp (env,a) aenv a -> Int -> a -> CIO a
-    iterate !f !limit !x
-      = let go !i !acc
-              | i >= limit      = return acc
-              | otherwise       = go (i+1) =<< executeOpenExp f (env `Push` acc) aenv
-        in
-        go 0 x
+    travF1 :: ExecOpenFun env aenv (a -> b) -> a -> CIO b
+    travF1 (Lam (Body f)) x = executeOpenExp f (env `Push` x) aenv
+    travF1 _              _ = error "Gonna take some time to do the things we never have"
 
-{--
-    while :: ExecOpenExp (env,a) aenv Bool -> ExecOpenExp (env,a) aenv a -> a -> CIO a
-    while !p !f !x
-      = let go !acc = do
-              done <- executeOpenExp p (env `Push` acc) aenv
-              if done then return x
-                      else go =<< executeOpenExp f (env `Push` acc) aenv
-        in
-        go x
---}
+    while :: ExecOpenFun env aenv (a -> Bool) -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
+    while !p !f !x = do
+      done <- travF1 p x
+      if done then return x
+              else while p f =<< travF1 f x
 
     indexSlice :: (Elt slix, Elt sh, Elt sl)
                => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)

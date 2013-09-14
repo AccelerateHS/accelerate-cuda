@@ -137,37 +137,38 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 --
 sharedMem :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int
 -- non-computation forms
-sharedMem _ (Alet _ _)      _   = INTERNAL_ERROR(error) "sharedMem" "Let"
-sharedMem _ (Avar _)        _   = INTERNAL_ERROR(error) "sharedMem" "Avar"
-sharedMem _ (Apply _ _)     _   = INTERNAL_ERROR(error) "sharedMem" "Apply"
-sharedMem _ (Acond _ _ _)   _   = INTERNAL_ERROR(error) "sharedMem" "Acond"
-sharedMem _ (Atuple _)      _   = INTERNAL_ERROR(error) "sharedMem" "Atuple"
-sharedMem _ (Aprj _ _)      _   = INTERNAL_ERROR(error) "sharedMem" "Aprj"
-sharedMem _ (Use _)         _   = INTERNAL_ERROR(error) "sharedMem" "Use"
-sharedMem _ (Unit _)        _   = INTERNAL_ERROR(error) "sharedMem" "Unit"
-sharedMem _ (Reshape _ _)   _   = INTERNAL_ERROR(error) "sharedMem" "Reshape"
-sharedMem _ (Aforeign _ _ _) _  = INTERNAL_ERROR(error) "sharedMem" "Aforeign"
+sharedMem _ Alet{}     _ = INTERNAL_ERROR(error) "sharedMem" "Let"
+sharedMem _ Avar{}     _ = INTERNAL_ERROR(error) "sharedMem" "Avar"
+sharedMem _ Apply{}    _ = INTERNAL_ERROR(error) "sharedMem" "Apply"
+sharedMem _ Acond{}    _ = INTERNAL_ERROR(error) "sharedMem" "Acond"
+sharedMem _ Awhile{}   _ = INTERNAL_ERROR(error) "sharedMem" "Awhile"
+sharedMem _ Atuple{}   _ = INTERNAL_ERROR(error) "sharedMem" "Atuple"
+sharedMem _ Aprj{}     _ = INTERNAL_ERROR(error) "sharedMem" "Aprj"
+sharedMem _ Use{}      _ = INTERNAL_ERROR(error) "sharedMem" "Use"
+sharedMem _ Unit{}     _ = INTERNAL_ERROR(error) "sharedMem" "Unit"
+sharedMem _ Reshape{}  _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
+sharedMem _ Aforeign{} _ = INTERNAL_ERROR(error) "sharedMem" "Aforeign"
 
 -- skeleton nodes
-sharedMem _ (Generate _ _)       _        = 0
-sharedMem _ (Transform _ _ _ _)  _        = 0
-sharedMem _ (Replicate _ _ _)    _        = 0
-sharedMem _ (Slice _ _ _)        _        = 0
-sharedMem _ (Map _ _)            _        = 0
-sharedMem _ (ZipWith _ _ _)      _        = 0
-sharedMem _ (Permute _ _ _ _)    _        = 0
-sharedMem _ (Backpermute _ _ _)  _        = 0
-sharedMem _ (Stencil _ _ _)      _        = 0
-sharedMem _ (Stencil2 _ _ _ _ _) _        = 0
-sharedMem _ (Fold  _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
-sharedMem _ (Scanl _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
-sharedMem _ (Scanr _ x _)        blockDim = sizeOf (delayedExpType x) * blockDim
-sharedMem _ (Scanl' _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
-sharedMem _ (Scanr' _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
-sharedMem _ (Fold1 _ a)          blockDim = sizeOf (delayedAccType a) * blockDim
-sharedMem _ (Scanl1 _ a)         blockDim = sizeOf (delayedAccType a) * blockDim
-sharedMem _ (Scanr1 _ a)         blockDim = sizeOf (delayedAccType a) * blockDim
-sharedMem p (FoldSeg _ x _ _)    blockDim =
+sharedMem _ Generate{}          _        = 0
+sharedMem _ Transform{}         _        = 0
+sharedMem _ Replicate{}         _        = 0
+sharedMem _ Slice{}             _        = 0
+sharedMem _ Map{}               _        = 0
+sharedMem _ ZipWith{}           _        = 0
+sharedMem _ Permute{}           _        = 0
+sharedMem _ Backpermute{}       _        = 0
+sharedMem _ Stencil{}           _        = 0
+sharedMem _ Stencil2{}          _        = 0
+sharedMem _ (Fold  _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanl _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanr _ x _)       blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanl' _ x _)      blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Scanr' _ x _)      blockDim = sizeOf (delayedExpType x) * blockDim
+sharedMem _ (Fold1 _ a)         blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem _ (Scanl1 _ a)        blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem _ (Scanr1 _ a)        blockDim = sizeOf (delayedAccType a) * blockDim
+sharedMem p (FoldSeg _ x _ _)   blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedExpType x)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
