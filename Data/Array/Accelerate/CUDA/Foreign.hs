@@ -6,7 +6,7 @@
 {-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE GADTs                #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign
@@ -37,8 +37,8 @@
 module Data.Array.Accelerate.CUDA.Foreign (
 
   -- * Backend representation
-  cudaAcc, canExecute, CuForeignAcc, CuForeignExp, CIO,
-  liftIO, canExecuteExp, cudaExp,
+  canExecute, CUDAForeignAcc(..), CUDAForeignExp(..), CIO,
+  liftIO, canExecuteExp,
 
   -- * Manipulating arrays
   DevicePtrs,
@@ -49,11 +49,12 @@ module Data.Array.Accelerate.CUDA.Foreign (
   pokeArray, pokeArrayAsync,
   allocateArray, newArray,
 
-  -- * Running IO actions in a CUDA context
+  -- * Running IO actions in an Accelerate context
   inContext, inDefaultContext
 
 ) where
 
+import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Sugar
@@ -71,77 +72,61 @@ import System.Mem.StableName
 -- CUDA backend representation of foreign functions
 -- ------------------------------------------------
 
--- CUDA foreign Acc functions are just CIO functions.
+-- |CUDA foreign Acc functions are just CIO functions.
 --
-newtype CuForeignAcc args results = CuForeignAcc (args -> CIO results)
+newtype CUDAForeignAcc as bs = CUDAForeignAcc (as -> CIO bs)
   deriving (Typeable)
 
-instance Foreign CuForeignAcc where
+instance Foreign CUDAForeignAcc where
   -- Using the hash of the StableName in order to uniquely identify the function
   -- when it is pretty printed.
   --
-  strForeign ff =
-    let sn = unsafePerformIO $ makeStableName ff
+  strForeign f =
+    let sn = unsafePerformIO $ makeStableName f
     in
-    "cudaAcc<" ++ (show (hashStableName sn)) ++ ">"
+    "cudaForeignAcc<" ++ show (hashStableName sn) ++ ">"
 
 -- |Gives the executable form of a foreign function if it can be executed by the
 -- CUDA backend.
 --
-canExecute :: forall ff args results. (Foreign ff, Typeable args, Typeable results)
-           => ff args results
-           -> Maybe (args -> CIO results)
-canExecute ff = (\(CuForeignAcc ff') -> ff') <$> (cast ff :: Maybe (CuForeignAcc args results))
+canExecute :: forall f as bs. (Foreign f, Typeable as, Typeable bs)
+           => f as bs
+           -> Maybe (as -> CIO bs)
+canExecute f = (\(CUDAForeignAcc f') -> f') <$> (cast f :: Maybe (CUDAForeignAcc as bs))
 
--- CUDA foreign Exp functions are just strings with the header filename and the name of the
--- function separated by a space.
+-- |CUDA foreign Exp functions consist of a list of C header files necessary to call the function
+-- and the name of the function to call.
 --
-newtype CuForeignExp args results = CuForeignExp String
+data CUDAForeignExp x y where
+  CUDAForeignExp :: IsScalar y => [String] -> String -> CUDAForeignExp x y
   deriving (Typeable)
 
-instance Foreign CuForeignExp where
-  strForeign (CuForeignExp n) = "cudaExp<" ++ n ++ ">"
+instance Foreign CUDAForeignExp where
+  strForeign (CUDAForeignExp _ n) = "cudaForeignExp<" ++ n ++ ">"
 
 -- |Gives the foreign function name as a string if it is a foreign Exp function
 -- for the CUDA backend.
 --
-canExecuteExp :: forall ff args results. (Foreign ff, Typeable results, Typeable args)
-              => ff args results
-              -> Maybe String
-canExecuteExp ff = (\(CuForeignExp ff') -> ff') <$> (cast ff :: Maybe (CuForeignExp args results))
+canExecuteExp :: forall f x y. (Foreign f, Typeable y, Typeable x)
+              => f x y
+              -> Maybe ([String], String)
+canExecuteExp f = (\(CUDAForeignExp h f') -> (h, f')) <$> (cast f :: Maybe (CUDAForeignExp x y))
 
 
 -- User facing utility functions
 -- -----------------------------
-
--- |Create a CUDA foreign function
---
-cudaAcc :: (Arrays args, Arrays results)
-        => (args -> CIO results)
-        -> CuForeignAcc args results
-cudaAcc = CuForeignAcc
-
--- |Create a CUDA foreign scalar function. The string needs to be formatted in
--- the same way as for the Haskell FFI. That is, the header file name and the
--- name of the function separated by a space. i.e cudaExp "stdlib.h min".
---
-cudaExp :: (Elt args, Elt results)
-        => String
-        -> CuForeignExp args results
-cudaExp = CuForeignExp
 
 -- |Get the raw CUDA device pointers associated with an array
 --
 devicePtrsOfArray :: Array sh e -> CIO (DevicePtrs (EltRepr e))
 devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
 
--- |Run an IO action within the given CUDA context
+-- |Run an IO action within the given Acclerate context
 --
 inContext :: Context -> IO a -> IO a
-inContext ctx action =
-  bracket_ (push ctx) pop action
+inContext ctx = bracket_ (push ctx) pop
 
--- |Run an IO action in the default CUDA context
+-- |Run an IO action in the default Acclerate context
 --
 inDefaultContext :: IO a -> IO a
 inDefaultContext = inContext defaultContext

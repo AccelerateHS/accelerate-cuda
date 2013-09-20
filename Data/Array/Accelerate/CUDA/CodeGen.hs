@@ -613,14 +613,12 @@ codegenOpenExp dev aenv = cvtE
              -> Val env
              -> Gen [C.Exp]
     foreignE ff x env = case canExecuteExp ff of
-      Nothing   -> INTERNAL_ERROR(error) "codegenOpenExp" "Non-CUDA foreign expression encountered"
-      Just f    -> do
-        unless (null hdr) . lift $ modify (\st -> st { headers = Set.insert hdr (headers st) })
+      Nothing      -> INTERNAL_ERROR(error) "codegenOpenExp" "Non-CUDA foreign expression encountered"
+      Just (hs, f) -> do
+        lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
         args    <- cvtE x env
-        return  $  [ccall name (ccastTup (Sugar.eltType (undefined::a)) args)]
-        where
-          (hdr, rest)   = break isSpace f
-          name          = if null rest then f else tail rest
+        mapM_ use args
+        return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
 
     -- Some terms demand we extract only singly typed expressions
     --
