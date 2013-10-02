@@ -167,7 +167,6 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
          * cooperatively reduce the shared array to a single value.
          */
         $items:(sdata "threadIdx.x" .=. y)
-        __syncthreads();
 
         ix = min(shapeSize - blockIdx.x * blockDim.x, blockDim.x);
         $stms:(reduceBlock dev fun x y sdata (cvar "ix"))
@@ -317,8 +316,6 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun
              * cooperatively reduces this to a single value.
              */
             $items:(sdata "threadIdx.x" .=. y)
-            __syncthreads();
-
             $stms:(reduceBlock dev fun x y sdata (cvar "n"))
 
             /*
@@ -651,17 +648,28 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
 
     reduce :: Int -> [C.Stm] -> [C.Stm]
     reduce i rest
+      -- Ensure that threads synchronise before reading from or writing to
+      -- shared memory. Synchronising after each reduction step is not enough,
+      -- because one warp could update the partial results before a different
+      -- warp has read in their data for this step.
+      --
       | i > warpSize dev
       = [cstm| if ( threadIdx.x + $int:i < $exp:n ) {
+                   __syncthreads();
                    $items:(x0 .=. sdata ("threadIdx.x + " ++ show i))
                    $items:(x1 .=. f x1 x0)
+                   __syncthreads();
                    $items:(sdata "threadIdx.x" .=. x1)
                } |]
-      : [cstm| __syncthreads(); |]
       : rest
 
+      -- The threads of a warp execute in lockstep, so it is only necessary to
+      -- synchronise at the top, to ensure all threads have written their
+      -- results into shared memory.
+      --
       | otherwise
-      = [cstm| if ( threadIdx.x < $int:(warpSize dev) ) {
+      = [cstm| __syncthreads(); |]
+      : [cstm| if ( threadIdx.x < $int:(warpSize dev) ) {
                    $stms:(reduceWarpTree dev fun x0 x1 sdata n (cvar "threadIdx.x"))
                } |]
       : rest
