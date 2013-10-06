@@ -28,30 +28,28 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
 
   -- ** Functions callable from foreign code
   -- In order to call these from from C, see the corresponding C function signature.
-  accelerateCreate, accelerateDestroy, freeResult, freeProgram, getShape,
-  getDevicePtrs,
+  accelerateCreate, accelerateDestroy, freeOutput, freeProgram,
 
   -- ** Exporting
-  foreignAccModule, exportAfun, buildExported,
+  exportAfun, buildExported,
 
   -- ** Types
-  InputArray, ResultArray, ShapeBuffer, DevicePtrBuffer,
+  InputArray, OutputArray, ShapeBuffer, DevicePtrBuffer,
 
 ) where
 
+import Prelude                                          as P
 import Data.Functor
-import System.FilePath
 import Control.Applicative
 import Foreign.StablePtr
 import Foreign.C.Types
 import Foreign.Ptr
 import Foreign.Storable                                 ( Storable(..) )
-import Foreign.Marshal.Array                            ( peekArray, pokeArray )
+import Foreign.Marshal.Array                            ( peekArray, pokeArray, mallocArray )
+import Foreign.Marshal.Alloc                            ( free )
 import Control.Monad.State                              ( liftIO )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import Language.Haskell.TH                              hiding ( ppr )
-import Language.C.Quote.C
-import Text.PrettyPrint.Mainland
 
 -- friends
 import Data.Array.Accelerate.Smart                      ( Acc )
@@ -59,15 +57,12 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA                       ( run1In )
 import Data.Array.Accelerate.CUDA.Array.Sugar           hiding ( shape, size )
-import Data.Array.Accelerate.CUDA.Array.Data            hiding ( pokeArray, peekArray )
+import Data.Array.Accelerate.CUDA.Array.Data            hiding ( pokeArray, peekArray, mallocArray )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 
 -- |A handle foreign code can use to call accelerate functions.
 type AccHandle = StablePtr Context
-
--- |A result array from an accelerate program.
-type ResultArray = StablePtr EArray
 
 -- |A foreign buffer that represents a shape as an array of ints.
 type ShapeBuffer = Ptr CInt
@@ -77,6 +72,9 @@ type DevicePtrBuffer = Ptr WordPtr
 
 -- |The input required from foreign code.
 type InputArray = (ShapeBuffer, DevicePtrBuffer)
+
+-- |A result array from an accelerate program.
+type OutputArray = (ShapeBuffer, DevicePtrBuffer, StablePtr EArray)
 
 -- |Foreign exportable representation of a CUDA device
 type Device = Int32
@@ -95,16 +93,49 @@ data Afun where
 data EArray where
   EArray :: (Shape sh, Elt e) => Array sh e -> EArray
 
+-- We need to export these
+foreign export ccall accelerateCreate  :: Device -> ForeignContext -> IO AccHandle
+foreign export ccall accelerateDestroy :: AccHandle -> IO ()
+foreign export ccall runProgram        :: AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr OutputArray -> IO ()
+foreign export ccall freeOutput        :: Ptr OutputArray -> IO ()
+foreign export ccall freeProgram       :: StablePtr a -> IO ()
+
 instance Storable InputArray where
   sizeOf (sh, ptrs) = sizeOf sh + sizeOf ptrs
+
+  alignment _ = 0
+
+  peek ptr = do
+    let p_sh   = castPtr ptr :: Ptr ShapeBuffer
+    sh         <- peek p_sh
+    let p_ptrs = (castPtr p_sh :: Ptr DevicePtrBuffer) `plusPtr` sizeOf sh
+    ptrs       <- peek p_ptrs
+    return (sh, ptrs)
+
+  poke ptr (sh, ptrs) = do
+    let p_sh   = castPtr ptr :: Ptr ShapeBuffer
+        p_ptrs = (castPtr p_sh :: Ptr DevicePtrBuffer) `plusPtr` sizeOf sh
+    poke p_sh sh
+    poke p_ptrs ptrs
+
+instance Storable OutputArray where
+  sizeOf (sh, ptrs, sa) = sizeOf sh + sizeOf ptrs + sizeOf sa
   alignment _ = 0
   peek ptr = do
-    sh <- peek (castPtr ptr :: Ptr ShapeBuffer)
-    ptrs <- peek ((castPtr ptr :: Ptr DevicePtrBuffer) `plusPtr` (sizeOf sh))
-    return (sh, ptrs)
-  poke ptr (sh, ptrs) = do
-    poke (castPtr ptr :: Ptr ShapeBuffer) sh
-    poke ((castPtr ptr :: Ptr DevicePtrBuffer) `plusPtr` (sizeOf sh)) ptrs
+    let p_sh   = castPtr ptr :: Ptr ShapeBuffer
+    sh         <- peek p_sh
+    let p_ptrs = (castPtr p_sh :: Ptr DevicePtrBuffer) `plusPtr` sizeOf sh
+    ptrs       <- peek p_ptrs
+    let p_sa   = (castPtr p_ptrs :: Ptr (StablePtr a)) `plusPtr` sizeOf ptrs
+    sa         <- peek p_sa
+    return (sh, ptrs, sa)
+  poke ptr (sh, ptrs, sa) = do
+    let p_sh   = castPtr ptr :: Ptr ShapeBuffer
+        p_ptrs = (castPtr p_sh :: Ptr DevicePtrBuffer) `plusPtr` sizeOf sh
+        p_sa   = (castPtr p_ptrs :: Ptr (StablePtr a)) `plusPtr` sizeOf ptrs
+    poke p_sh sh
+    poke p_ptrs ptrs
+    poke p_sa sa
 
 -- |Create an Accelerate handle given a device and a cuda context.
 --
@@ -118,14 +149,18 @@ accelerateCreate dev ctx = fromDeviceContext (CUDA.Device $ CInt dev) (CUDA.Cont
 accelerateDestroy :: AccHandle -> IO ()
 accelerateDestroy = freeStablePtr
 
--- |Function callable from foreign code to 'free' a ResultArray returned after executing
+-- |Function callable from foreign code to 'free' a OutputArray returned after executing
 -- an Accelerate computation.
 --
 -- Once freed, the device pointers associated with an array are no longer valid.
 --
--- @void freeResult(ResultArray arr);@
-freeResult :: ResultArray -> IO ()
-freeResult arr = freeStablePtr arr
+-- @void freeOutput(OutputArray arr);@
+freeOutput :: Ptr OutputArray -> IO ()
+freeOutput o = do
+  (sh, dptrs, sa) <- peek o
+  free sh
+  free dptrs
+  freeStablePtr sa
 
 -- |Free a compiled accelerate program.
 --
@@ -133,37 +168,10 @@ freeResult arr = freeStablePtr arr
 freeProgram :: StablePtr a -> IO ()
 freeProgram = freeStablePtr
 
--- |Get the shape of the result array and write it to the given buffer.
---
--- @void getShape(ResultArray arr, int *sh);@
-getShape :: ResultArray -> ShapeBuffer -> IO ()
-getShape arr psh = do
-  a <- deRefStablePtr arr
-  getSh a
-  where
-    getSh :: EArray -> IO ()
-    getSh (EArray a) = forSh a
-
-    forSh :: forall sh e. Array sh e -> IO ()
-    forSh (Array sh _) = do
-      let sh' = toElt sh :: sh
-      pokeArray psh (map fromIntegral $ shapeToList sh')
-
--- |Get the device pointers associated with the result array and
--- write them to the given buffer.
---
--- @void getDevicePtrs(AccHandle hndl, ResultArray arr, void **buffer);@
-getDevicePtrs :: AccHandle -> ResultArray -> DevicePtrBuffer -> IO ()
-getDevicePtrs hndl arr pbuf = do
-  (EArray (Array _ adata)) <- deRefStablePtr arr
-  ctx   <- deRefStablePtr hndl
-  dptrs <- evalCUDA ctx (devicePtrsOfArrayData adata)
-  pokeArray pbuf (devicePtrsToWordPtrs adata dptrs)
-
 -- |Execute the given accelerate program with @is@ as the input and @os@ as the output.
 --
--- @void runProgram(AccHandle hndl, AccProgram p, InputArray* is, ResultArray* os);@
-runProgram :: AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr ResultArray -> IO ()
+-- @void runProgram(AccHandle hndl, AccProgram p, InputArray* is, OutputArray* os);@
+runProgram :: AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr OutputArray -> IO ()
 runProgram hndl fun input output = do
   ctx <- deRefStablePtr hndl
   af <- deRefStablePtr fun
@@ -171,9 +179,10 @@ runProgram hndl fun input output = do
   where
     run :: Context -> Afun -> IO ()
     run ctx (Afun f (_ :: a) (_ :: b)) = do
-      (a, _) <- evalCUDA ctx $ marshalIn (arrays (undefined :: a)) input
-      let !b = f (toArr a)
-      _ <- marshalOut (arrays (undefined :: b)) (fromArr b) output
+      _ <- evalCUDA ctx $ do
+        (a, _) <- marshalIn (arrays (undefined :: a)) input
+        let !b = f (toArr a)
+        marshalOut (arrays (undefined :: b)) (fromArr b) output
       return ()
 
     marshalIn :: ArraysR a -> Ptr InputArray -> CIO (a, Ptr InputArray)
@@ -188,80 +197,39 @@ runProgram hndl fun input output = do
       (y, ptr'') <- marshalIn aR2 ptr'
       return ((x,y), ptr'')
 
-    marshalOut :: ArraysR b -> b -> Ptr ResultArray -> IO (Ptr ResultArray)
+    marshalOut :: ArraysR b -> b -> Ptr OutputArray -> CIO (Ptr OutputArray)
     marshalOut ArraysRunit  () ptr = return ptr
     marshalOut ArraysRarray a  ptr = do
-      sptr <- newStablePtr (EArray a)
-      poke ptr sptr
-      return (plusPtr ptr (sizeOf sptr))
+      oarr <- mkOutput a
+      liftIO $ poke ptr oarr
+      return (plusPtr ptr (sizeOf oarr))
+      where
+        mkOutput :: forall sh e. Shape sh => Array sh e -> CIO OutputArray
+        mkOutput (Array sh adata) = do
+          let sh' = shapeToList (toElt sh :: sh)
+          shbuf <- liftIO $ mallocArray (P.length sh')
+          liftIO $ pokeArray shbuf (map fromIntegral sh')
+
+          dptrs <- devicePtrsToWordPtrs adata <$> devicePtrsOfArrayData adata
+          pbuf  <- liftIO $ mallocArray (P.length dptrs)
+          liftIO $ pokeArray pbuf dptrs
+
+          sa <- liftIO $ newStablePtr (EArray a)
+          return (shbuf, pbuf, sa)
+
     marshalOut (ArraysRpair aR1 aR2) (x,y) ptr = do
       ptr' <- marshalOut aR1 x ptr
       marshalOut aR2 y ptr'
 
 
--- |A template haskell stub that generates a .h file in the directory in which
--- the module is being compiled. This file will include the C definitions of
--- the types below, the functions above, and
---
--- @AccHandle accelerateInit(int argc, char** argv, int device, CUcontext ctx);@
---
--- Which, in addition to creating an Accelerate handle, also initialises the
--- Haskell runtime.
-foreignAccModule :: Q [Dec]
-foreignAccModule = createHfile >> exports
-  where
-    createHfile = do
-      Loc hsFile _ _ _ _ <- location
-      let hFile = replaceExtension hsFile ".h"
-      let contents = (show . ppr) $ typedefs (takeBaseName hFile ++ "_stub.h")
-      runIO $ writeFile hFile contents
-
-    typedefs file = [cunit|
-        $esc:("#include \"HsFFI.h\"")
-        $esc:("#include \"" ++ file ++ "\"")
-        $esc:("#include <cuda.h>")
-
-        typedef typename HsStablePtr AccHandle;
-        typedef typename HsStablePtr AccProgram;
-        typedef typename HsStablePtr ResultArray;
-
-        typedef struct {
-          int*    shape;
-          void**  ptrs;
-        } InputArray;
-
-        AccHandle accelerateInit(int argc, char** argv, int device, typename CUcontext ctx) {
-          extern void __stginit_Dotp ( void );
-          hs_init(&argc, &argv);
-          return accelerateCreate(device, ctx);
-        }
-      |]
-
-    exports = sequence $ uncurry exportf <$>
-      [
-        ('accelerateCreate,  [t| Device -> ForeignContext -> IO AccHandle |])
-      , ('accelerateDestroy, [t| AccHandle -> IO () |])
-      , ('runProgram,        [t| AccHandle -> StablePtr Afun -> Ptr InputArray -> Ptr ResultArray -> IO () |])
-      , ('freeResult,        [t| ResultArray -> IO () |])
-      , ('freeProgram,       [t| forall a. StablePtr a -> IO ()|])
-      , ('getShape,          [t| ResultArray -> ShapeBuffer -> IO () |])
-      , ('getDevicePtrs,     [t| AccHandle -> ResultArray -> DevicePtrBuffer -> IO () |])
-      ]
-      where
-        exportf name ty = ForeignD <$> (ExportF cCall (nameBase name) name <$> ty)
-
--- |Given the name, ''f'', of an Accelerate function (a function of type ''Acc a -> Acc b'')
--- generate two top level bindings, ''f_compile'' and ''f_run'', and export them. When given
--- a ''AccHandle'', ''f_compile'' will compile the function and return a handle to the program
--- that can be called with ''f_run''.
+-- |Given the 'Name' of an Accelerate function (a function of type ''Acc a -> Acc b'') generate a
+-- a function callable from foreign code with the second argument specifying it's name.
 exportAfun :: Name -> String -> Q [Dec]
 exportAfun fname ename = do
   (VarI n ty _ _) <- reify fname
 
   -- Generate initialisation function
-  initFun <- genCompileFun n ename ty
-
-  return initFun
+  genCompileFun n ename ty
 
 genCompileFun :: Name -> String -> Type -> Q [Dec]
 genCompileFun fname ename ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
