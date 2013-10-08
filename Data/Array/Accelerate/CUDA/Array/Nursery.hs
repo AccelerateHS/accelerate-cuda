@@ -25,9 +25,9 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Prelude
-import Data.IORef
 import Data.Hashable
 import Control.Exception                                        ( bracket_ )
+import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
 import System.Mem.Weak                                          ( Weak )
 import Foreign.Ptr                                              ( ptrToIntPtr )
 import Foreign.CUDA.Ptr                                         ( DevicePtr )
@@ -49,13 +49,14 @@ import qualified Data.HashTable.IO                              as HT
 --
 type HashTable key val  = HT.BasicHashTable key val
 
-type NRS                = IORef ( HashTable (CUDA.Context, Int) (FullList () (DevicePtr ())) )
+type NRS                = MVar ( HashTable (CUDA.Context, Int) (FullList () (DevicePtr ())) )
 data Nursery            = Nursery {-# UNPACK #-} !NRS
                                   {-# UNPACK #-} !(Weak NRS)
 
 instance Hashable CUDA.Context where
   {-# INLINE hashWithSalt #-}
-  hashWithSalt s (CUDA.Context ctx) = hashWithSalt s (fromIntegral (ptrToIntPtr ctx) :: Int)
+  hashWithSalt salt (CUDA.Context ctx)
+    = salt `hashWithSalt` (fromIntegral (ptrToIntPtr ctx) :: Int)
 
 
 -- Generate a fresh nursery
@@ -63,8 +64,8 @@ instance Hashable CUDA.Context where
 new :: IO Nursery
 new = do
   tbl    <- HT.new
-  ref    <- newIORef tbl
-  weak   <- mkWeakIORef ref (flush tbl)
+  ref    <- newMVar tbl
+  weak   <- mkWeakMVar ref (flush tbl)
   return $! Nursery ref weak
 
 
@@ -74,10 +75,9 @@ new = do
 --
 {-# INLINE malloc #-}
 malloc :: Int -> CUDA.Context -> Nursery -> IO (Maybe (DevicePtr ()))
-malloc !n !ctx (Nursery !ref _) = do
+malloc !n !ctx (Nursery !ref _) = withMVar ref $ \tbl -> do
   let !key = (ctx,n)
   --
-  tbl <- readIORef ref
   mp  <- HT.lookup tbl key
   case mp of
     Nothing               -> return Nothing
@@ -91,10 +91,9 @@ malloc !n !ctx (Nursery !ref _) = do
 --
 {-# INLINE stash #-}
 stash :: Int -> CUDA.Context -> NRS -> DevicePtr a -> IO ()
-stash !n !ctx !ref (CUDA.castDevPtr -> !ptr) = do
+stash !n !ctx !ref (CUDA.castDevPtr -> !ptr) = withMVar ref $ \tbl -> do
   let !key = (ctx, n)
   --
-  tbl <- readIORef ref
   mp  <- HT.lookup tbl key
   case mp of
     Nothing     -> HT.insert tbl key (FL.singleton () ptr)

@@ -26,12 +26,12 @@ import Prelude                                                  hiding ( lookup,
 #else
 import Prelude                                                  hiding ( lookup )
 #endif
-import Data.IORef                                               ( IORef, newIORef, readIORef, mkWeakIORef )
 import Data.Maybe                                               ( isJust )
 import Data.Hashable                                            ( Hashable(..) )
 import Data.Typeable                                            ( Typeable, gcast )
 import Control.Monad                                            ( unless )
 import Control.Concurrent                                       ( yield )
+import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
 import Control.Exception                                        ( bracket_, catch, throwIO )
 import Control.Applicative                                      ( (<$>) )
 import System.Mem                                               ( performGC )
@@ -68,16 +68,18 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 -- semantics of weak pointers in the documentation).
 --
 type HashTable key val  = HT.BasicHashTable key val
-type MT                 = IORef ( HashTable HostArray DeviceArray )
+type MT                 = MVar ( HashTable HostArray DeviceArray )
 data MemoryTable        = MemoryTable {-# UNPACK #-} !MT
                                       {-# UNPACK #-} !(Weak MT)
                                       {-# UNPACK #-} !Nursery
 
 -- Arrays on the host and device
 --
+type ContextId = Int
+
 data HostArray where
   HostArray :: Typeable e
-            => {-# UNPACK #-} !Int      -- unique ID relating to the parent context
+            => {-# UNPACK #-} !ContextId        -- unique ID relating to the parent context
             -> {-# UNPACK #-} !(StableName (ArrayData e))
             -> HostArray
 
@@ -91,6 +93,7 @@ instance Eq HostArray where
     = maybe False (== a2) (gcast a1)
 
 instance Hashable HostArray where
+  {-# INLINE hashWithSalt #-}
   hashWithSalt salt (HostArray cid sn)
     = salt `hashWithSalt` cid `hashWithSalt` sn
 
@@ -108,9 +111,9 @@ new :: IO MemoryTable
 new = do
   message "initialise memory table"
   tbl  <- HT.new
-  ref  <- newIORef tbl
+  ref  <- newMVar tbl
   nrs  <- N.new
-  weak <- mkWeakIORef ref (table_finalizer tbl)
+  weak <- mkWeakMVar ref (table_finalizer tbl)
   return $! MemoryTable ref weak nrs
 
 
@@ -119,7 +122,7 @@ new = do
 lookup :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
 lookup ctx (MemoryTable !ref _ _) !arr = do
   sa <- makeStableArray ctx arr
-  mw <- withIORef ref (`HT.lookup` sa)
+  mw <- withMVar ref (`HT.lookup` sa)
   case mw of
     Nothing              -> trace ("lookup/not found: " ++ show sa) $ return Nothing
     Just (DeviceArray w) -> do
@@ -182,9 +185,8 @@ insert :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> D
 insert !ctx (MemoryTable !ref !weak_ref (Nursery _ !weak_nrs)) !arr !ptr !bytes = do
   key  <- makeStableArray ctx arr
   dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ finalizer (weakContext ctx) weak_ref weak_nrs key ptr bytes)
-  tbl  <- readIORef ref
-  message $ "insert: " ++ show key
-  HT.insert tbl key dev
+  message      $ "insert: " ++ show key
+  withMVar ref $ \tbl -> HT.insert tbl key dev
 
 
 -- Record an association between a host-side array and a device memory area that was
@@ -195,9 +197,8 @@ insertRemote :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData 
 insertRemote !ctx (MemoryTable !ref !weak_ref _) !arr !ptr = do
   key  <- makeStableArray ctx arr
   dev  <- DeviceArray `fmap` mkWeak arr ptr (Just $ remoteFinalizer weak_ref key)
-  tbl  <- readIORef ref
-  message $ "insertRemote: " ++ show key
-  HT.insert tbl key dev
+  message      $ "insert/remote: " ++ show key
+  withMVar ref $ \tbl -> HT.insert tbl key dev
 
 
 -- Removing entries
@@ -211,11 +212,11 @@ reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
   (free, total) <- CUDA.getMemInfo
   performGC
   yield
-  withIORef nrs N.flush
+  withMVar nrs N.flush
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> return ()
-    Just ref -> withIORef ref $ \tbl ->
+    Just ref -> withMVar ref $ \tbl ->
       flip HT.mapM_ tbl $ \(_,DeviceArray w) -> do
         alive <- isJust `fmap` deRefWeak w
         unless alive $ finalize w
@@ -240,7 +241,7 @@ finalizer !weak_ctx !weak_ref !weak_nrs !key !ptr !bytes = do
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> message ("finalise/dead table: " ++ show key)
-    Just ref -> withIORef ref (`HT.delete` key)
+    Just ref -> withMVar ref (`HT.delete` key)
   --
   mc <- deRefWeak weak_ctx
   case mc of
@@ -257,7 +258,7 @@ remoteFinalizer !weak_ref !key = do
   mr <- deRefWeak weak_ref
   case mr of
     Nothing  -> message ("finalise/dead table: " ++ show key)
-    Just ref -> trace   ("finalise: "            ++ show key) $ withIORef ref (`HT.delete` key)
+    Just ref -> trace   ("finalise: "            ++ show key) $ withMVar ref (`HT.delete` key)
 
 table_finalizer :: HashTable HostArray DeviceArray -> IO ()
 table_finalizer !tbl
@@ -275,10 +276,6 @@ makeStableArray !ctx !arr =
       !cid              = fromIntegral (ptrToIntPtr p)
   in
   HostArray cid <$> makeStableName arr
-
-{-# INLINE withIORef #-}
-withIORef :: IORef a -> (a -> IO b) -> IO b
-withIORef ref f = readIORef ref >>= f
 
 
 -- Debug
