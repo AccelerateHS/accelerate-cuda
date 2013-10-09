@@ -136,7 +136,11 @@
 --
 --  * @-ddump-cc:@ Print information about the CUDA kernels as they are compiled
 --    and run. Using this option will indicate whether your program is
---    generating the number of kernels that you were expecting.
+--    generating the number of kernels that you were expecting. Note that
+--    compiled kernels are cached in your home directory, and the generated code
+--    will only be displayed if it was not located in this persistent cache. To
+--    clear the cache and always print the generated code, use @-fflush-cache@
+--    as well.
 --
 --  * @-ddump-exec:@ Print each kernel as it is being executed, with timing
 --    information.
