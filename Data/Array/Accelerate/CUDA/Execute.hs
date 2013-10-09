@@ -34,7 +34,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecute )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -127,7 +127,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Awhile p f a              -> awhile p f =<< travA a
 
       -- Foreign
-      Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecute ff) =<< travA a
+      Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecuteAcc ff) =<< travA a
 
       -- Producers
       Map _ a                   -> executeOp =<< extent a

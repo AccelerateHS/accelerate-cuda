@@ -33,7 +33,7 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
-import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecute, canExecuteExp )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc, canExecuteExp )
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -211,7 +211,7 @@ compileOpenAcc = traverseAcc
                  -> DelayedAfun (a -> r)
                  -> DelayedOpenAcc aenv a
                  -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv r)
-        foreignA ff afun a = case canExecute ff of
+        foreignA ff afun a = case canExecuteAcc ff of
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
             where

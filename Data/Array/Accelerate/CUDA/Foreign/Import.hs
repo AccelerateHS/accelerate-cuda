@@ -38,8 +38,8 @@
 module Data.Array.Accelerate.CUDA.Foreign.Import (
 
   -- * Backend representation
-  canExecute, CUDAForeignAcc(..), CUDAForeignExp(..), CIO,
-  liftIO, canExecuteExp,
+  CUDAForeignAcc(..), canExecuteAcc,
+  CUDAForeignExp(..), canExecuteExp,
 
   -- * Manipulating arrays
   DevicePtrs,
@@ -51,7 +51,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   allocateArray, newArray,
 
   -- * Running IO actions in an Accelerate context
-  inContext, inDefaultContext
+  CIO, liftIO, inContext, inDefaultContext
 
 ) where
 
@@ -63,7 +63,6 @@ import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 
 import Data.Typeable
-import Control.Applicative
 import Control.Exception                                ( bracket_ )
 import Control.Monad.Trans                              ( liftIO )
 
@@ -86,10 +85,11 @@ instance Foreign CUDAForeignAcc where
 -- |Gives the executable form of a foreign function if it can be executed by the
 -- CUDA backend.
 --
-canExecute :: forall f as bs. (Foreign f, Typeable as, Typeable bs)
-           => f as bs
-           -> Maybe (as -> CIO bs)
-canExecute ff
+canExecuteAcc
+    :: (Foreign f, Typeable as, Typeable bs)
+    => f as bs
+    -> Maybe (as -> CIO bs)
+canExecuteAcc ff
   | Just (CUDAForeignAcc _ fun) <- cast ff
   = Just fun
 
@@ -113,10 +113,16 @@ instance Foreign CUDAForeignExp where
 -- |Gives the foreign function name as a string if it is a foreign Exp function
 -- for the CUDA backend.
 --
-canExecuteExp :: forall f x y. (Foreign f, Typeable y, Typeable x)
-              => f x y
-              -> Maybe ([String], String)
-canExecuteExp f = (\(CUDAForeignExp h f') -> (h, f')) <$> (cast f :: Maybe (CUDAForeignExp x y))
+canExecuteExp
+    :: forall f x y. (Foreign f, Typeable y, Typeable x)
+    => f x y
+    -> Maybe ([String], String)
+canExecuteExp ff
+  | Just (CUDAForeignExp hdr fun) <- cast ff    :: Maybe (CUDAForeignExp x y)
+  = Just (hdr, fun)
+
+  | otherwise
+  = Nothing
 
 
 -- User facing utility functions
