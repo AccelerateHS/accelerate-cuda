@@ -9,7 +9,7 @@
 {-# LANGUAGE GADTs                #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
--- Module      : Data.Array.Accelerate.CUDA.Foreign
+-- Module      : Data.Array.Accelerate.CUDA.Foreign.Import
 -- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
 -- License     : BSD3
 --
@@ -34,7 +34,7 @@
 -- with it.
 --
 
-module Data.Array.Accelerate.CUDA.Foreign (
+module Data.Array.Accelerate.CUDA.Foreign.Import (
 
   -- * Backend representation
   canExecute, CUDAForeignAcc(..), CUDAForeignExp(..), CIO,

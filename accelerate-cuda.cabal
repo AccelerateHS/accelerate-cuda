@@ -134,7 +134,6 @@ Library
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
                         Data.Array.Accelerate.CUDA.Foreign
-                        Data.Array.Accelerate.CUDA.Foreign.Export
 
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
@@ -158,6 +157,8 @@ Library
                         Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
+                        Data.Array.Accelerate.CUDA.Foreign.Export
+                        Data.Array.Accelerate.CUDA.Foreign.Import
                         Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
