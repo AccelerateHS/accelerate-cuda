@@ -3,10 +3,11 @@
 {-# LANGUAGE DeriveDataTypeable   #-}
 {-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE GADTs                #-}
 {-# LANGUAGE RankNTypes           #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE StandaloneDeriving   #-}
 {-# LANGUAGE TypeFamilies         #-}
-{-# LANGUAGE GADTs                #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign.Import
@@ -61,12 +62,10 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 
-import Data.Dynamic
+import Data.Typeable
 import Control.Applicative
 import Control.Exception                                ( bracket_ )
 import Control.Monad.Trans                              ( liftIO )
-import System.IO.Unsafe                                 ( unsafePerformIO )
-import System.Mem.StableName
 
 
 -- CUDA backend representation of foreign functions
@@ -74,17 +73,15 @@ import System.Mem.StableName
 
 -- |CUDA foreign Acc functions are just CIO functions.
 --
-newtype CUDAForeignAcc as bs = CUDAForeignAcc (as -> CIO bs)
-  deriving (Typeable)
+data CUDAForeignAcc as bs where
+  CUDAForeignAcc :: String                      -- name of the function
+                 -> (as -> CIO bs)              -- operation to execute
+                 -> CUDAForeignAcc as bs
+
+deriving instance Typeable2 CUDAForeignAcc
 
 instance Foreign CUDAForeignAcc where
-  -- Using the hash of the StableName in order to uniquely identify the function
-  -- when it is pretty printed.
-  --
-  strForeign f =
-    let sn = unsafePerformIO $ makeStableName f
-    in
-    "cudaForeignAcc<" ++ show (hashStableName sn) ++ ">"
+  strForeign (CUDAForeignAcc n _) = n
 
 -- |Gives the executable form of a foreign function if it can be executed by the
 -- CUDA backend.
@@ -92,17 +89,26 @@ instance Foreign CUDAForeignAcc where
 canExecute :: forall f as bs. (Foreign f, Typeable as, Typeable bs)
            => f as bs
            -> Maybe (as -> CIO bs)
-canExecute f = (\(CUDAForeignAcc f') -> f') <$> (cast f :: Maybe (CUDAForeignAcc as bs))
+canExecute ff
+  | Just (CUDAForeignAcc _ fun) <- cast ff
+  = Just fun
+
+  | otherwise
+  = Nothing
 
 -- |CUDA foreign Exp functions consist of a list of C header files necessary to call the function
 -- and the name of the function to call.
 --
 data CUDAForeignExp x y where
-  CUDAForeignExp :: IsScalar y => [String] -> String -> CUDAForeignExp x y
-  deriving (Typeable)
+  CUDAForeignExp :: IsScalar y
+                 => [String]                    -- header files to be imported
+                 -> String                      -- name of the foreign function
+                 -> CUDAForeignExp x y
+
+deriving instance Typeable2 CUDAForeignExp
 
 instance Foreign CUDAForeignExp where
-  strForeign (CUDAForeignExp _ n) = "cudaForeignExp<" ++ n ++ ">"
+  strForeign (CUDAForeignExp _ n) = n
 
 -- |Gives the foreign function name as a string if it is a foreign Exp function
 -- for the CUDA backend.
