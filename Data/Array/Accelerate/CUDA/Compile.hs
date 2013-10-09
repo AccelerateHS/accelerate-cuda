@@ -457,6 +457,7 @@ compileFlags cufile = do
     , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
 --    , "--restrict"    -- requires nvcc >= 5.0
+--    , "--maxrregcount", "32"
     , "-o", cufile `replaceExtension` "cubin"
     , if warnings then ""   else "--disable-warnings"
     , if debug    then ""   else "-DNDEBUG"
