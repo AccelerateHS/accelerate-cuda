@@ -53,7 +53,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
-import Data.Array.Accelerate.CUDA.Foreign                       ( canExecuteExp )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
 #include "accelerate.h"
 

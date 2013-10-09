@@ -33,7 +33,7 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.CodeGen
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
-import Data.Array.Accelerate.CUDA.Foreign                       ( canExecute, canExecuteExp )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecute, canExecuteExp )
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
