@@ -172,10 +172,10 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
 
     awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
-      r    <- executeOpenAfun1 p aenv a
-      done <- indexArray r 0            -- TLM TODO: memory manager should remember what is already on the host
-      if done then return a
-              else awhile p f =<< executeOpenAfun1 f aenv a
+      r  <- executeOpenAfun1 p aenv a
+      ok <- indexArray r 0              -- TLM TODO: memory manager should remember what is already on the host
+      if ok then awhile p f =<< executeOpenAfun1 f aenv a
+            else return a
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
@@ -408,9 +408,9 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
 
     while :: ExecOpenFun env aenv (a -> Bool) -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
     while !p !f !x = do
-      done <- travF1 p x
-      if done then return x
-              else while p f =<< travF1 f x
+      ok <- travF1 p x
+      if ok then while p f =<< travF1 f x
+            else return x
 
     indexSlice :: (Elt slix, Elt sh, Elt sl)
                => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
