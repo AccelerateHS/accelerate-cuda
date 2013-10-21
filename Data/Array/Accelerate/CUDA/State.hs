@@ -23,15 +23,16 @@ module Data.Array.Accelerate.CUDA.State (
   CIO, Context, evalCUDA,
 
   -- Querying execution state
-  defaultContext, deviceProperties, activeContext, kernelTable, memoryTable
+  defaultContext, deviceProperties, activeContext, kernelTable, memoryTable, streamReservoir,
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Debug                 ( message, dump_gc )
-import Data.Array.Accelerate.CUDA.Persistent            as KT
-import Data.Array.Accelerate.CUDA.Array.Table           as MT
+import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
+import Data.Array.Accelerate.CUDA.Array.Table           as MT ( MemoryTable, new )
+import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
@@ -61,7 +62,8 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 --
 data State = State {
     memoryTable         :: {-# UNPACK #-} !MemoryTable,                 -- host/device memory associations
-    kernelTable         :: {-# UNPACK #-} !KernelTable                  -- compiled kernel object code
+    kernelTable         :: {-# UNPACK #-} !KernelTable,                 -- compiled kernel object code
+    streamReservoir     :: {-# UNPACK #-} !Reservoir                    -- kernel execution streams
   }
 
 newtype CIO a = CIO {
@@ -105,7 +107,8 @@ theState
   $ do  message dump_gc "gc: initialise CUDA state"
         mtb     <- keepAlive =<< MT.new
         ktb     <- keepAlive =<< KT.new
-        return  $! State mtb ktb
+        rsv     <- keepAlive =<< ST.new
+        return  $! State mtb ktb rsv
 
 
 -- Select and initialise a default CUDA device, and create a new execution

@@ -157,6 +157,8 @@ Library
                         Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
+                        Data.Array.Accelerate.CUDA.Execute.Event
+                        Data.Array.Accelerate.CUDA.Execute.Stream
                         Data.Array.Accelerate.CUDA.Foreign.Export
                         Data.Array.Accelerate.CUDA.Foreign.Import
                         Data.Array.Accelerate.CUDA.FullList
