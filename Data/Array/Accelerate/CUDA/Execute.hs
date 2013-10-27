@@ -114,12 +114,9 @@ wait (Async e x) = liftIO $ Event.block e >> return x
 --
 streaming :: (Stream -> CIO a) -> CIO (Async a)
 streaming action = do
-  context       <- asks activeContext
-  reservoir     <- gets streamReservoir
-  stream        <- liftIO $ Stream.create context reservoir
-  result        <- action stream
-  event         <- liftIO $ Event.waypoint stream
-  return $! Async event result
+  context   <- asks activeContext
+  reservoir <- gets streamReservoir
+  uncurry Async <$> Stream.streaming context reservoir action
 
 
 -- Array expression evaluation

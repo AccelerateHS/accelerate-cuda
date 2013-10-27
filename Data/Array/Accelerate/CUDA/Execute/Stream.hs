@@ -1,8 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -12,7 +11,7 @@
 
 module Data.Array.Accelerate.CUDA.Execute.Stream (
 
-  Stream, Reservoir, new, create,
+  Stream, Reservoir, new, streaming,
 
 ) where
 
@@ -20,13 +19,18 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 import Data.Array.Accelerate.CUDA.Array.Nursery                 ( ) -- hashable CUDA.Context instance
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..) )
+import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
+import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
+import Control.Monad                                            ( void )
+import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Exception                                        ( bracket_ )
+import Control.Concurrent                                       ( forkIO )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
-import System.Mem.Weak                                          ( Weak, deRefWeak, addFinalizer )
+import System.Mem.Weak                                          ( Weak, deRefWeak )
 import Foreign.CUDA.Driver.Stream                               ( Stream )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Driver.Stream                     as Stream
@@ -44,7 +48,23 @@ import qualified Data.HashTable.IO                              as HT
 type HashTable key val  = HT.BasicHashTable key val
 
 type RSV                = MVar ( HashTable CUDA.Context (FullList () Stream) )
-data Reservoir          = Reservoir !RSV !(Weak RSV)
+data Reservoir          = Reservoir {-# UNPACK #-} !RSV
+                                    {-# UNPACK #-} !(Weak RSV)
+
+
+-- Executing operations in streams
+-- -------------------------------
+
+-- Execute an operation in a unique execution stream.
+--
+{-# INLINE streaming #-}
+streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> m (Event, a)
+streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !action = do
+  stream <- liftIO $ create ctx rsv
+  result <- action stream
+  end    <- liftIO $ Event.waypoint stream
+  liftIO $ merge (weakContext ctx) weak_rsv stream
+  return $ (end, result)
 
 
 -- Primitive operations
@@ -66,15 +86,14 @@ new = do
 --
 {-# INLINE create #-}
 create :: Context -> Reservoir -> IO Stream
-create !ctx (Reservoir !ref !weak_ref) = withMVar ref $ \tbl -> do
+create !ctx (Reservoir !ref _) = withMVar ref $ \tbl -> do
   let key = deviceContext ctx
   --
   ms    <- HT.lookup tbl key
   case ms of
     Nothing -> do
         stream <- Stream.create []
-        addFinalizer (Stream.useStream stream) (finalizer (weakContext ctx) weak_ref stream)
-        message $ "new " ++ show (Stream.useStream stream)
+        message ("new " ++ showStream stream)
         return stream
 
     Just (FL () stream rest) -> do
@@ -85,29 +104,34 @@ create !ctx (Reservoir !ref !weak_ref) = withMVar ref $ \tbl -> do
       return stream
 
 
--- Finaliser for CUDA execution streams. Because the finaliser thread might run
--- at any time, we need a weak reference to the context the stream was allocated
--- in. We don't need to make the context current in order to destroy the stream,
--- as we do when deallocating memory, we just need to know whether the context
--- is still alive before attempting to destroy the stream (because if it is not:
--- segfault).
+-- Merge a stream back into the reservoir. This is done asynchronously, once all
+-- pending operations in the stream have completed.
 --
-finalizer :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
-finalizer !weak_ctx !weak_ref !stream = do
-  mc <- deRefWeak weak_ctx
-  case mc of
-    Nothing     -> message ("finalise/dead context " ++ showStream stream)
-    Just ctx    -> do
-      --
-      mr <- deRefWeak weak_ref
-      case mr of
-        Nothing  -> trace ("finalise/free "  ++ showStream stream) $ Stream.destroy stream
-        Just ref -> trace ("finalise/stash " ++ showStream stream) $ withMVar ref $ \tbl -> do
-          --
-          ms <- HT.lookup tbl ctx
-          case ms of
-            Nothing     -> HT.insert tbl ctx (FL.singleton () stream)
-            Just ss     -> HT.insert tbl ctx (FL.cons () stream ss)
+{-# INLINE merge #-}
+merge :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
+merge !weak_ctx !weak_rsv !stream
+  = void . forkIO
+  $ do  -- wait for all operations to complete
+        -- Stream.block stream
+
+        -- Now check whether the context and reservoir are still active. Return
+        -- the stream back to the reservoir for later reuse if we can, otherwise
+        -- destroy it.
+        --
+        mc <- deRefWeak weak_ctx
+        case mc of
+          Nothing       -> message ("finalise/dead context " ++ showStream stream)
+          Just ctx      -> do
+            --
+            mr <- deRefWeak weak_rsv
+            case mr of
+              Nothing   -> trace ("merge/free " ++ showStream stream) $ Stream.destroy stream
+              Just ref  -> trace ("merge/save " ++ showStream stream) $ withMVar ref $ \tbl -> do
+                --
+                ms <- HT.lookup tbl ctx
+                case ms of
+                  Nothing       -> HT.insert tbl ctx (FL.singleton () stream)
+                  Just ss       -> HT.insert tbl ctx (FL.cons () stream ss)
 
 
 -- Destroy all streams in the reservoir.
