@@ -18,15 +18,13 @@
 #include "accelerate_cuda_type.h"
 
 /*
- * For the time being, the D.A.A.CUDA.Execute converts shape components from
- * Haskell Ints (which may be 32- or 64-bits) into CUDA integers which are
- * 32-bit. This is to avoid undue register pressure. Lift this restriction if
- * future hardware gains better 64-bit support and/or we need to access very
- * large arrays.
- *
- * typedef @type_hs_int@                             Ix;
+ * The configure script picks up the size of a Haskell Int, which might be 32-
+ * or 64-bits. This adds some additional register pressure because CUDA devices
+ * are inherently 32-bit devices, decreasing performance. However, this matches
+ * the specification provided by the Haskell program, and can avoid mysterious
+ * program failures (e.g. GPU Tables).
  */
-typedef Int32                                     Ix;
+typedef @type_hs_int@                             Ix;
 typedef void*                                     DIM0;
 typedef Ix                                        DIM1;
 typedef struct { Ix a1,a0; }                      DIM2;

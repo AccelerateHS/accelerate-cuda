@@ -499,20 +499,17 @@ primMarshalable(Ptr a)
 primMarshalable(CUDA.DevicePtr a)
 
 instance Shape sh => Storable sh where  -- undecidable, incoherent
-  sizeOf sh     = sizeOf    (undefined :: Int32) * (dim sh)
-  alignment _   = alignment (undefined :: Int32)
+  sizeOf sh     = sizeOf    (undefined :: Int) * (dim sh)
+  alignment _   = alignment (undefined :: Int)
   poke !p !sh   = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
 
 
--- Convert shapes into 32-bit integers for marshalling onto the device
+-- Convert shapes into a format for marshalling onto the device. In particular,
+-- singleton shapes are single element.
 --
-convertShape :: [Int] -> [Int32]
+convertShape :: [Int] -> [Int]
 convertShape [] = [1]
-convertShape sh = reverse (map convertIx sh)
-
-convertIx :: Int -> Int32
-convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
-              $ fromIntegral ix
+convertShape sh = reverse sh
 
 
 -- Note [Array references in scalar code]
