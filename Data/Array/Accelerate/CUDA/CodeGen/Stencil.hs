@@ -98,7 +98,7 @@ mkStencil dev aenv (CUFun1 dce f) boundary
     (texIn,  argIn)     = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
     ix                  = cvar "ix"
-    sh                  = cvar "sh"
+    sh                  = "sh"
     (xs,_,_)            = locals "x" (undefined :: stencil)
     dx                  = offsets (undefined :: Fun aenv (stencil -> b)) (undefined :: OpenAcc aenv (Array sh a))
 
@@ -167,7 +167,7 @@ mkStencil2 dev aenv (CUFun2 dce1 dce2 f) boundary1 boundary2
     (texIn,  argIn)     = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh c)
     ix                  = cvar "ix"
-    sh                  = cvar "sh"
+    sh                  = "sh"
     (xs,_,_)            = locals "x" (undefined :: stencil1)
     (ys,_,_)            = locals "y" (undefined :: stencil2)
 
@@ -198,7 +198,7 @@ stencilAccess
     -> ([C.Exp] -> [(Bool,C.Exp)])              -- dead code elimination flags for this var
     -> ( [C.Definition]                         -- input arrays as texture references; or
        , [C.Param]                              -- function arguments
-       , (C.Exp -> ([C.BlockItem], [C.Exp])) )  -- read data at a given shape centroid
+       , (Name -> ([C.BlockItem], [C.Exp])) )   -- read data at a given shape centroid
 stencilAccess linear grp grp' dev shx centroid boundary dce
   = (texStencil, argStencil, stencil)
   where
@@ -231,7 +231,7 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
 
     -- Generate the entire stencil, including any local environment bindings
     --
-    access :: C.Exp -> [Int] -> State Int ([C.BlockItem], [C.Exp])
+    access :: Name -> [Int] -> State Int ([C.BlockItem], [C.Exp])
     access ix dx = case boundary of
       Clamp                     -> bounded "clamp"
       Mirror                    -> bounded "mirror"
@@ -242,7 +242,7 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
         focus                   = all (==0) dx
         dim                     = expDim (undefined :: Exp aenv sh)
         cursor
-          | all (==0) dx        = ix
+          | all (==0) dx        = cvar ix
           | otherwise           = ccall "shape"
                                 $ zipWith (\a b -> [cexp| $exp:a + $int:b |]) (cshape dim ix) (reverse dx)
 
@@ -250,7 +250,7 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
           | focus && linear     = return $ ( [], getStencil centroid )
           | otherwise           = do
               j <- fresh
-              return ( if focus then [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:ix ); |]]
+              return ( if focus then [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $id:ix ); |]]
                                 else [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:(ccall f [cvar shIn, cursor]) ); |]]
                      , getStencil (cvar j) )
 
@@ -258,7 +258,7 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
           | focus && linear     = return ( [], getStencil centroid )
           | focus               = do
               j <- fresh
-              return ( [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:ix ); |]]
+              return ( [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $id:ix ); |]]
                      , getStencil (cvar j) )
 
           | otherwise           = do

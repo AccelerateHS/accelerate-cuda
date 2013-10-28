@@ -45,7 +45,7 @@ import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
-import Data.Array.Accelerate.CUDA.CodeGen.Base                  hiding ( shapeSize )
+import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
@@ -575,7 +575,7 @@ codegenOpenExp dev aenv = cvtE
     shape :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> Val env -> Gen [C.Exp]
     shape acc _env
       | Manifest (Avar idx) <- acc
-      = return $ cshape (delayedDim acc) (cvar $ fst (namesOfAvar aenv idx))
+      = return $ cshape (delayedDim acc) (fst (namesOfAvar aenv idx))
 
       | otherwise
       = INTERNAL_ERROR(error) "Shape" "expected array variable"
@@ -584,11 +584,7 @@ codegenOpenExp dev aenv = cvtE
     -- definition is inlined, but we could also call the C function helpers.
     --
     shapeSize :: DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
-    shapeSize sh env =
-      let size [] = return $ [cexp| 1 |]
-          size ss = return $ foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) ss
-      in
-      size <$> cvtE sh env
+    shapeSize sh env = return . csize <$> cvtE sh env
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --

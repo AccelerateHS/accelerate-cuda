@@ -127,7 +127,7 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
         $decls:decly
 
         $items:(shIn .=. sh)
-        const int shapeSize     = $exp:(shapeSize shIn);
+        const int shapeSize     = $exp:(csize shIn);
         const int gridSize      = $exp:(gridSize dev);
               int ix            = $exp:(threadIdx dev);
 
@@ -242,7 +242,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp sh) _ (CUFun
         $items:(shIn .=. sh)
 
         const int numIntervals  = size(shOut);
-        const int intervalSize  = $exp:(indexHead shIn);
+        const int intervalSize  = $exp:(rvalue (last shIn));
               int ix;
               int seg;
 
@@ -459,7 +459,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
             ; seg += num_vectors )
         {
             const int s    =  seg % num_segments;
-            const int base = (seg / num_segments) * $exp:(indexHead sh);
+            const int base = (seg / num_segments) * $exp:(rvalue (last sh));
 
             /*
              * Use two threads to fetch the indices of the start and end of this

@@ -25,8 +25,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cvar, ccall, cchar, cintegral, cbool, cdim, cshape, getters, setters, shared,
-  indexArray, indexHead, shapeSize, environment, arrayAsTex, arrayAsArg,
+  cvar, ccall, cchar, cintegral, cbool, cdim, cshape, csize, getters, setters, shared,
+  indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
   -- Mutable operations
@@ -123,8 +123,8 @@ data CUDelayedAcc aenv sh e where
             -> CUDelayedAcc aenv sh e
 
 
--- Expression and declaration generation
--- -------------------------------------
+-- Common expression forms
+-- -----------------------
 
 cvar :: Name -> C.Exp
 cvar x = [cexp|$id:x|]
@@ -144,24 +144,18 @@ cbool = cintegral . fromEnum
 cdim :: Name -> Int -> C.Definition
 cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 
--- Disassemble a struct-shape into a list of expressions accessing the fields
-cshape :: Int -> C.Exp -> [C.Exp]
-cshape dim sh
-  | dim == 0  = []
-  | dim == 1  = [sh]
-  | otherwise = map (\i -> [cexp|$exp:sh . $id:('a':show i)|]) [dim-1, dim-2 .. 0]
+cshape :: Int -> Name -> [C.Exp]
+cshape dim sh = [ [cexp| $exp:(sh ++ "_a" ++ show i) |] | i <- [dim-1, dim-2 .. 0] ]
 
--- Calculate the size of a shape from its component dimensions
-shapeSize :: Rvalue r => [r] -> C.Exp
-shapeSize [] = [cexp| 1 |]
-shapeSize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
-
-indexHead :: Rvalue r => [r] -> C.Exp
-indexHead = rvalue . last
+-- generate code that calculates the product of the list of expressions
+csize :: Rvalue r => [r] -> C.Exp
+csize [] = [cexp| 1 |]
+csize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
 
 
 -- Thread blocks and indices
---
+-- -------------------------
+
 umul24 :: DeviceProperties -> C.Exp -> C.Exp -> C.Exp
 umul24 dev x y
   | computeCapability dev < Compute 2 0 = [cexp| __umul24($exp:x, $exp:y) |]
@@ -207,7 +201,7 @@ getters grp dummy
         args            = arrayAsArg dummy grp
 
         dim             = expDim (undefined :: Exp aenv sh)
-        sh'             = cshape dim (cvar sh)
+        sh'             = cshape dim sh
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
                                     (INTERNAL_ERROR(error) "getters" "linear indexing only")
@@ -362,7 +356,7 @@ class Assign l r where
   assign :: l -> r -> [C.BlockItem]
 
 instance (Lvalue l, Rvalue r) => Assign l r where
-  assign lhs rhs = return $ lvalue lhs (rvalue rhs)
+  assign lhs rhs = [ lvalue lhs (rvalue rhs) ]
 
 instance Assign l r => Assign (Bool,l) r where
   assign (used,lhs) rhs

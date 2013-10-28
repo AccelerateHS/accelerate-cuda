@@ -80,7 +80,7 @@ mkGenerate dev aenv (CUFun1 _ f)
   |]
   where
     dim                 = expDim (undefined :: Exp aenv sh)
-    sh                  = cshape dim (cvar "sh")
+    sh                  = cshape dim "sh"
     (texIn, argIn)      = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh e)
 
@@ -140,7 +140,7 @@ mkTransform dev aenv perm fun arr
   where
     dimIn               = expDim (undefined :: Exp aenv sh)
     dimOut              = expDim (undefined :: Exp aenv sh')
-    sh_                 = cshape dimOut (cvar "sh_")
+    sh_                 = cshape dimOut "sh_"
     (texIn, argIn)      = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh' b)
     (x0, _, _)          = locals "x"  (undefined :: a)
@@ -190,7 +190,7 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
     {
         $items:(sh .=. shIn)
         const typename DimIn shIn       = $exp:(ccall "shape" (map rvalue sh));
-        const int shapeSize             = $exp:(shapeSize sh);
+        const int shapeSize             = $exp:(csize sh);
         const int gridSize              = $exp:(gridSize dev);
               int ix;
 
@@ -228,8 +228,8 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
     (_, y,  decly)      = locals "y"  (undefined :: e)
     (_, y', decly')     = locals "_y" (undefined :: e)
     ix                  = [cvar "ix"]
-    src                 = cshape dimIn  (cvar "src")
-    dst                 = cshape dimOut (cvar "dst")
+    src                 = cshape dimIn  "src"
+    dst                 = cshape dimOut "dst"
     sm                  = computeCapability dev
 
     -- Apply the combining function between old and new values. If multiple

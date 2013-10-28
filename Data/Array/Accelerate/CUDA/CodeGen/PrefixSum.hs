@@ -188,7 +188,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
         $decls:declz
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         /*
@@ -342,7 +342,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
         $decls:decly
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         const int start         = blockIdx.x * intervalSize;
