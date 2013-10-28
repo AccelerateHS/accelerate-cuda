@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ViewPatterns        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Stencil
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -88,8 +89,8 @@ mkStencil dev aenv (CUFun1 dce f) boundary
             ; ix += gridSize )
         {
             const typename Shape sh = fromIndex( shOut, ix );
-            $items:(dce xs      .=. stencil sh)
-            $items:(setOut "ix" .=. f xs)
+            $items:(dce xs    .=. stencil sh)
+            $items:(setOut ix .=. f xs)
         }
     }
   |]
@@ -97,7 +98,7 @@ mkStencil dev aenv (CUFun1 dce f) boundary
     dim                 = expDim (undefined :: Exp aenv sh)
     (texIn,  argIn)     = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
-    ix                  = cvar "ix"
+    ix                  = "ix"
     sh                  = "sh"
     (xs,_,_)            = locals "x" (undefined :: stencil)
     dx                  = offsets (undefined :: Fun aenv (stencil -> b)) (undefined :: OpenAcc aenv (Array sh a))
@@ -156,9 +157,9 @@ mkStencil2 dev aenv (CUFun2 dce1 dce2 f) boundary1 boundary2
         {
             const typename Shape sh = fromIndex( shOut, ix );
 
-            $items:(dce1 xs     .=. stencil1 sh)
-            $items:(dce2 ys     .=. stencil2 sh)
-            $items:(setOut "ix" .=. f xs ys)
+            $items:(dce1 xs   .=. stencil1 sh)
+            $items:(dce2 ys   .=. stencil2 sh)
+            $items:(setOut ix .=. f xs ys)
         }
     }
   |]
@@ -166,7 +167,7 @@ mkStencil2 dev aenv (CUFun2 dce1 dce2 f) boundary1 boundary2
     dim                 = expDim (undefined :: Exp aenv sh)
     (texIn,  argIn)     = environment dev aenv
     (argOut, setOut)    = setters "Out" (undefined :: Array sh c)
-    ix                  = cvar "ix"
+    ix                  = "ix"
     sh                  = "sh"
     (xs,_,_)            = locals "x" (undefined :: stencil1)
     (ys,_,_)            = locals "y" (undefined :: stencil2)
@@ -193,7 +194,7 @@ stencilAccess
     -> Name                                     -- secondary group name, for fresh variables
     -> DeviceProperties                         -- properties of currently executing device
     -> [sh]                                     -- list of offset indices
-    -> C.Exp                                    -- linear index of the centroid
+    -> Name                                     -- linear index of the centroid
     -> Boundary (CUExp aenv e)                  -- stencil boundary condition
     -> ([C.Exp] -> [(Bool,C.Exp)])              -- dead code elimination flags for this var
     -> ( [C.Definition]                         -- input arrays as texture references; or
@@ -252,14 +253,14 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
               j <- fresh
               return ( if focus then [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $id:ix ); |]]
                                 else [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $exp:(ccall f [cvar shIn, cursor]) ); |]]
-                     , getStencil (cvar j) )
+                     , getStencil j )
 
         inrange cs
           | focus && linear     = return ( [], getStencil centroid )
           | focus               = do
               j <- fresh
               return ( [C.BlockDecl [cdecl| const int $id:j = toIndex( $id:shIn, $id:ix ); |]]
-                     , getStencil (cvar j) )
+                     , getStencil j )
 
           | otherwise           = do
               j     <- fresh
@@ -268,13 +269,13 @@ stencilAccess linear grp grp' dev shx centroid boundary dce
               return $ ( [ C.BlockDecl [cdecl| const typename Shape $id:j = $exp:cursor; |]
                          , C.BlockDecl [cdecl| const typename bool  $id:p = inRange( $id:shIn, $id:j ); |]
                          , C.BlockDecl [cdecl| const int            $id:i = toIndex( $id:shIn, $id:j ); |] ]
-                       , zipWith (\a c -> [cexp| $id:p ? $exp:a : $exp:c |]) (getStencil (cvar i)) cs )
+                       , zipWith (\a c -> [cexp| $id:p ? $exp:a : $exp:c |]) (getStencil i) cs )
 
     -- Extra parameters for accessing the stencil data. We are doing things a
     -- little out of the ordinary, so don't get this "for free". sadface.
     --
-    getStencil ix       = zipWith (\t a -> indexArray dev t a ix) (eltType (undefined :: e)) (map cvar stencilIn)
-    (shIn, stencilIn)   = namesOfArray grp (undefined :: e)
+    getStencil (cvar -> ix)     = zipWith (\t a -> indexArray dev t a ix) (eltType (undefined :: e)) (map cvar stencilIn)
+    (shIn, stencilIn)           = namesOfArray grp (undefined :: e)
     (texStencil, argStencil)
       | computeCapability dev < Compute 2 0 = let (d,p) = arrayAsTex (undefined :: Array sh e) grp in (d,[p])
       | otherwise                           = ([], arrayAsArg (undefined :: Array sh e) grp)
