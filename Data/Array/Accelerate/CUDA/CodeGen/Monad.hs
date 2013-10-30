@@ -30,7 +30,6 @@ import qualified Language.C                             as C
 import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
 
-import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 
@@ -87,13 +86,17 @@ execCGM = fmap snd . runCGM
 --
 pushEnv :: DelayedOpenExp env aenv t -> [C.Exp] -> Gen [C.Exp]
 pushEnv exp cs =
-  case exp of
-    Var _       -> return cs
-    Prj _ _     -> return cs
-    _           -> do
-      vs <- zipWithM bind (expType exp) cs
-      modify (\st -> st { letterms = Map.union (Map.fromList (zip vs cs)) (letterms st) })
-      return vs
+  let tys               = expType exp
+      zipWithM' xs ys f = zipWithM f xs ys
+  in
+  zipWithM' tys cs $ \ty c ->
+    case c of
+      C.Var{}   -> return c
+      C.Const{} -> return c
+      _         -> do v <- bind ty c
+                      modify (\st -> st { letterms = Map.insert v c (letterms st) })
+                      return v
+
 
 -- Return the local environment code, consisting of a list of initialisation
 -- declarations and statements. During construction, these are introduced to the
