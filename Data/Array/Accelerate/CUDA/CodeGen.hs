@@ -48,7 +48,7 @@ import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..)
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
--- import Data.Array.Accelerate.CUDA.CodeGen.Mapping
+import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 -- import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- import Data.Array.Accelerate.CUDA.CodeGen.Reduction
@@ -92,7 +92,7 @@ codegenAcc dev (Manifest pacc) aenv
   $ case pacc of
 
       -- Producers
---      Map f a                   -> mkMap dev aenv       <$> travF1 f <*> travD a
+      Map f a                   -> mkMap dev aenv       <$> travF1 f <*> travD a
 --      Generate _ f              -> mkGenerate dev aenv  <$> travF1 f
 --      Transform _ p f a         -> mkTransform dev aenv <$> travF1 p <*> travF1 f  <*> travD a
 --      Backpermute _ p a         -> mkTransform dev aenv <$> travF1 p <*> travF1 id <*> travD a

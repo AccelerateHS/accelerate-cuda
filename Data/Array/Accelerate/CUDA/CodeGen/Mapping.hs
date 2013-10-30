@@ -57,7 +57,7 @@ mkMap dev aenv fun arr
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -71,8 +71,8 @@ mkMap dev aenv fun arr
     }
   |]
   where
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
-    (x, _, _)           = locals "x" (undefined :: a)
-    ix                  = [cvar "ix"]
+    (texIn, argIn)              = environment dev aenv
+    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh b)
+    (x, _, _)                   = locals "x" (undefined :: a)
+    ix                          = [cvar "ix"]
 
