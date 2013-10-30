@@ -25,7 +25,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cvar, ccall, cchar, cintegral, cbool, cdim, cshape, csize, getters, setters, shared,
+  cvar, ccall, cchar, cintegral, cbool, cshape, csize, getters, setters, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
@@ -34,12 +34,18 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
 ) where
 
+-- library
+import Data.List                                        ( mapAccumR )
 import Text.PrettyPrint.Mainland
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 import qualified Data.HashMap.Strict                    as Map
 
+-- cuda
 import Foreign.CUDA.Analysis.Device
+
+-- friends
+import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.Analysis.Shape
 import Data.Array.Accelerate.CUDA.CodeGen.Type
@@ -141,16 +147,19 @@ cintegral n = [cexp|$int:n|]
 cbool :: Bool -> C.Exp
 cbool = cintegral . fromEnum
 
-cdim :: Name -> Int -> C.Definition
-cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+-- cdim :: Name -> Int -> C.Definition
+-- cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 
 cshape :: Int -> Name -> [C.Exp]
-cshape dim sh = [ [cexp| $exp:(sh ++ "_a" ++ show i) |] | i <- [dim-1, dim-2 .. 0] ]
+cshape dim sh = [ cvar x | x <- cshape' dim sh ]
+
+cshape' :: Int -> Name -> [Name]
+cshape' dim sh = [ (sh ++ "_a" ++ show i) | i <- [dim-1, dim-2 .. 0] ]
 
 -- generate code that calculates the product of the list of expressions
 csize :: Rvalue r => [r] -> C.Exp
 csize [] = [cexp| 1 |]
-csize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
+csize ss = foldr1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
 
 
 -- Thread blocks and indices
@@ -188,6 +197,9 @@ indexArray dev elt arr ix
   | otherwise                            = ccall "indexArray"  [arr, ix]
 
 
+-- Kernel function parameters
+-- --------------------------
+
 -- Generate kernel parameters for an array valued argument, and a function to
 -- linearly index this array. Note that dimensional indexing results in error.
 --
@@ -219,16 +231,21 @@ setters
     :: forall sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
-    -> ([C.Param], Name -> [C.Exp])
-setters grp _
-  = let (sh, arrs)      = namesOfArray grp (undefined :: e)
-        dim             = expDim (undefined :: Exp aenv sh)
-        sh'             = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-        arrs'           = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
-    in
-    ( sh' : arrs'
-    , \ix -> map (\a -> [cexp| $id:a [ $id:ix ] |]) arrs
-    )
+    -> ( [C.Param]                      -- function parameters to marshal the output array
+       , [C.Exp]                        -- the shape of the output array
+       , Name -> [C.Exp] )              -- write an element at a given index
+setters grp _ =
+  let (sh, arrs)        = namesOfArray grp (undefined :: e)
+      dim               = expDim (undefined :: Exp aenv sh)
+      cint              = codegenScalarType (scalarType :: ScalarType Int)
+      sh'               = cshape' dim sh
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- sh' ]
+      adata             = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+  in
+  ( extent ++ adata
+  , map cvar sh'
+  , \ix -> map (\a -> [cexp| $id:a [ $id:ix ] |]) arrs
+  )
 
 
 -- All dynamically allocated __shared__ memory will begin at the same base
@@ -276,36 +293,38 @@ environment
     -> ([C.Definition], [C.Param])
 environment dev gamma@(Gamma aenv)
   | computeCapability dev < Compute 2 0
-  = Map.foldrWithKey (\(Idx_ v) _ (ds,ps) -> let (d,p) = asTex v in (d++ds, p:ps)) ([],[]) aenv
+  = Map.foldrWithKey (\(Idx_ v) _ (ds,ps) -> let (d,p) = asTex v in (d++ds, p++ps)) ([],[]) aenv
 
   | otherwise
   = ([], Map.foldrWithKey (\(Idx_ v) _ vs -> asArg v ++ vs) [] aenv)
 
   where
-    asTex :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], C.Param)
+    asTex :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], [C.Param])
     asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar gamma ix)
 
     asArg :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
     asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar gamma ix)
 
 
-arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], C.Param)
+arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], [C.Param])
 arrayAsTex _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-      arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
+      cint              = codegenScalarType (scalarType :: ScalarType Int)
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
+      adata             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
   in
-  (arrs', sh')
+  (adata, extent)
 
 arrayAsArg :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Param]
 arrayAsArg _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-      arrs'             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+      cint              = codegenScalarType (scalarType :: ScalarType Int)
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
+      adata             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
   in
-  sh' : arrs'
+  extent ++ adata
 
 
 -- Mutable operations
@@ -332,10 +351,10 @@ class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem
 
 instance Lvalue C.Exp where
-  lvalue x y = C.BlockStm  [cstm| $exp:x = $exp:y; |]
+  lvalue x y = [citem| $exp:x = $exp:y; |]
 
 instance Lvalue (C.Type, Name) where
-  lvalue (t,x) y = C.BlockDecl [cdecl| const $ty:t $id:x = $exp:y; |]
+  lvalue (t,x) y = [citem| const $ty:t $id:x = $exp:y; |]
 
 
 class Rvalue a where
@@ -344,8 +363,11 @@ class Rvalue a where
 instance Rvalue C.Exp where
   rvalue = id
 
+instance Rvalue Name where
+  rvalue = cvar
+
 instance Rvalue (C.Type, Name) where
-  rvalue (_,x) = cvar x
+  rvalue (_,x) = rvalue x
 
 
 infixr 0 .=.

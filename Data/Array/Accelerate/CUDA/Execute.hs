@@ -9,7 +9,6 @@
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -57,11 +56,8 @@ import Data.Int
 import Data.Word
 import Data.Maybe
 
-import Foreign.Ptr                                              ( Ptr, castPtr )
-import Foreign.Storable                                         ( Storable(..) )
 import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
-import qualified Foreign.Marshal.Array                          as F
 import qualified Data.HashMap.Strict                            as Map
 
 #include "accelerate.h"
@@ -303,7 +299,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
           -- Phase 2: Re-scan the input using the carry-in value from each
           --          interval sum calculated in phase 1.
           --
-          execute kernel gamma aenv numElements (Z :. numElements, d_body, blk, d_sum)
+          execute kernel gamma aenv numElements (numElements, d_body, blk, d_sum)
 
       | otherwise
       = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
@@ -458,7 +454,7 @@ instance ArrayElt e => Marshalable (ArrayData e) where
   marshal !ad = marshalArrayData ad
 
 instance Shape sh => Marshalable sh where
-  marshal !sh = return [CUDA.VArg sh]
+  marshal !sh = marshal (reverse (shapeToList sh))
 
 instance Marshalable a => Marshalable [a] where
   marshal = concatMapM marshal
@@ -495,21 +491,7 @@ primMarshalable(Word32)
 primMarshalable(Word64)
 primMarshalable(Float)
 primMarshalable(Double)
-primMarshalable(Ptr a)
 primMarshalable(CUDA.DevicePtr a)
-
-instance Shape sh => Storable sh where  -- undecidable, incoherent
-  sizeOf sh     = sizeOf    (undefined :: Int) * (dim sh)
-  alignment _   = alignment (undefined :: Int)
-  poke !p !sh   = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
-
-
--- Convert shapes into a format for marshalling onto the device. In particular,
--- singleton shapes are single element.
---
-convertShape :: [Int] -> [Int]
-convertShape [] = [1]
-convertShape sh = reverse sh
 
 
 -- Note [Array references in scalar code]
