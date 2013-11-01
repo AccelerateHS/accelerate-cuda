@@ -470,6 +470,7 @@ compileFlags cufile = do
     machine     = case (SIZEOF_HTYPE_INT :: Int) of
                     4   -> "-m32"
                     8   -> "-m64"
+                    _   -> INTERNAL_ERROR(error) "compileFlags" "unknown 'Int' size"
 
 
 -- Open a unique file in the temporary directory used for compilation
