@@ -232,7 +232,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y sdata Nothing)
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -270,18 +270,18 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
     }
   |]
   where
-    scan                = "scan" ++ show dir ++ maybe "1" (const []) mseed
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (argSum, totalSum)  = setters "Sum" (undefined :: Vector e)
-    (argBlk, blkSum)    = setters "Blk" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (_, z, declz)       = locals "z" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
-    ix                  = [cvar "ix"]
-    setSum              = totalSum "0"
+    scan                        = "scan" ++ show dir ++ maybe "1" (const []) mseed
+    (texIn, argIn)              = environment dev aenv
+    (argOut, _, setOut)         = setters "Out" (undefined :: Vector e)
+    (argSum, _, totalSum)       = setters "Sum" (undefined :: Vector e)
+    (argBlk, _, blkSum)         = setters "Blk" (undefined :: Vector e)
+    (_, x, declx)               = locals "x" (undefined :: e)
+    (_, y, decly)               = locals "y" (undefined :: e)
+    (_, z, declz)               = locals "z" (undefined :: e)
+    (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                          = [cvar "ix"]
+    setSum                      = totalSum "0"
 
     -- accessing neighbouring blocks
     firstBlock          = if dir == L then "0" else "gridDim.x - 1"
@@ -372,7 +372,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y sdata Nothing)
 
             /*
              * Store the final result of the block to be carried in
@@ -393,14 +393,14 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
     }
   |]
   where
-    scan                = "scan" ++ show dir ++ "Up"
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
-    ix                  = [cvar "ix"]
+    scan                        = "scan" ++ show dir ++ "Up"
+    (texIn, argIn)              = environment dev aenv
+    (argOut, _, setOut)         = setters "Out" (undefined :: Vector e)
+    (_, x, declx)               = locals "x" (undefined :: e)
+    (_, y, decly)               = locals "y" (undefined :: e)
+    (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                          = [cvar "ix"]
 
 
 -- Second step of the upsweep phase: scan the interval sums to produce carry-in
@@ -429,7 +429,7 @@ scanBlock
     -> [C.Exp] -> [C.Exp]
     -> (Name -> [C.Exp])
     -> Maybe C.Exp
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlock dev f x0 x1 sdata mlim
   | shflOK dev (undefined :: e) = error "shfl-scan"
   | otherwise                   = scanBlockTree dev f x0 x1 sdata mlim
@@ -447,7 +447,7 @@ scanBlockTree
     -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
     pow2 :: Int -> Int
@@ -458,7 +458,7 @@ scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. max
       | Just m <- mlim  = [cexp| threadIdx.x >= $int:n && threadIdx.x < $exp:m |]
       | otherwise       = [cexp| threadIdx.x >= $int:n |]
 
-    scan n = [cstm|
+    scan n = [citem|
       if ( blockDim.x > $int:n ) {
           if ( $exp:(inrange n) ) {
               $items:(x1 .=. sdata ("threadIdx.x - " ++ show n))

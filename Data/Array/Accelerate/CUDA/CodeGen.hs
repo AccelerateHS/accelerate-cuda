@@ -50,8 +50,8 @@ import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
--- import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- import Data.Array.Accelerate.CUDA.CodeGen.Reduction
+import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
@@ -102,12 +102,12 @@ codegenAcc dev (Manifest pacc) aenv
 --      Fold1 f a                 -> mkFold1 dev aenv     <$> travF2 f <*> travD a
 --      FoldSeg f z a s           -> mkFoldSeg dev aenv   <$> travF2 f <*> travE z  <*> travD a <*> travD s
 --      Fold1Seg f a s            -> mkFold1Seg dev aenv  <$> travF2 f <*> travD a  <*> travD s
---      Scanl f z a               -> mkScanl dev aenv     <$> travF2 f <*> travE z  <*> travD a
---      Scanr f z a               -> mkScanr dev aenv     <$> travF2 f <*> travE z  <*> travD a
---      Scanl' f z a              -> mkScanl' dev aenv    <$> travF2 f <*> travE z  <*> travD a
---      Scanr' f z a              -> mkScanr' dev aenv    <$> travF2 f <*> travE z  <*> travD a
---      Scanl1 f a                -> mkScanl1 dev aenv    <$> travF2 f <*> travD a
---      Scanr1 f a                -> mkScanr1 dev aenv    <$> travF2 f <*> travD a
+      Scanl f z a               -> mkScanl dev aenv     <$> travF2 f <*> travE z  <*> travD a
+      Scanr f z a               -> mkScanr dev aenv     <$> travF2 f <*> travE z  <*> travD a
+      Scanl' f z a              -> mkScanl' dev aenv    <$> travF2 f <*> travE z  <*> travD a
+      Scanr' f z a              -> mkScanr' dev aenv    <$> travF2 f <*> travE z  <*> travD a
+      Scanl1 f a                -> mkScanl1 dev aenv    <$> travF2 f <*> travD a
+      Scanr1 f a                -> mkScanr1 dev aenv    <$> travF2 f <*> travD a
       Permute f _ p a           -> mkPermute dev aenv   <$> travF2 f <*> travF1 p <*> travD a
 --      Stencil f b a             -> mkStencil dev aenv   <$> travF1 f <*> travB a b
 --      Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
