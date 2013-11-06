@@ -50,8 +50,8 @@ import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
 import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
--- import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
+import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 -- import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
@@ -98,10 +98,10 @@ codegenAcc dev (Manifest pacc) aenv
       Backpermute _ p a         -> mkTransform dev aenv <$> travF1 p <*> travF1 id <*> travD a
 
       -- Consumers
---      Fold f z a                -> mkFold  dev aenv     <$> travF2 f <*> travE z  <*> travD a
---      Fold1 f a                 -> mkFold1 dev aenv     <$> travF2 f <*> travD a
---      FoldSeg f z a s           -> mkFoldSeg dev aenv   <$> travF2 f <*> travE z  <*> travD a <*> travD s
---      Fold1Seg f a s            -> mkFold1Seg dev aenv  <$> travF2 f <*> travD a  <*> travD s
+      Fold f z a                -> mkFold  dev aenv     <$> travF2 f <*> travE z  <*> travD a
+      Fold1 f a                 -> mkFold1 dev aenv     <$> travF2 f <*> travD a
+      FoldSeg f z a s           -> mkFoldSeg dev aenv   <$> travF2 f <*> travE z  <*> travD a <*> travD s
+      Fold1Seg f a s            -> mkFold1Seg dev aenv  <$> travF2 f <*> travD a  <*> travD s
       Scanl f z a               -> mkScanl dev aenv     <$> travF2 f <*> travE z  <*> travD a
       Scanr f z a               -> mkScanr dev aenv     <$> travF2 f <*> travE z  <*> travD a
       Scanl' f z a              -> mkScanl' dev aenv    <$> travF2 f <*> travE z  <*> travD a
