@@ -586,10 +586,8 @@ codegenOpenExp dev aenv = cvtE
               => DelayedOpenExp env aenv sh
               -> DelayedOpenExp env aenv sh
               -> Val env -> Gen [C.Exp]
-    intersect sh1 sh2 env = let
-        sh1' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh1 env
-        sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env
-      in zipWith (\a b -> ccall "min" [a,b]) <$> sh1' <*> sh2'
+    intersect sh1 sh2 env =
+      zipWith (\a b -> ccall "min" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
 
     -- Foreign scalar functions. We need to extract any header files that might
     -- be required so they can be added to the top level definitions.
@@ -768,7 +766,10 @@ codegenIntegralSig ty x = [cexp|$exp:x == $exp:zero ? $exp:zero : $exp:(ccall "c
     one  | IntegralDict <- integralDict ty = codegenIntegralScalar ty 1
 
 codegenFloatingSig :: FloatingType a -> C.Exp -> C.Exp
-codegenFloatingSig ty x = [cexp|$exp:x == $exp:zero ? $exp:zero : $exp:(ccall (FloatingNumType ty `postfix` "copysign") [one,x]) |]
+codegenFloatingSig ty x =
+  [cexp|$exp:x == $exp:zero
+            ? $exp:zero
+            : $exp:(ccall (FloatingNumType ty `postfix` "copysign") [one,x]) |]
   where
     zero | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 0
     one  | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 1
