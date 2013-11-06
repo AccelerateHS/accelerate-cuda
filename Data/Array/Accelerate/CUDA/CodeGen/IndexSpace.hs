@@ -73,7 +73,7 @@ mkGenerate dev aenv (CUFun1 dce f)
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            $items:(dce sh      .=. fromIndexWithTmp shOut "ix" "tmp")
+            $items:(dce sh      .=. cfromIndex shOut "ix" "tmp")
             $items:(setOut "ix" .=. f sh)
         }
     }
@@ -127,7 +127,7 @@ mkTransform dev aenv perm fun arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            $items:(dce_p sh'   .=. fromIndexWithTmp shOut "ix" "tmp")
+            $items:(dce_p sh'   .=. cfromIndex shOut "ix" "tmp")
             $items:(dce_g sh    .=. p sh')
             $items:(dce_f x0    .=. get sh)
             $items:(setOut "ix" .=. f x0)
@@ -194,7 +194,7 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            $items:(dce_p src   .=. fromIndexWithTmp sh "ix" "srcTmp")
+            $items:(dce_p src   .=. cfromIndex sh "ix" "srcTmp")
             $items:(dst         .=. prj src)
 
             if ( ! $exp:(cignore dst) )
@@ -202,7 +202,7 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
                 $decls:decly
                 $decls:decly'
 
-                $items:(jx      .=. toIndexWithShape shOut dst)
+                $items:(jx      .=. ctoIndex shOut dst)
                 $items:(dce_x x .=. get ix)
                 $items:(dce_y y .=. arrOut jx)
 

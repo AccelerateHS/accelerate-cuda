@@ -501,14 +501,14 @@ codegenOpenExp dev aenv = cvtE
     toIndex sh ix env = do
       sh'   <- cvtE sh env
       ix'   <- cvtE ix env
-      return [ toIndexWithShape sh' ix' ]
+      return [ ctoIndex sh' ix' ]
 
     fromIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
     fromIndex sh ix env = do
       sh'   <- cvtE sh env
       ix'   <- cvtE ix env
       tmp   <- lift fresh
-      let (ls, sz) = fromIndexWithTmp sh' (single "fromIndex" ix') tmp
+      let (ls, sz) = cfromIndex sh' (single "fromIndex" ix') tmp
       modify (\st -> st { bindings = reverse ls ++ bindings st })
       return sz
 
@@ -536,7 +536,7 @@ codegenOpenExp dev aenv = cvtE
             ty          = accType acc
         in do
         ix'     <- cvtE ix env
-        i       <- bind cint $ toIndexWithShape (cshape (expDim ix) sh) ix'
+        i       <- bind cint $ ctoIndex (cshape (expDim ix) sh) ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
       | otherwise

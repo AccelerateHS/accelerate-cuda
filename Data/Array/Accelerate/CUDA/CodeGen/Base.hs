@@ -26,8 +26,8 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cvar, ccall, cchar, cintegral, cbool, cshape, csize, getters, setters, shared,
-  toIndexWithShape, fromIndexWithTmp,
+  cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
+  getters, setters, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
@@ -149,14 +149,16 @@ cintegral n = [cexp|$int:n|]
 cbool :: Bool -> C.Exp
 cbool = cintegral . fromEnum
 
--- cdim :: Name -> Int -> C.Definition
--- cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
-
+-- Generate all the names of a shape given a base name and dimensionality
 cshape :: Int -> Name -> [C.Exp]
 cshape dim sh = [ cvar x | x <- cshape' dim sh ]
 
 cshape' :: Int -> Name -> [Name]
 cshape' dim sh = [ (sh ++ '_':show i) | i <- [dim-1, dim-2 .. 0] ]
+
+-- Get the innermost index of a shape/index
+cindexHead :: Rvalue r => [r] -> C.Exp
+cindexHead = rvalue . last
 
 -- generate code that calculates the product of the list of expressions
 csize :: Rvalue r => [r] -> C.Exp
@@ -165,8 +167,8 @@ csize ss = foldr1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
 
 -- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
 --
-toIndexWithShape :: (Rvalue sh, Rvalue ix) => [sh] -> [ix] -> C.Exp
-toIndexWithShape extent index
+ctoIndex :: (Rvalue sh, Rvalue ix) => [sh] -> [ix] -> C.Exp
+ctoIndex extent index
   = toIndex (reverse $ map rvalue extent) (reverse $ map rvalue index)  -- we use a row-major representation
   where
     toIndex []      []     = [cexp| $int:(0::Int) |]
@@ -177,8 +179,8 @@ toIndexWithShape extent index
 -- Generate code to calculate a multi-dimensional index from a linear index and a given array shape.
 -- This version creates temporary values that are reused in the computation.
 --
-fromIndexWithTmp :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> Name -> ([C.BlockItem], [C.Exp])
-fromIndexWithTmp shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
+cfromIndex :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> Name -> ([C.BlockItem], [C.Exp])
+cfromIndex shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
   where
     fromIndex [sh]   ix = ([], [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]])
     fromIndex extent ix = let ((env, _, _), sh) = mapAccumR go ([], ix, 0) extent
