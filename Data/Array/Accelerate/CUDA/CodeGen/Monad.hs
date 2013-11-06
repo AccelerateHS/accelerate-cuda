@@ -118,7 +118,7 @@ fresh = do
 bind :: C.Type -> C.Exp -> Gen C.Exp
 bind t e = do
   name <- lift fresh
-  modify (\st -> st { bindings = C.BlockDecl [cdecl| const $ty:t $id:name = $exp:e;|] : bindings st })
+  modify (\st -> st { bindings = [citem| const $ty:t $id:name = $exp:e;|] : bindings st })
   return [cexp| $id:name |]
 
 -- Add an expression to the set marking that it will be used to generate the

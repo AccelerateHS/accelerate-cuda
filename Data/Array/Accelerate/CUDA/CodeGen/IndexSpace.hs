@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
@@ -28,11 +29,12 @@ import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis.Device
 import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
-import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.CUDA.AST                   ( Gamma, Exp )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, ignore, shapeToList )
+import Data.Array.Accelerate.CUDA.AST                   ( Gamma )
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base
+
+#include "accelerate.h"
 
 
 -- Construct a new array by applying a function to each index. Each thread
@@ -49,12 +51,11 @@ mkGenerate
     -> Gamma aenv
     -> CUFun1 aenv (sh -> e)
     -> [CUTranslSkel aenv (Array sh e)]
-mkGenerate dev aenv (CUFun1 _ f)
+mkGenerate dev aenv (CUFun1 dce f)
   = return
   $ CUTranslSkel "generate" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
-    $edecl:(cdim "DimOut" dim)
     $edecls:texIn
 
     extern "C" __global__ void
@@ -64,7 +65,7 @@ mkGenerate dev aenv (CUFun1 _ f)
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -72,17 +73,15 @@ mkGenerate dev aenv (CUFun1 _ f)
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            const typename DimOut sh = fromIndex(shOut, ix);
-
+            $items:(dce sh      .=. fromIndexWithTmp shOut "ix" "tmp")
             $items:(setOut "ix" .=. f sh)
         }
     }
   |]
   where
-    dim                 = expDim (undefined :: Exp aenv sh)
-    sh                  = cshape dim "sh"
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh e)
+    (sh, _, _)                  = locals "sh" (undefined :: sh)
+    (texIn, argIn)              = environment dev aenv
+    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh e)
 
 
 -- A combination map/backpermute, where the index and value transformations have
@@ -104,15 +103,13 @@ mkTransform
     -> CUDelayedAcc aenv sh a
     -> [CUTranslSkel aenv (Array sh' b)]
 mkTransform dev aenv perm fun arr
-  | CUFun1 _ p                   <- perm
-  , CUFun1 dce f                 <- fun
-  , CUDelayed _ (CUFun1 _ get) _ <- arr
+  | CUFun1 dce_p p                      <- perm
+  , CUFun1 dce_f f                      <- fun
+  , CUDelayed _ (CUFun1 dce_g get) _    <- arr
   = return
   $ CUTranslSkel "transform" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn"  dimIn)
     $edecls:texIn
 
     extern "C" __global__ void
@@ -122,7 +119,7 @@ mkTransform dev aenv perm fun arr
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -130,21 +127,19 @@ mkTransform dev aenv perm fun arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            const typename DimOut sh_ = fromIndex(shOut, ix);
-            $items:(sh          .=. p sh_)
-            $items:(dce x0      .=. get sh)
+            $items:(dce_p sh'   .=. fromIndexWithTmp shOut "ix" "tmp")
+            $items:(dce_g sh    .=. p sh')
+            $items:(dce_f x0    .=. get sh)
             $items:(setOut "ix" .=. f x0)
         }
     }
   |]
   where
-    dimIn               = expDim (undefined :: Exp aenv sh)
-    dimOut              = expDim (undefined :: Exp aenv sh')
-    sh_                 = cshape dimOut "sh_"
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh' b)
-    (x0, _, _)          = locals "x"  (undefined :: a)
-    (sh, _, _)          = locals "sh" (undefined :: sh)
+    (texIn, argIn)              = environment dev aenv
+    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh' b)
+    (x0, _, _)                  = locals "x"   (undefined :: a)
+    (sh, _, _)                  = locals "sh"  (undefined :: sh)
+    (sh', _, _)                 = locals "sh_" (undefined :: sh')
 
 
 -- Forward permutation specified by an index mapping that determines for each
@@ -171,14 +166,12 @@ mkPermute
     -> CUFun1 aenv (sh -> sh')
     -> CUDelayedAcc aenv sh e
     -> [CUTranslSkel aenv (Array sh' e)]
-mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
+mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
   | CUDelayed (CUExp shIn) _ (CUFun1 _ get) <- arr
   = return
   $ CUTranslSkel "permute" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn"  dimIn)
     $edecls:texIn
 
     extern "C" __global__ void
@@ -188,8 +181,11 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
         $params:argOut
     )
     {
+        /*
+         * The input shape might be a complex expression. Evaluate it first to reuse the result.
+         */
         $items:(sh .=. shIn)
-        const typename DimIn shIn       = $exp:(ccall "shape" (map rvalue sh));
+
         const int shapeSize             = $exp:(csize sh);
         const int gridSize              = $exp:(gridSize dev);
               int ix;
@@ -198,19 +194,17 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            typename DimOut dst;
+            $items:(dce_p src   .=. fromIndexWithTmp sh "ix" "srcTmp")
+            $items:(dst         .=. prj src)
 
-            const typename DimIn src = fromIndex( shIn, ix );
-            $items:(dst .=. prj src)
-
-            if ( !ignore(dst) )
+            if ( ! $exp:(cignore dst) )
             {
                 $decls:decly
                 $decls:decly'
 
-                const int jx = toIndex(shOut, dst);
-                $items:(dcex x .=. get ix)
-                $items:(dcey y .=. arrOut "jx")
+                $items:(jx      .=. toIndexWithShape shOut dst)
+                $items:(dce_x x .=. get ix)
+                $items:(dce_y y .=. arrOut jx)
 
                 $items:write
             }
@@ -218,19 +212,26 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
     }
   |]
   where
-    dimIn               = expDim (undefined :: Exp aenv sh)
-    dimOut              = expDim (undefined :: Exp aenv sh')
-    sizeof              = eltSizeOf (undefined::e)
-    (texIn, argIn)      = environment dev aenv
-    (argOut, arrOut)    = setters "Out" (undefined :: Array sh' e)
-    (sh, _, _)          = locals "sh" (undefined :: sh)
-    (x, _, _)           = locals "x"  (undefined :: e)
-    (_, y,  decly)      = locals "y"  (undefined :: e)
-    (_, y', decly')     = locals "_y" (undefined :: e)
-    ix                  = [cvar "ix"]
-    src                 = cshape dimIn  "src"
-    dst                 = cshape dimOut "dst"
-    sm                  = computeCapability dev
+    sizeof                      = eltSizeOf (undefined::e)
+    (texIn, argIn)              = environment dev aenv
+    (argOut, shOut, arrOut)     = setters "Out" (undefined :: Array sh' e)
+    (x, _, _)                   = locals "x" (undefined :: e)
+    (_, y,  decly)              = locals "y" (undefined :: e)
+    (_, y', decly')             = locals "_y" (undefined :: e)
+    (sh, _, _)                  = locals "shIn" (undefined :: sh)
+    (src, _, _)                 = locals "sh" (undefined :: sh)
+    (dst, _, _)                 = locals "sh_" (undefined :: sh')
+    ([jx], _, _)                = locals "jx" (undefined :: Int)
+    ix                          = [cvar "ix"]
+    sm                          = computeCapability dev
+
+    -- If the destination index resolves to the magic index "ignore", the result
+    -- is dropped from the output array.
+    cignore :: Rvalue x => [x] -> C.Exp
+    cignore []  = INTERNAL_ERROR(error) "permute" "singleton arrays not supported"
+    cignore xs  = foldl1 (\a b -> [cexp| $exp:a && $exp:b |])
+                $ zipWith (\a b -> [cexp| $exp:(rvalue a) == $int:b |]) xs
+                $ shapeToList (ignore :: sh')
 
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
@@ -245,21 +246,20 @@ mkPermute dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ prj) arr
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    write               = env ++ zipWith6 apply sizeof (arrOut "jx") fun x (dcey y) y'
-    (env, fun)          = combine x y
+    write       = env ++ zipWith6 apply sizeof (arrOut jx) fun x (dce_y y) y'
+    (env, fun)  = combine x y
 
     apply size out f x1 (used,y1) y1'
       | used
       , Just atomicCAS <- reinterpret size
-      = C.BlockStm
-        [cstm| do {
-                      $exp:y1' = $exp:y1;
-                      $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
+      = [citem| do {
+                       $exp:y1' = $exp:y1;
+                       $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
 
-                  } while ( $exp:y1 != $exp:y1' ); |]
+                   } while ( $exp:y1 != $exp:y1' ); |]
 
       | otherwise
-      = C.BlockStm [cstm| $exp:out = $exp:(rvalue x1); |]
+      = [citem| $exp:out = $exp:(rvalue x1); |]
 
     --
     reinterpret :: Int -> Maybe C.Exp

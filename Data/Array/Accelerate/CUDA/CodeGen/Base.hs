@@ -67,7 +67,7 @@ namesOfArray
     -> (Name, [Name])   -- shape and array field names
 namesOfArray grp _
   = let ty      = eltType (undefined :: e)
-        arr x   = "arr" ++ grp ++ "_a" ++ show x
+        arr x   = "arr" ++ grp ++ '_':show x
         n       = length ty
     in
     ( "sh" ++ grp, map arr [n-1, n-2 .. 0] )
@@ -156,26 +156,15 @@ cshape :: Int -> Name -> [C.Exp]
 cshape dim sh = [ cvar x | x <- cshape' dim sh ]
 
 cshape' :: Int -> Name -> [Name]
-cshape' dim sh = [ (sh ++ "_a" ++ show i) | i <- [dim-1, dim-2 .. 0] ]
+cshape' dim sh = [ (sh ++ '_':show i) | i <- [dim-1, dim-2 .. 0] ]
 
 -- generate code that calculates the product of the list of expressions
 csize :: Rvalue r => [r] -> C.Exp
 csize [] = [cexp| 1 |]
 csize ss = foldr1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
 
-{--
 -- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
 --
-toIndexWithShape :: Name -> [C.Exp] -> C.Exp
-toIndexWithShape shName ix
-  = toIndex [(0::Int)..] (reverse ix)    -- we use a row-major representation
-  where
-    toIndex _dims  []     = [cexp| 0 |]
-    toIndex _dims  [i]    = i
-    toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:(shName ++ "_a" ++ show d) + $exp:i |]
-    toIndex _      _      = error "D.A.A.C.Base.toIndexWithShape: oops"
---}
-
 toIndexWithShape :: (Rvalue sh, Rvalue ix) => [sh] -> [ix] -> C.Exp
 toIndexWithShape extent index
   = toIndex (reverse $ map rvalue extent) (reverse $ map rvalue index)  -- we use a row-major representation
@@ -184,31 +173,6 @@ toIndexWithShape extent index
     toIndex [_]     [i]    = i
     toIndex (sz:sh) (i:ix) = [cexp| $exp:(toIndex sh ix) * $exp:sz + $exp:i |]
     toIndex _       _      = INTERNAL_ERROR(error) "toIndex" "argument mismatch"
-
-{--
--- Generate code to calculate a multi-dimensional index from a linear index and a given array
--- extent.
---
--- There is some duplication of work here. Because each component of the index is computed
--- individually, the index is divided by all lower-dimensional components before taking the modulus
--- with the current dimensional extent.
---
--- Note that the input shape extent and linear index will be used multiple times in the expression,
--- so be sure to first let-bind them if they are expensive.
---
-fromIndexWithShape :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> [C.Exp]
-fromIndexWithShape shName ixName = fromIndex (map rvalue shName)
-  where
-    ix          = rvalue ixName
-    cdiv x y    = [cexp| $exp:x / $exp:y |]
-    base        = foldl cdiv ix
-    --
-    fromIndex [sh]      = [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]]
-    fromIndex extent    = go extent
-      where
-        go []       = []
-        go (sz:sh)  = [cexp| $exp:(base sh) % $exp:sz |] : go sh
---}
 
 -- Generate code to calculate a multi-dimensional index from a linear index and a given array shape.
 -- This version creates temporary values that are reused in the computation.
@@ -283,7 +247,7 @@ getters grp dummy
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
                                     (INTERNAL_ERROR(error) "getters" "linear indexing only")
-                                    (CUFun1 (zip (repeat True)) (get . rvalue . head))
+                                    (CUFun1 (zip (repeat True)) (\[i] -> get (rvalue i)))
     in ( args, manifest )
 
 
