@@ -27,6 +27,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   cvar, ccall, cchar, cintegral, cbool, cshape, csize, getters, setters, shared,
+  toIndexWithShape, fromIndexWithTmp,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
@@ -161,6 +162,70 @@ cshape' dim sh = [ (sh ++ "_a" ++ show i) | i <- [dim-1, dim-2 .. 0] ]
 csize :: Rvalue r => [r] -> C.Exp
 csize [] = [cexp| 1 |]
 csize ss = foldr1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
+
+{--
+-- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
+--
+toIndexWithShape :: Name -> [C.Exp] -> C.Exp
+toIndexWithShape shName ix
+  = toIndex [(0::Int)..] (reverse ix)    -- we use a row-major representation
+  where
+    toIndex _dims  []     = [cexp| 0 |]
+    toIndex _dims  [i]    = i
+    toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:(shName ++ "_a" ++ show d) + $exp:i |]
+    toIndex _      _      = error "D.A.A.C.Base.toIndexWithShape: oops"
+--}
+
+toIndexWithShape :: (Rvalue sh, Rvalue ix) => [sh] -> [ix] -> C.Exp
+toIndexWithShape extent index
+  = toIndex (reverse $ map rvalue extent) (reverse $ map rvalue index)  -- we use a row-major representation
+  where
+    toIndex []      []     = [cexp| $int:(0::Int) |]
+    toIndex [_]     [i]    = i
+    toIndex (sz:sh) (i:ix) = [cexp| $exp:(toIndex sh ix) * $exp:sz + $exp:i |]
+    toIndex _       _      = INTERNAL_ERROR(error) "toIndex" "argument mismatch"
+
+{--
+-- Generate code to calculate a multi-dimensional index from a linear index and a given array
+-- extent.
+--
+-- There is some duplication of work here. Because each component of the index is computed
+-- individually, the index is divided by all lower-dimensional components before taking the modulus
+-- with the current dimensional extent.
+--
+-- Note that the input shape extent and linear index will be used multiple times in the expression,
+-- so be sure to first let-bind them if they are expensive.
+--
+fromIndexWithShape :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> [C.Exp]
+fromIndexWithShape shName ixName = fromIndex (map rvalue shName)
+  where
+    ix          = rvalue ixName
+    cdiv x y    = [cexp| $exp:x / $exp:y |]
+    base        = foldl cdiv ix
+    --
+    fromIndex [sh]      = [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]]
+    fromIndex extent    = go extent
+      where
+        go []       = []
+        go (sz:sh)  = [cexp| $exp:(base sh) % $exp:sz |] : go sh
+--}
+
+-- Generate code to calculate a multi-dimensional index from a linear index and a given array shape.
+-- This version creates temporary values that are reused in the computation.
+--
+fromIndexWithTmp :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> Name -> ([C.BlockItem], [C.Exp])
+fromIndexWithTmp shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
+  where
+    fromIndex [sh]   ix = ([], [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]])
+    fromIndex extent ix = let ((env, _, _), sh) = mapAccumR go ([], ix, 0) extent
+                          in  (reverse env, sh)
+
+    go (tmps,ix,n) d
+      = let tmp         = tmpName ++ '_':show (n::Int)
+            cint        = codegenScalarType (scalarType :: ScalarType Int)
+            ix'         = [citem| const $ty:cint $id:tmp = $exp:ix ; |]
+        in
+        ((ix':tmps, [cexp| $id:tmp / $exp:d |], n+1), [cexp| $id:tmp % $exp:d |])
 
 
 -- Thread blocks and indices

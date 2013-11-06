@@ -495,29 +495,22 @@ codegenOpenExp dev aenv = cvtE
       in
       replicate <$> cvtE slix env <*> cvtE sl env
 
-    -- Convert between linear and multidimensional indices. For the
-    -- multidimensional case, we've inlined the definition of 'fromIndex'
-    -- because we need to return an expression for each component.
+    -- Convert between linear and multidimensional indices
     --
     toIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
     toIndex sh ix env = do
       sh'   <- cvtE sh env
       ix'   <- cvtE ix env
-      return [ ccall "toIndex" [ ccall "shape" sh', ccall "shape" ix' ] ]
+      return [ toIndexWithShape sh' ix' ]
 
     fromIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
     fromIndex sh ix env = do
       sh'   <- cvtE sh env
       ix'   <- cvtE ix env
-      reverse <$> fromIndex' (reverse sh') (single "fromIndex" ix')
-      where
-        fromIndex' :: [C.Exp] -> C.Exp -> Gen [C.Exp]
-        fromIndex' []     _     = return []
-        fromIndex' [_]    i     = return [i]
-        fromIndex' (d:ds) i     = do
-          i'    <- bind [cty| int |] i
-          ds'   <- fromIndex' ds [cexp| $exp:i' / $exp:d |]
-          return $ [cexp| $exp:i' % $exp:d |] : ds'
+      tmp   <- lift fresh
+      let (ls, sz) = fromIndexWithTmp sh' (single "fromIndex" ix') tmp
+      modify (\st -> st { bindings = reverse ls ++ bindings st })
+      return sz
 
     -- Project out a single scalar element from an array. The array expression
     -- does not contain any free scalar variables (strictly flat data
@@ -539,10 +532,11 @@ codegenOpenExp dev aenv = cvtE
     index acc ix env
       | Manifest (Avar idx) <- acc
       = let (sh, arr)   = namesOfAvar aenv idx
+            cint        = codegenScalarType (scalarType :: ScalarType Int)
             ty          = accType acc
         in do
         ix'     <- cvtE ix env
-        i       <- bind [cty| int |] $ ccall "toIndex" [ cvar sh, ccall "shape" ix' ]
+        i       <- bind cint $ toIndexWithShape (cshape (expDim ix) sh) ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
       | otherwise
