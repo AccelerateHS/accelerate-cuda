@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE ImpredicativeTypes    #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE PatternGuards         #-}
@@ -233,7 +234,7 @@ setters
     -> Array sh e                       -- dummy to fix types
     -> ( [C.Param]                      -- function parameters to marshal the output array
        , [C.Exp]                        -- the shape of the output array
-       , Name -> [C.Exp] )              -- write an element at a given index
+       , Rvalue x => x -> [C.Exp] )     -- write an element at a given index
 setters grp _ =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
@@ -244,7 +245,7 @@ setters grp _ =
   in
   ( extent ++ adata
   , map cvar sh'
-  , \ix -> map (\a -> [cexp| $id:a [ $id:ix ] |]) arrs
+  , \ix -> map (\a -> [cexp| $id:a [ $exp:(rvalue ix) ] |]) arrs
   )
 
 
@@ -259,7 +260,8 @@ shared
     -> Name                             -- group name
     -> C.Exp                            -- how much shared memory per type
     -> Maybe C.Exp                      -- (optional) initialise from this base address
-    -> ([C.InitGroup], Name -> [C.Exp]) -- shared memory declaration and indexing function
+    -> ( [C.InitGroup]                  -- shared memory declaration and...
+       , Rvalue x => x -> [C.Exp])      -- ...indexing function
 shared _ grp size mprev
   = let e:es                    = eltType (undefined :: e)
         x:xs                    = let k = length es in map (\n -> grp ++ show n) [k, k-1 .. 0]
@@ -270,7 +272,7 @@ shared _ grp size mprev
           | otherwise           = [cdecl| extern volatile __shared__ $ty:t $id:v [] ; |]
     in
     ( sbase e x : zipWith3 sdata es xs (x:xs)
-    , \ix -> map (\v -> [cexp| $id:v [ $id:ix ] |]) (x:xs)
+    , \ix -> map (\v -> [cexp| $id:v [ $exp:(rvalue ix) ] |]) (x:xs)
     )
 
 -- Array environment references. The method in which arrays are accessed depends
