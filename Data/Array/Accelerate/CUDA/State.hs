@@ -35,9 +35,6 @@ import Data.Array.Accelerate.CUDA.Array.Table           as MT
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
-#if !MIN_VERSION_base(4,6,0)
-import Prelude                                          hiding ( catch )
-#endif
 import Control.Applicative                              ( Applicative )
 import Control.Concurrent                               ( runInBoundThread )
 import Control.Exception                                ( catch, bracket_ )

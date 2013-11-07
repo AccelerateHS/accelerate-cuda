@@ -31,11 +31,7 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 ) where
 
 -- libraries
-#if MIN_VERSION_base(4,6,0)
 import Prelude                                          hiding ( lookup )
-#else
-import Prelude                                          hiding ( catch, lookup )
-#endif
 import Data.Int
 import Data.Word
 import Data.Maybe

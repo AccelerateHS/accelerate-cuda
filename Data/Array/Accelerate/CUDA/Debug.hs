@@ -32,28 +32,17 @@ import Numeric
 import Data.List
 import Data.Label
 import Data.IORef
-import Control.Monad                                            ( void )
-import Control.Monad.IO.Class                                   ( liftIO, MonadIO )
-import Control.Concurrent                                       ( forkIO )
+import Debug.Trace                                      ( traceIO, traceEventIO )
+import Control.Monad                                    ( void )
+import Control.Monad.IO.Class                           ( liftIO, MonadIO )
+import Control.Concurrent                               ( forkIO )
 import System.CPUTime
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
-import qualified Foreign.CUDA.Driver.Event                      as Event
+import qualified Foreign.CUDA.Driver.Event              as Event
 
 import GHC.Float
-
-#if MIN_VERSION_base(4,5,0)
-import Debug.Trace                              ( traceIO, traceEventIO )
-#else
-import Debug.Trace                              ( putTraceMsg )
-
-traceIO :: String -> IO ()
-traceIO = putTraceMsg
-
-traceEventIO :: String -> IO ()
-traceEventIO = traceIO
-#endif
 
 
 -- -----------------------------------------------------------------------------
@@ -191,9 +180,9 @@ timed
     -> (Double -> Double -> String)
     -> m ()
     -> m ()
-timed f str action
+timed _f _str action
 #ifdef ACCELERATE_DEBUG
-  | mode f
+  | mode _f
   = do
       gpuBegin  <- liftIO $ Event.create []
       gpuEnd    <- liftIO $ Event.create []
@@ -216,7 +205,7 @@ timed f str action
         Event.destroy gpuBegin
         Event.destroy gpuEnd
         --
-        message f (str gpuTime cpuTime)
+        message _f (_str gpuTime cpuTime)
       --
       return ()
 

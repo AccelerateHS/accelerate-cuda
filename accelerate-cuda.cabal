@@ -1,7 +1,7 @@
 Name:                   accelerate-cuda
 Version:                0.14.0.0
 Cabal-version:          >= 1.6
-Tested-with:            GHC >= 7.4
+Tested-with:            GHC >= 7.6
 Build-type:             Custom
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
@@ -102,7 +102,7 @@ Library
 
   Build-depends:        accelerate              == 0.14.*,
                         array                   >= 0.3,
-                        base                    == 4.*,
+                        base                    >= 4.6,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
                         cryptohash              >= 0.7,
