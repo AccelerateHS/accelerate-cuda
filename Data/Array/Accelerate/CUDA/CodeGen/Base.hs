@@ -27,7 +27,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Declaration generation
   cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
-  getters, setters, shared,
+  readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
@@ -37,6 +37,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 ) where
 
 -- library
+import Prelude                                          hiding ( zipWith, zipWith3 )
 import Data.List                                        ( mapAccumR )
 import Text.PrettyPrint.Mainland
 import Language.C.Quote.CUDA
@@ -235,12 +236,12 @@ indexArray dev elt arr ix
 -- Generate kernel parameters for an array valued argument, and a function to
 -- linearly index this array. Note that dimensional indexing results in error.
 --
-getters
+readArray
     :: forall aenv sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
     -> ( [C.Param], CUDelayedAcc aenv sh e )
-getters grp dummy
+readArray grp dummy
   = let (sh, arrs)      = namesOfArray grp (undefined :: e)
         args            = arrayAsArg dummy grp
 
@@ -248,7 +249,7 @@ getters grp dummy
         sh'             = cshape dim sh
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
-                                    (INTERNAL_ERROR(error) "getters" "linear indexing only")
+                                    (INTERNAL_ERROR(error) "readArray" "linear indexing only")
                                     (CUFun1 (zip (repeat True)) (\[i] -> get (rvalue i)))
     in ( args, manifest )
 
@@ -259,14 +260,14 @@ getters grp dummy
 -- name (say "Out") to be welded with a shape name "shOut" followed by the
 -- non-parametric array data "arrOut_aX".
 --
-setters
+writeArray
     :: forall sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
     -> ( [C.Param]                      -- function parameters to marshal the output array
        , [C.Exp]                        -- the shape of the output array
        , Rvalue x => x -> [C.Exp] )     -- write an element at a given index
-setters grp _ =
+writeArray grp _ =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
       cint              = codegenScalarType (scalarType :: ScalarType Int)
@@ -425,4 +426,20 @@ instance Assign l r => Assign [l] [r] where
 
 instance Assign l r => Assign l ([C.BlockItem], r) where
   assign lhs (env, rhs) = env ++ assign lhs rhs
+
+
+-- Prelude'
+-- --------
+
+-- A version of zipWith that requires the lists to be equal length
+--
+zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
+zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
+zipWith _ []     []     = []
+zipWith _ _      _      = INTERNAL_ERROR(error) "zipWith" "argument mismatch"
+
+zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
+zipWith3 f (x:xs) (y:ys) (z:zs) = f x y z : zipWith3 f xs ys zs
+zipWith3 _ []     []     []     = []
+zipWith3 _ _      _      _      = INTERNAL_ERROR(error) "zipWith3" "argument mismatch"
 

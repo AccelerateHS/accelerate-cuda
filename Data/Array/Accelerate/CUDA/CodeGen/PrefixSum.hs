@@ -272,9 +272,9 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
   where
     scan                        = "scan" ++ show dir ++ maybe "1" (const []) mseed
     (texIn, argIn)              = environment dev aenv
-    (argOut, _, setOut)         = setters "Out" (undefined :: Vector e)
-    (argSum, _, totalSum)       = setters "Sum" (undefined :: Vector e)
-    (argBlk, _, blkSum)         = setters "Blk" (undefined :: Vector e)
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
+    (argSum, _, totalSum)       = writeArray "Sum" (undefined :: Vector e)
+    (argBlk, _, blkSum)         = writeArray "Blk" (undefined :: Vector e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
     (_, z, declz)               = locals "z" (undefined :: e)
@@ -395,7 +395,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
   where
     scan                        = "scan" ++ show dir ++ "Up"
     (texIn, argIn)              = environment dev aenv
-    (argOut, _, setOut)         = setters "Out" (undefined :: Vector e)
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: DIM1)
@@ -415,7 +415,7 @@ mkScanUp2
     -> Maybe (CUExp aenv e)
     -> CUTranslSkel aenv (Vector e)
 mkScanUp2 dir dev aenv f z
-  = let (_, get) = getters "Blk" (undefined :: Vector e)
+  = let (_, get) = readArray "Blk" (undefined :: Vector e)
     in  mkScan dir dev aenv f z get
 
 

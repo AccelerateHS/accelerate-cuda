@@ -72,7 +72,7 @@ mkMap dev aenv fun arr
   |]
   where
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh b)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh b)
     (x, _, _)                   = locals "x" (undefined :: a)
     ix                          = [cvar "ix"]
 

@@ -93,7 +93,7 @@ mkFoldAll
     -> CUDelayedAcc aenv (sh :. Int) e
     -> [ CUTranslSkel aenv (Array sh e) ]
 mkFoldAll dev aenv f z a
-  = let (_, rec) = getters "Rec" (undefined :: Array (sh:.Int) e)
+  = let (_, rec) = readArray "Rec" (undefined :: Array (sh:.Int) e)
     in
     [ mkFoldAll' False dev aenv f z a
     , mkFoldAll' True  dev aenv f z rec ]
@@ -185,9 +185,9 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
   where
     foldAll                     = maybe "fold1All" (const "foldAll") mseed
     (texIn, argIn)              = environment dev aenv
-    (argOut, _, setOut)         = setters "Out" (undefined :: Array sh e)
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Array sh e)
     (argRec, _)
-      | recursive               = getters "Rec" (undefined :: Array (sh:.Int) e)
+      | recursive               = readArray "Rec" (undefined :: Array (sh:.Int) e)
       | otherwise               = ([], undefined)
 
     (_, x, declx)               = locals "x" (undefined :: e)
@@ -333,7 +333,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
   where
     fold                        = maybe "fold1" (const "fold") mseed
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh e)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: sh :. Int)
@@ -540,7 +540,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
   where
     foldSeg                     = maybe "fold1Seg" (const "foldSeg") mseed
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array (sh :. Int) e)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array (sh :. Int) e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: sh :. Int)

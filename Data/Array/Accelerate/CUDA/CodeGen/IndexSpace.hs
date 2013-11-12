@@ -81,7 +81,7 @@ mkGenerate dev aenv (CUFun1 dce f)
   where
     (sh, _, _)                  = locals "sh" (undefined :: sh)
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh e)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh e)
 
 
 -- A combination map/backpermute, where the index and value transformations have
@@ -136,7 +136,7 @@ mkTransform dev aenv perm fun arr
   |]
   where
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, setOut)     = setters "Out" (undefined :: Array sh' b)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh' b)
     (x0, _, _)                  = locals "x"   (undefined :: a)
     (sh, _, _)                  = locals "sh"  (undefined :: sh)
     (sh', _, _)                 = locals "sh_" (undefined :: sh')
@@ -214,7 +214,7 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
   where
     sizeof                      = eltSizeOf (undefined::e)
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, arrOut)     = setters "Out" (undefined :: Array sh' e)
+    (argOut, shOut, arrOut)     = writeArray "Out" (undefined :: Array sh' e)
     (x, _, _)                   = locals "x" (undefined :: e)
     (_, y,  decly)              = locals "y" (undefined :: e)
     (_, y', decly')             = locals "_y" (undefined :: e)
