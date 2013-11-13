@@ -499,8 +499,8 @@ codegenOpenExp dev aenv = cvtE
     --
     toIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
     toIndex sh ix env = do
-      sh'   <- cvtE sh env
-      ix'   <- cvtE ix env
+      sh'   <- mapM use =<< cvtE sh env
+      ix'   <- mapM use =<< cvtE ix env
       return [ ctoIndex sh' ix' ]
 
     fromIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
@@ -534,7 +534,7 @@ codegenOpenExp dev aenv = cvtE
       = let (sh, arr)   = namesOfAvar aenv idx
             ty          = accType acc
         in do
-        ix'     <- cvtE ix env
+        ix'     <- mapM use =<< cvtE ix env
         i       <- bind cint $ ctoIndex (cshape (expDim ix) sh) ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
@@ -552,7 +552,7 @@ codegenOpenExp dev aenv = cvtE
       = let (_, arr)    = namesOfAvar aenv idx
             ty          = accType acc
         in do
-        ix'     <- cvtE ix env
+        ix'     <- mapM use =<< cvtE ix env
         i       <- bind [cty| int |] $ single "LinearIndex" ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
