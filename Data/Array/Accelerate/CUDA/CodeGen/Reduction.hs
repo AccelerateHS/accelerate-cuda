@@ -655,11 +655,13 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
       -- warp has read in their data for this step.
       --
       | i > warpSize dev
-      = [citem| if ( threadIdx.x + $int:i < $exp:n ) {
-                    __syncthreads();
+      = [citem| __syncthreads(); |]
+      : [citem| if ( threadIdx.x + $int:i < $exp:n ) {
                     $items:(x0 .=. sdata ("threadIdx.x + " ++ show i))
                     $items:(x1 .=. f x1 x0)
-                    __syncthreads();
+                } |]
+      : [citem| __syncthreads(); |]
+      : [citem| if ( threadIdx.x + $int:i < $exp:n ) {
                     $items:(sdata "threadIdx.x" .=. x1)
                 } |]
       : rest

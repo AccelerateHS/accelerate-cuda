@@ -12,9 +12,6 @@
 module Data.Array.Accelerate.CUDA.Async
   where
 
-#if !MIN_VERSION_base(4,6,0)
-import Prelude                                          hiding ( catch )
-#endif
 import Control.Exception
 import Control.Concurrent
 
