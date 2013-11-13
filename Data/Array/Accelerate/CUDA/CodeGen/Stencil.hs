@@ -20,7 +20,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.Stencil (
 
 ) where
 
-import Control.Applicative
 import Control.Monad.State.Strict
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
@@ -33,6 +32,7 @@ import Data.Array.Accelerate.Analysis.Stencil
 import Data.Array.Accelerate.CUDA.AST                   hiding ( stencil, stencilAccess )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
+import Data.Array.Accelerate.CUDA.CodeGen.Stencil.Extra
 
 
 -- Map a stencil over an array.  In contrast to 'map', the domain of a stencil
@@ -68,7 +68,6 @@ mkStencil dev aenv (CUFun1 dce f) boundary
   $ CUTranslSkel "stencil" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
-    $edecl:(cdim "Shape" dim)
     $edecls:texIn
     $edecls:texStencil
 
@@ -80,7 +79,7 @@ mkStencil dev aenv (CUFun1 dce f) boundary
         $params:argStencil
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -88,22 +87,40 @@ mkStencil dev aenv (CUFun1 dce f) boundary
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            const typename Shape sh = fromIndex( shOut, ix );
-            $items:(dce xs    .=. stencil sh)
-            $items:(setOut ix .=. f xs)
+            $items:(sh .=. cfromIndex shOut "ix" "tmp")
+            $items:stencilBody
         }
     }
   |]
   where
-    dim                 = expDim (undefined :: Exp aenv sh)
-    (texIn,  argIn)     = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Array sh b)
-    ix                  = "ix"
-    sh                  = "sh"
-    (xs,_,_)            = locals "x" (undefined :: stencil)
-    dx                  = offsets (undefined :: Fun aenv (stencil -> b)) (undefined :: OpenAcc aenv (Array sh a))
+    (texIn,  argIn)             = environment dev aenv
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh b)
+    (sh, _, _)                  = locals "sh" (undefined :: sh)
+    (xs,_,_)                    = locals "x" (undefined :: stencil)
 
-    (texStencil, argStencil, stencil) = stencilAccess True "Stencil" "w" dev dx ix boundary dce
+    dx  = offsets (undefined :: Fun aenv (stencil -> b))
+                  (undefined :: OpenAcc aenv (Array sh a))
+
+    (texStencil, argStencil, safeIndex)
+        = stencilAccess dev True True "Stencil" "w" "ix" dx boundary dce
+
+    (_, _, unsafeIndex)
+        = stencilAccess dev True False "Stencil" "w" "ix" dx boundary dce
+
+    stencilBody
+      | computeCapability dev < Compute 1 2     = with safeIndex
+      | otherwise                               =
+          [[citem| if ( __all( $exp:(insideRegion shOut (borderRegion dx) (map rvalue sh)) ) ) {
+                       $items:(with unsafeIndex)
+                   } else {
+                       $items:(with safeIndex)
+                   } |]]
+
+      where
+        with get = (dce xs      .=. get sh) ++
+                   (setOut "ix" .=. f xs)
+
+
 
 
 -- Map a binary stencil of an array.  The extent of the resulting array is the
