@@ -212,7 +212,7 @@ codegenOpenFun1 dev env aenv fun
         (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
       n                 <- get
-      ExpST _ used _    <- execCGM (go u)
+      ExpST _ used      <- execCGM (go u)
       return $ CUFun1 (mark used u)
              $ \xs -> evalState (evalCGM (go xs)) n
   --
@@ -238,7 +238,7 @@ codegenOpenFun2 dev env aenv fun
         (_,v,_)  = locals "undefined_y" (undefined :: b)
     in do
       n                 <- get
-      ExpST _ used _    <- execCGM (go u v)
+      ExpST _ used      <- execCGM (go u v)
       return $ CUFun2 (mark used u) (mark used v)
              $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
@@ -453,7 +453,7 @@ codegenOpenExp dev aenv = cvtE
                       }
                    }|]
 
-           modify (\st -> st { bindings = loop : header ++ bindings st })
+           modify (\st -> st { localBindings = loop : header ++ localBindings st })
            return acc
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
@@ -509,7 +509,7 @@ codegenOpenExp dev aenv = cvtE
       ix'   <- cvtE ix env
       tmp   <- lift fresh
       let (ls, sz) = cfromIndex sh' (single "fromIndex" ix') tmp
-      modify (\st -> st { bindings = reverse ls ++ bindings st })
+      modify (\st -> st { localBindings = reverse ls ++ localBindings st })
       return sz
 
     -- Project out a single scalar element from an array. The array expression
@@ -532,7 +532,6 @@ codegenOpenExp dev aenv = cvtE
     index acc ix env
       | Manifest (Avar idx) <- acc
       = let (sh, arr)   = namesOfAvar aenv idx
-            cint        = codegenScalarType (scalarType :: ScalarType Int)
             ty          = accType acc
         in do
         ix'     <- cvtE ix env
