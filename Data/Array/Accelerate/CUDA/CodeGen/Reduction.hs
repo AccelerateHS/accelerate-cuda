@@ -654,6 +654,11 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
       -- because one warp could update the partial results before a different
       -- warp has read in their data for this step.
       --
+      -- Additionally, note that all threads of a warp must participate in the
+      -- synchronisation. Thus, this must go outside of the test against the
+      -- bounds of the array. We do a bit of extra work here, with all threads
+      -- writing into shared memory whether they updated their value or not.
+      --
       | i > warpSize dev
       = [citem| __syncthreads(); |]
       : [citem| if ( threadIdx.x + $int:i < $exp:n ) {
