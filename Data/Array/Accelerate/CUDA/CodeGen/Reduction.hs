@@ -661,10 +661,8 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
                     $items:(x1 .=. f x1 x0)
                 } |]
       : [citem| __syncthreads(); |]
-      : [citem| if ( threadIdx.x + $int:i < $exp:n ) {
-                    $items:(sdata "threadIdx.x" .=. x1)
-                } |]
-      : rest
+      : (sdata "threadIdx.x" .=. x1)
+      ++ rest
 
       -- The threads of a warp execute in lockstep, so it is only necessary to
       -- synchronise at the top, to ensure all threads have written their
