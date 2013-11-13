@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
   readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
@@ -135,6 +135,9 @@ data CUDelayedAcc aenv sh e where
 -- Common expression forms
 -- -----------------------
 
+cint :: C.Type
+cint = codegenScalarType (scalarType :: ScalarType Int)
+
 cvar :: Name -> C.Exp
 cvar x = [cexp|$id:x|]
 
@@ -189,7 +192,6 @@ cfromIndex shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
 
     go (tmps,ix,n) d
       = let tmp         = tmpName ++ '_':show (n::Int)
-            cint        = codegenScalarType (scalarType :: ScalarType Int)
             ix'         = [citem| const $ty:cint $id:tmp = $exp:ix ; |]
         in
         ((ix':tmps, [cexp| $id:tmp / $exp:d |], n+1), [cexp| $id:tmp % $exp:d |])
@@ -270,7 +272,6 @@ writeArray
 writeArray grp _ =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      cint              = codegenScalarType (scalarType :: ScalarType Int)
       sh'               = cshape' dim sh
       extent            = [ [cparam| const $ty:cint $id:i |] | i <- sh' ]
       adata             = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
@@ -344,7 +345,6 @@ arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Defini
 arrayAsTex _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      cint              = codegenScalarType (scalarType :: ScalarType Int)
       extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
       adata             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
   in
@@ -354,7 +354,6 @@ arrayAsArg :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Param]
 arrayAsArg _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      cint              = codegenScalarType (scalarType :: ScalarType Int)
       extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
       adata             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
   in
