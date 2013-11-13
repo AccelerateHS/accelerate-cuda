@@ -185,9 +185,9 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
   where
     foldAll                     = maybe "fold1All" (const "foldAll") mseed
     (texIn, argIn)              = environment dev aenv
-    (argOut, _, setOut)         = writeArray "Out" (undefined :: Array sh e)
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Array (sh :. Int) e)
     (argRec, _)
-      | recursive               = readArray "Rec" (undefined :: Array (sh:.Int) e)
+      | recursive               = readArray "Rec" (undefined :: Array (sh :. Int) e)
       | otherwise               = ([], undefined)
 
     (_, x, declx)               = locals "x" (undefined :: e)
