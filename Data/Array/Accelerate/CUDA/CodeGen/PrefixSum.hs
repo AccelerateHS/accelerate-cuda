@@ -211,7 +211,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex;
 
             /*
              * Generate the next set of values
@@ -258,15 +258,13 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
                 const int last = min(numElements - seg, blockDim.x) - 1;
                 $items:(z .=. sdata "last")
             }
-            $id:( if isNothing mseed then "carryIn = 1" else [] ) ;
+            $items:setCarry
         }
 
         /*
          * Finally, exclusive scans set the overall scan result (reduction value)
          */
-        if ( $exp:(cbool (isJust mseed)) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
-            $items:(setSum .=. z)
-        }
+        $items:setFinal
     }
   |]
   where
@@ -283,10 +281,25 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
     ix                          = [cvar "ix"]
     setSum                      = totalSum "0"
 
+    -- depending on whether we are inclusive/exclusive scans
+    setCarry
+      | isNothing mseed         = [[citem| carryIn = 1; |]]
+      | otherwise               = []
+
+    setFinal
+      | isNothing mseed         = []
+      | otherwise               = [[citem| if ( threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
+                                               $items:(setSum .=. z)
+                                           } |]]
+
     -- accessing neighbouring blocks
     firstBlock          = if dir == L then "0" else "gridDim.x - 1"
     lastBlock           = if dir == R then "0" else "gridDim.x - 1"
     prevBlock           = if dir == L then "blockIdx.x - 1" else "blockIdx.x + 1"
+
+    firstIndex
+      | dir == L        = [cexp| start + seg |]
+      | otherwise       = [cexp| end - seg - 1 |]
 
     carryIn
       | isJust mseed    = [cexp| threadIdx.x == 0 |]
@@ -355,7 +368,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex ;
 
             /*
              * Read in new values, combine with carry-in
@@ -401,6 +414,10 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
     (sh, _, _)                  = locals "sh" (undefined :: DIM1)
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
     ix                          = [cvar "ix"]
+
+    firstIndex
+      | dir == L                = [cexp| start + seg |]
+      | otherwise               = [cexp| end - seg - 1 |]
 
 
 -- Second step of the upsweep phase: scan the interval sums to produce carry-in
