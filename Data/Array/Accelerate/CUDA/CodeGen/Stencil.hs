@@ -101,11 +101,8 @@ mkStencil dev aenv (CUFun1 dce f) boundary
     dx  = offsets (undefined :: Fun aenv (stencil -> b))
                   (undefined :: OpenAcc aenv (Array sh a))
 
-    (texStencil, argStencil, safeIndex)
-        = stencilAccess dev True True "Stencil" "w" "ix" dx boundary dce
-
-    (_, _, unsafeIndex)
-        = stencilAccess dev True False "Stencil" "w" "ix" dx boundary dce
+    (texStencil, argStencil, safeIndex)   = stencilAccess dev True True  "Stencil" "Stencil" "w" "ix" dx boundary dce
+    (_,          _,          unsafeIndex) = stencilAccess dev True False "Stencil" "Stencil" "w" "ix" dx boundary dce
 
     stencilBody
       | computeCapability dev < Compute 1 2     = with safeIndex
@@ -117,9 +114,8 @@ mkStencil dev aenv (CUFun1 dce f) boundary
                    } |]]
 
       where
-        with get = (dce xs      .=. get sh) ++
-                   (setOut "ix" .=. f xs)
-
+        with stencil = (dce xs      .=. stencil sh) ++
+                       (setOut "ix" .=. f xs)
 
 
 

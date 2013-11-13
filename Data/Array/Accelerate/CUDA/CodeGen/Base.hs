@@ -6,7 +6,6 @@
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE QuasiQuotes           #-}
-{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
@@ -23,6 +22,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Names and Types
   CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1, CUOpenFun1(..), CUFun2, CUOpenFun2(..),
+  Eliminate, Instantiate1, Instantiate2,
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
@@ -110,17 +110,21 @@ data CUExp aenv a where
 type CUFun1 = CUOpenFun1 ()
 type CUFun2 = CUOpenFun2 ()
 
+type Eliminate a        = forall x. [x] -> [(Bool,x)]
+type Instantiate1 a b   = forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp])
+type Instantiate2 a b c = forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp])
+
 data CUOpenFun1 env aenv f where
   CUFun1 :: (Elt a, Elt b)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
+         => Eliminate a
+         -> Instantiate1 a b
          -> CUOpenFun1 env aenv (a -> b)
 
 data CUOpenFun2 env aenv f where
   CUFun2 :: (Elt a, Elt b, Elt c)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall y. [y] -> [(Bool,y)])
-         -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
+         => Eliminate a
+         -> Eliminate b
+         -> Instantiate2 a b c
          -> CUOpenFun2 env aenv (a -> b -> c)
 
 -- Delayed arrays

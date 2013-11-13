@@ -54,32 +54,32 @@ import Data.Array.Accelerate.CUDA.CodeGen.Type
 stencilAccess
     :: forall aenv sh e. (Shape sh, Elt e)
     => DeviceProperties
-    -> Bool                                     -- can we use linear indexing?
-    -> Bool                                     -- do we need to do bounds checking?
-    -> Name                                     -- array group name
-    -> Name                                     -- seed name for temporary variables
-    -> Name                                     -- linear index at the focus
-    -> [sh]                                     -- list of offset indices
-    -> Boundary (CUExp aenv e)                  -- stencil boundary condition
-    -> (forall x. [x] -> [(Bool,x)])            -- dead code elimination flags
-    -> ( [C.Definition]                                                 -- kernel texture reference definitions
-       , [C.Param]                                                      -- kernel function arguments
-       , forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))         -- access stencil at given multidimensional index
-stencilAccess dev doLinearIndexing doBoundsChecks grp tmp centroid shx boundary dce =
+    -> Bool                             -- can we use linear indexing?
+    -> Bool                             -- do we need to do bounds checking?
+    -> Name                             -- array group name
+    -> Name                             -- group name for array shape (hax!)
+    -> Name                             -- seed name for temporary variables
+    -> Name                             -- linear index at the focus
+    -> [sh]                             -- list of offset indices
+    -> Boundary (CUExp aenv e)          -- stencil boundary condition
+    -> Eliminate e                      -- dead code elimination flags
+    -> ( [C.Definition]                 -- kernel texture reference definitions
+       , [C.Param]                      -- kernel function arguments
+       , Instantiate1 sh e )            -- access stencil at given multidimensional index
+stencilAccess dev doLinearIndexing doBoundsChecks grp sh tmp centroid positions boundary dce =
   ( decls, params, stencil )
   where
-    (decls, params, shIn, getIn)        = readStencil dev grp (undefined :: Array sh e)
+    (decls, params, _, getIn)   = readStencil dev grp (undefined :: Array sh e)
+    (_, _, shIn, _)             = readStencil dev sh  (undefined :: Array sh e)
 
-    getInAt ix = do
-      j <- fresh
-      let (env, arr) = getIn j
-      return ( [citem| const $ty:cint $id:j = $exp:ix; |] : env, arr )
+    getInAt ix                  = fresh >>= \j ->
+                                  return ( [[citem| const $ty:cint $id:j = $exp:ix; |]], getIn j )
 
     -- Generate the entire stencil, reading elements from those positions of the
     -- pattern that are used and eliminating reads from those that are not.
     --
     stencil ix = withNameGen tmp $ do
-      (envs, xs) <- mapAndUnzipM (access ix . shapeToList) shx
+      (envs, xs) <- mapAndUnzipM (access ix . shapeToList) positions
 
       let (envs', xs') = unzip
                        $ eliminate
@@ -106,7 +106,7 @@ stencilAccess dev doLinearIndexing doBoundsChecks grp tmp centroid shx boundary 
 
         -- Read the array position without any bounds checks
         unsafeAccess
-          | doLinearIndexing && focus   = return $ getIn centroid
+          | doLinearIndexing && focus   = return $ ([], getIn centroid)
           | otherwise                   = getInAt (ctoIndex shIn cursor)
 
         -- Read the array, applying appropriate bounds checks
@@ -127,7 +127,6 @@ stencilAccess dev doLinearIndexing doBoundsChecks grp tmp centroid shx boundary 
               p         <- fresh
               return ( [citem| const int $id:p = $exp:(cinRange shIn cursor); |] : env
                      , zipWith (\a c -> [cexp| $id:p ? $exp:a : $exp:c |]) as cs )
-
 
 
 -- Filter unused components of the stencil. Environment bindings are shared
@@ -233,17 +232,16 @@ cwrap = zipWith f
 
 -- Generate kernel parameters for input arrays. This is similar to 'readArray',
 -- but we force compute 1.x devices to read through the texture cache as well.
--- Note that using a multidimensional index result in error.
 --
 readStencil
     :: forall sh e. (Shape sh, Elt e)
     => DeviceProperties
-    -> Name                             -- group names
-    -> Array sh e                       -- dummy to fix the types
-    -> ( [C.Definition]                 -- global definitions for stencils read via texture references (compute < 2.0)
-       , [C.Param]                      -- function arguments for stencils read as arrays (compute >= 2.0)
-       , [C.Exp]                        -- shape of the array
-       , forall x. Rvalue x => x -> ([C.BlockItem], [C.Exp])    -- read elements from linear index
+    -> Name                                     -- group names
+    -> Array sh e                               -- dummy to fix the types
+    -> ( [C.Definition]                         -- global definitions for stencils read via texture references (compute < 2.0)
+       , [C.Param]                              -- function arguments for stencils read as arrays (compute >= 2.0)
+       , [C.Exp]                                -- shape of the array
+       , forall x. Rvalue x => x -> [C.Exp]     -- read elements from a linear index
        )
 readStencil dev grp dummy
   = let (sh, arrs)      = namesOfArray grp (undefined :: e)
@@ -253,7 +251,7 @@ readStencil dev grp dummy
 
         dim             = expDim (undefined :: Exp aenv sh)
         sh'             = cshape dim sh
-        get ix          = ([], zipWith (\t a -> indexArray dev t (cvar a) (rvalue ix)) (eltType (undefined :: e)) arrs)
+        get ix          = zipWith (\t a -> indexArray dev t (cvar a) (rvalue ix)) (eltType (undefined :: e)) arrs
     in
     ( decl, args, sh', get )
 
