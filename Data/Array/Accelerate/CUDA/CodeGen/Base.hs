@@ -303,7 +303,7 @@ shared _ grp size mprev
           | Just p <- mprev     = [cdecl| volatile $ty:t * $id:v = ($ty:t *) $exp:p; |]
           | otherwise           = [cdecl| extern volatile __shared__ $ty:t $id:v [] ; |]
     in
-    ( sbase e x : zipWith3 sdata es xs (x:xs)
+    ( sbase e x : zipWith3 sdata es xs (init (x:xs))
     , \ix -> map (\v -> [cexp| $id:v [ $exp:(rvalue ix) ] |]) (x:xs)
     )
 
