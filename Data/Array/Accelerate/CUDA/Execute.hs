@@ -331,20 +331,27 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
 
     stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
                => Array sh a -> Array sh b -> CIO (Array sh c)
-    stencil2Op !arr1 !arr2 = do
-      let sh1   =  shape arr1
-          sh2   =  shape arr2
-          sh    =  sh1 `intersect` sh2
-      out       <- allocateArray sh
-      dev       <- asks deviceProperties
+    stencil2Op !arr1 !arr2
+      | Cons _ spec _ <- more
+      = let sh1         =  shape arr1
+            sh2         =  shape arr2
+            (sh, op)
+              | fromElt sh1 == fromElt sh2      = (sh1,                 spec)
+              | otherwise                       = (sh1 `intersect` sh2, kernel)
+        in do
+          out   <- allocateArray sh
+          dev   <- asks deviceProperties
 
-      if computeCapability dev < Compute 2 0
-         then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
-              marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) kernel arr2 >>
-              execute kernel gamma aenv (size sh) (out, sh1,  sh2)
-         else execute kernel gamma aenv (size sh) (out, arr1, arr2)
-      --
-      return out
+          if computeCapability dev < Compute 2 0
+             then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) op arr1 >>
+                  marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) op arr2 >>
+                  execute op gamma aenv (size sh) (out, sh1,  sh2)
+             else execute op gamma aenv (size sh) (out, arr1, arr2)
+          --
+          return out
+
+      | otherwise
+      = INTERNAL_ERROR(error) "stencil2Op" "missing stencil specialisation kernel"
 
 
 -- Scalar expression evaluation
