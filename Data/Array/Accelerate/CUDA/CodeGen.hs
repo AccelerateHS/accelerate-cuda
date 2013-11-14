@@ -430,8 +430,15 @@ codegenOpenExp dev aenv = cvtE
           -> Gen [C.Exp]
     while p f x env
       = do x'                   <- cvtE x env
-           CUFun1 _   done      <- lift (codegenOpenFun1 dev env aenv p)
-           CUFun1 dce body      <- lift (codegenOpenFun1 dev env aenv f)
+           CUFun1 dce_p done    <- lift (codegenOpenFun1 dev env aenv p)
+           CUFun1 dce_f body    <- lift (codegenOpenFun1 dev env aenv f)
+
+           -- Need to keep any def-use information gathered in the predicate and
+           -- body functions. This is done with a dodgy hack, because we know
+           -- the names of the special temporaries used by codegenOpenFun1...
+           let restore set      = mapM_ (use . snd) $ set [ cvar ("undefined_x"++show (i::Int)) | i <- [0..] ]
+           restore dce_p
+           restore dce_f
 
            -- Need some fresh variables for the loop counters. In the local
            -- declarations we need to twiddle the name a bit to avoid later
@@ -445,11 +452,11 @@ codegenOpenExp dev aenv = cvtE
                header            = map C.BlockDecl (declok ++ declacc)
                loop              =
                    [citem| {
-                       $items:(dce acc .=. x')
-                       $items:(ok      .=. done x')
+                       $items:(dce_f acc .=. x')
+                       $items:(ok        .=. done x')
                        while ( $exp:(single "while" ok) ) {
-                           $items:(dce acc .=. body acc)
-                           $items:(ok      .=. done acc)
+                           $items:(dce_f acc .=. body acc)
+                           $items:(ok        .=. done acc)
                       }
                    }|]
 
@@ -505,7 +512,7 @@ codegenOpenExp dev aenv = cvtE
 
     fromIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
     fromIndex sh ix env = do
-      sh'   <- cvtE sh env
+      sh'   <- mapM use =<< cvtE sh env
       ix'   <- cvtE ix env
       tmp   <- lift fresh
       let (ls, sz) = cfromIndex sh' (single "fromIndex" ix') tmp
