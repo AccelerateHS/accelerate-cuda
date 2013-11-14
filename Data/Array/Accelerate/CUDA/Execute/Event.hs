@@ -26,6 +26,7 @@ import Foreign.CUDA.Driver.Stream                               ( Stream )
 import qualified Foreign.CUDA.Driver.Event                      as Event
 
 import GHC.Base
+import GHC.Ptr
 
 
 -- Create a new event that will be automatically garbage collected. The event is
@@ -35,7 +36,7 @@ import GHC.Base
 create :: IO Event
 create = do
   event <- Event.create [Event.DisableTiming]
-  addEventFinalizer event (Event.destroy event)
+  addEventFinalizer event $ trace ("destroy " ++ show event) (Event.destroy event)
   return event
 
 -- Create a new event marker that will be filled once execution in the specified
@@ -68,13 +69,13 @@ block = Event.block
 -- Add a finaliser to an event token
 --
 addEventFinalizer :: Event -> IO () -> IO ()
-addEventFinalizer e@(Event e#) f = IO $ \s ->
+addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
   case mkWeak# e# e f s of (# s', _w #) -> (# s', () #)
 
 
 -- Debug
 -- -----
-{--
+
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
 trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
@@ -82,5 +83,4 @@ trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
 {-# INLINE message #-}
 message :: String -> IO ()
 message s = s `trace` return ()
---}
 
