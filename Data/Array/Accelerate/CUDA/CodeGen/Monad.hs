@@ -62,7 +62,7 @@ data ExpST = ExpST
   -- A set of the Var's that we know have been used in the expression. With this
   -- we can do def-use analysis for simple dead-code elimination.
   --
-  , usedTerms      :: !(HashSet C.Exp)
+  , usedTerms           :: !(HashSet C.Exp)
   }
 
 
