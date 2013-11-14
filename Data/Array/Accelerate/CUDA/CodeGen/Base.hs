@@ -1,11 +1,11 @@
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE ImpredicativeTypes    #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE QuasiQuotes           #-}
-{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
@@ -22,11 +22,13 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
   -- Names and Types
   CUTranslSkel(..), CUDelayedAcc(..), CUExp(..), CUFun1, CUOpenFun1(..), CUFun2, CUOpenFun2(..),
+  Eliminate, Instantiate1, Instantiate2,
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cvar, ccall, cchar, cintegral, cbool, cdim, cshape, getters, setters, shared,
-  indexArray, indexHead, shapeSize, environment, arrayAsTex, arrayAsArg,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
+  readArray, writeArray, shared,
+  indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
 
   -- Mutable operations
@@ -34,12 +36,19 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
 
 ) where
 
+-- library
+import Prelude                                          hiding ( zipWith, zipWith3 )
+import Data.List                                        ( mapAccumR )
 import Text.PrettyPrint.Mainland
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 import qualified Data.HashMap.Strict                    as Map
 
+-- cuda
 import Foreign.CUDA.Analysis.Device
+
+-- friends
+import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.Analysis.Shape
 import Data.Array.Accelerate.CUDA.CodeGen.Type
@@ -59,7 +68,7 @@ namesOfArray
     -> (Name, [Name])   -- shape and array field names
 namesOfArray grp _
   = let ty      = eltType (undefined :: e)
-        arr x   = "arr" ++ grp ++ "_a" ++ show x
+        arr x   = "arr" ++ grp ++ '_':show x
         n       = length ty
     in
     ( "sh" ++ grp, map arr [n-1, n-2 .. 0] )
@@ -101,17 +110,21 @@ data CUExp aenv a where
 type CUFun1 = CUOpenFun1 ()
 type CUFun2 = CUOpenFun2 ()
 
+type Eliminate a        = forall x. [x] -> [(Bool,x)]
+type Instantiate1 a b   = forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp])
+type Instantiate2 a b c = forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp])
+
 data CUOpenFun1 env aenv f where
   CUFun1 :: (Elt a, Elt b)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall x. Rvalue x => [x] -> ([C.BlockItem], [C.Exp]))
+         => Eliminate a
+         -> Instantiate1 a b
          -> CUOpenFun1 env aenv (a -> b)
 
 data CUOpenFun2 env aenv f where
   CUFun2 :: (Elt a, Elt b, Elt c)
-         => (forall x. [x] -> [(Bool,x)])
-         -> (forall y. [y] -> [(Bool,y)])
-         -> (forall x y. (Rvalue x, Rvalue y) => [x] -> [y] -> ([C.BlockItem], [C.Exp]))
+         => Eliminate a
+         -> Eliminate b
+         -> Instantiate2 a b c
          -> CUOpenFun2 env aenv (a -> b -> c)
 
 -- Delayed arrays
@@ -123,8 +136,11 @@ data CUDelayedAcc aenv sh e where
             -> CUDelayedAcc aenv sh e
 
 
--- Expression and declaration generation
--- -------------------------------------
+-- Common expression forms
+-- -----------------------
+
+cint :: C.Type
+cint = codegenScalarType (scalarType :: ScalarType Int)
 
 cvar :: Name -> C.Exp
 cvar x = [cexp|$id:x|]
@@ -141,27 +157,53 @@ cintegral n = [cexp|$int:n|]
 cbool :: Bool -> C.Exp
 cbool = cintegral . fromEnum
 
-cdim :: Name -> Int -> C.Definition
-cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+-- Generate all the names of a shape given a base name and dimensionality
+cshape :: Int -> Name -> [C.Exp]
+cshape dim sh = [ cvar x | x <- cshape' dim sh ]
 
--- Disassemble a struct-shape into a list of expressions accessing the fields
-cshape :: Int -> C.Exp -> [C.Exp]
-cshape dim sh
-  | dim == 0  = []
-  | dim == 1  = [sh]
-  | otherwise = map (\i -> [cexp|$exp:sh . $id:('a':show i)|]) [dim-1, dim-2 .. 0]
+cshape' :: Int -> Name -> [Name]
+cshape' dim sh = [ (sh ++ '_':show i) | i <- [dim-1, dim-2 .. 0] ]
 
--- Calculate the size of a shape from its component dimensions
-shapeSize :: Rvalue r => [r] -> C.Exp
-shapeSize [] = [cexp| 1 |]
-shapeSize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
+-- Get the innermost index of a shape/index
+cindexHead :: Rvalue r => [r] -> C.Exp
+cindexHead = rvalue . last
 
-indexHead :: Rvalue r => [r] -> C.Exp
-indexHead = rvalue . last
+-- generate code that calculates the product of the list of expressions
+csize :: Rvalue r => [r] -> C.Exp
+csize [] = [cexp| 1 |]
+csize ss = foldr1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
+
+-- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
+--
+ctoIndex :: (Rvalue sh, Rvalue ix) => [sh] -> [ix] -> C.Exp
+ctoIndex extent index
+  = toIndex (reverse $ map rvalue extent) (reverse $ map rvalue index)  -- we use a row-major representation
+  where
+    toIndex []      []     = [cexp| $int:(0::Int) |]
+    toIndex [_]     [i]    = i
+    toIndex (sz:sh) (i:ix) = [cexp| $exp:(toIndex sh ix) * $exp:sz + $exp:i |]
+    toIndex _       _      = INTERNAL_ERROR(error) "toIndex" "argument mismatch"
+
+-- Generate code to calculate a multi-dimensional index from a linear index and a given array shape.
+-- This version creates temporary values that are reused in the computation.
+--
+cfromIndex :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> Name -> ([C.BlockItem], [C.Exp])
+cfromIndex shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
+  where
+    fromIndex [sh]   ix = ([], [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]])
+    fromIndex extent ix = let ((env, _, _), sh) = mapAccumR go ([], ix, 0) extent
+                          in  (reverse env, sh)
+
+    go (tmps,ix,n) d
+      = let tmp         = tmpName ++ '_':show (n::Int)
+            ix'         = [citem| const $ty:cint $id:tmp = $exp:ix ; |]
+        in
+        ((ix':tmps, [cexp| $id:tmp / $exp:d |], n+1), [cexp| $id:tmp % $exp:d |])
 
 
 -- Thread blocks and indices
---
+-- -------------------------
+
 umul24 :: DeviceProperties -> C.Exp -> C.Exp -> C.Exp
 umul24 dev x y
   | computeCapability dev < Compute 2 0 = [cexp| __umul24($exp:x, $exp:y) |]
@@ -194,24 +236,27 @@ indexArray dev elt arr ix
   | otherwise                            = ccall "indexArray"  [arr, ix]
 
 
+-- Kernel function parameters
+-- --------------------------
+
 -- Generate kernel parameters for an array valued argument, and a function to
 -- linearly index this array. Note that dimensional indexing results in error.
 --
-getters
+readArray
     :: forall aenv sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
     -> ( [C.Param], CUDelayedAcc aenv sh e )
-getters grp dummy
+readArray grp dummy
   = let (sh, arrs)      = namesOfArray grp (undefined :: e)
         args            = arrayAsArg dummy grp
 
         dim             = expDim (undefined :: Exp aenv sh)
-        sh'             = cshape dim (cvar sh)
+        sh'             = cshape dim sh
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
-                                    (INTERNAL_ERROR(error) "getters" "linear indexing only")
-                                    (CUFun1 (zip (repeat True)) (get . rvalue . head))
+                                    (INTERNAL_ERROR(error) "readArray" "linear indexing only")
+                                    (CUFun1 (zip (repeat True)) (\[i] -> get (rvalue i)))
     in ( args, manifest )
 
 
@@ -221,20 +266,24 @@ getters grp dummy
 -- name (say "Out") to be welded with a shape name "shOut" followed by the
 -- non-parametric array data "arrOut_aX".
 --
-setters
+writeArray
     :: forall sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
-    -> ([C.Param], Name -> [C.Exp])
-setters grp _
-  = let (sh, arrs)      = namesOfArray grp (undefined :: e)
-        dim             = expDim (undefined :: Exp aenv sh)
-        sh'             = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-        arrs'           = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
-    in
-    ( sh' : arrs'
-    , \ix -> map (\a -> [cexp| $id:a [ $id:ix ] |]) arrs
-    )
+    -> ( [C.Param]                      -- function parameters to marshal the output array
+       , [C.Exp]                        -- the shape of the output array
+       , Rvalue x => x -> [C.Exp] )     -- write an element at a given index
+writeArray grp _ =
+  let (sh, arrs)        = namesOfArray grp (undefined :: e)
+      dim               = expDim (undefined :: Exp aenv sh)
+      sh'               = cshape' dim sh
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- sh' ]
+      adata             = zipWith (\t n -> [cparam| $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+  in
+  ( extent ++ adata
+  , map cvar sh'
+  , \ix -> map (\a -> [cexp| $id:a [ $exp:(rvalue ix) ] |]) arrs
+  )
 
 
 -- All dynamically allocated __shared__ memory will begin at the same base
@@ -248,7 +297,8 @@ shared
     -> Name                             -- group name
     -> C.Exp                            -- how much shared memory per type
     -> Maybe C.Exp                      -- (optional) initialise from this base address
-    -> ([C.InitGroup], Name -> [C.Exp]) -- shared memory declaration and indexing function
+    -> ( [C.InitGroup]                  -- shared memory declaration and...
+       , Rvalue x => x -> [C.Exp])      -- ...indexing function
 shared _ grp size mprev
   = let e:es                    = eltType (undefined :: e)
         x:xs                    = let k = length es in map (\n -> grp ++ show n) [k, k-1 .. 0]
@@ -258,8 +308,8 @@ shared _ grp size mprev
           | Just p <- mprev     = [cdecl| volatile $ty:t * $id:v = ($ty:t *) $exp:p; |]
           | otherwise           = [cdecl| extern volatile __shared__ $ty:t $id:v [] ; |]
     in
-    ( sbase e x : zipWith3 sdata es xs (x:xs)
-    , \ix -> map (\v -> [cexp| $id:v [ $id:ix ] |]) (x:xs)
+    ( sbase e x : zipWith3 sdata es xs (init (x:xs))
+    , \ix -> map (\v -> [cexp| $id:v [ $exp:(rvalue ix) ] |]) (x:xs)
     )
 
 -- Array environment references. The method in which arrays are accessed depends
@@ -282,36 +332,36 @@ environment
     -> ([C.Definition], [C.Param])
 environment dev gamma@(Gamma aenv)
   | computeCapability dev < Compute 2 0
-  = Map.foldrWithKey (\(Idx_ v) _ (ds,ps) -> let (d,p) = asTex v in (d++ds, p:ps)) ([],[]) aenv
+  = Map.foldrWithKey (\(Idx_ v) _ (ds,ps) -> let (d,p) = asTex v in (d++ds, p++ps)) ([],[]) aenv
 
   | otherwise
   = ([], Map.foldrWithKey (\(Idx_ v) _ vs -> asArg v ++ vs) [] aenv)
 
   where
-    asTex :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], C.Param)
+    asTex :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> ([C.Definition], [C.Param])
     asTex ix = arrayAsTex (undefined :: Array sh e) (groupOfAvar gamma ix)
 
     asArg :: forall sh e. (Shape sh, Elt e) => Idx aenv (Array sh e) -> [C.Param]
     asArg ix = arrayAsArg (undefined :: Array sh e) (groupOfAvar gamma ix)
 
 
-arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], C.Param)
+arrayAsTex :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> ([C.Definition], [C.Param])
 arrayAsTex _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-      arrs'             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
+      adata             = zipWith (\t a -> [cedecl| static $ty:t $id:a; |]) (eltTypeTex (undefined :: e)) arrs
   in
-  (arrs', sh')
+  (adata, extent)
 
 arrayAsArg :: forall sh e. (Shape sh, Elt e) => Array sh e -> Name -> [C.Param]
 arrayAsArg _ grp =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
-      sh'               = [cparam| const typename $id:("DIM" ++ show dim) $id:sh |]
-      arrs'             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
+      extent            = [ [cparam| const $ty:cint $id:i |] | i <- cshape' dim sh ]
+      adata             = zipWith (\t n -> [cparam| const $ty:t * __restrict__ $id:n |]) (eltType (undefined :: e)) arrs
   in
-  sh' : arrs'
+  extent ++ adata
 
 
 -- Mutable operations
@@ -338,10 +388,10 @@ class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem
 
 instance Lvalue C.Exp where
-  lvalue x y = C.BlockStm  [cstm| $exp:x = $exp:y; |]
+  lvalue x y = [citem| $exp:x = $exp:y; |]
 
 instance Lvalue (C.Type, Name) where
-  lvalue (t,x) y = C.BlockDecl [cdecl| const $ty:t $id:x = $exp:y; |]
+  lvalue (t,x) y = [citem| const $ty:t $id:x = $exp:y; |]
 
 
 class Rvalue a where
@@ -350,8 +400,11 @@ class Rvalue a where
 instance Rvalue C.Exp where
   rvalue = id
 
+instance Rvalue Name where
+  rvalue = cvar
+
 instance Rvalue (C.Type, Name) where
-  rvalue (_,x) = cvar x
+  rvalue (_,x) = rvalue x
 
 
 infixr 0 .=.
@@ -362,7 +415,7 @@ class Assign l r where
   assign :: l -> r -> [C.BlockItem]
 
 instance (Lvalue l, Rvalue r) => Assign l r where
-  assign lhs rhs = return $ lvalue lhs (rvalue rhs)
+  assign lhs rhs = [ lvalue lhs (rvalue rhs) ]
 
 instance Assign l r => Assign (Bool,l) r where
   assign (used,lhs) rhs
@@ -376,4 +429,20 @@ instance Assign l r => Assign [l] [r] where
 
 instance Assign l r => Assign l ([C.BlockItem], r) where
   assign lhs (env, rhs) = env ++ assign lhs rhs
+
+
+-- Prelude'
+-- --------
+
+-- A version of zipWith that requires the lists to be equal length
+--
+zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
+zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
+zipWith _ []     []     = []
+zipWith _ _      _      = INTERNAL_ERROR(error) "zipWith" "argument mismatch"
+
+zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
+zipWith3 f (x:xs) (y:ys) (z:zs) = f x y z : zipWith3 f xs ys zs
+zipWith3 _ []     []     []     = []
+zipWith3 _ _      _      _      = INTERNAL_ERROR(error) "zipWith3" "argument mismatch"
 

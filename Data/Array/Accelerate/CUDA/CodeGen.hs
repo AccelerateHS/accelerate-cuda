@@ -45,7 +45,7 @@ import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
-import Data.Array.Accelerate.CUDA.CodeGen.Base                  hiding ( shapeSize )
+import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
@@ -212,7 +212,7 @@ codegenOpenFun1 dev env aenv fun
         (_,u,_) = locals "undefined_x" (undefined :: a)
     in do
       n                 <- get
-      ExpST _ used _    <- execCGM (go u)
+      ExpST _ used      <- execCGM (go u)
       return $ CUFun1 (mark used u)
              $ \xs -> evalState (evalCGM (go xs)) n
   --
@@ -238,7 +238,7 @@ codegenOpenFun2 dev env aenv fun
         (_,v,_)  = locals "undefined_y" (undefined :: b)
     in do
       n                 <- get
-      ExpST _ used _    <- execCGM (go u v)
+      ExpST _ used      <- execCGM (go u v)
       return $ CUFun2 (mark used u) (mark used v)
              $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
@@ -453,7 +453,7 @@ codegenOpenExp dev aenv = cvtE
                       }
                    }|]
 
-           modify (\st -> st { bindings = loop : header ++ bindings st })
+           modify (\st -> st { localBindings = loop : header ++ localBindings st })
            return acc
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
@@ -495,29 +495,22 @@ codegenOpenExp dev aenv = cvtE
       in
       replicate <$> cvtE slix env <*> cvtE sl env
 
-    -- Convert between linear and multidimensional indices. For the
-    -- multidimensional case, we've inlined the definition of 'fromIndex'
-    -- because we need to return an expression for each component.
+    -- Convert between linear and multidimensional indices
     --
     toIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
     toIndex sh ix env = do
-      sh'   <- cvtE sh env
-      ix'   <- cvtE ix env
-      return [ ccall "toIndex" [ ccall "shape" sh', ccall "shape" ix' ] ]
+      sh'   <- mapM use =<< cvtE sh env
+      ix'   <- mapM use =<< cvtE ix env
+      return [ ctoIndex sh' ix' ]
 
     fromIndex :: DelayedOpenExp env aenv sh -> DelayedOpenExp env aenv Int -> Val env -> Gen [C.Exp]
     fromIndex sh ix env = do
       sh'   <- cvtE sh env
       ix'   <- cvtE ix env
-      reverse <$> fromIndex' (reverse sh') (single "fromIndex" ix')
-      where
-        fromIndex' :: [C.Exp] -> C.Exp -> Gen [C.Exp]
-        fromIndex' []     _     = return []
-        fromIndex' [_]    i     = return [i]
-        fromIndex' (d:ds) i     = do
-          i'    <- bind [cty| int |] i
-          ds'   <- fromIndex' ds [cexp| $exp:i' / $exp:d |]
-          return $ [cexp| $exp:i' % $exp:d |] : ds'
+      tmp   <- lift fresh
+      let (ls, sz) = cfromIndex sh' (single "fromIndex" ix') tmp
+      modify (\st -> st { localBindings = reverse ls ++ localBindings st })
+      return sz
 
     -- Project out a single scalar element from an array. The array expression
     -- does not contain any free scalar variables (strictly flat data
@@ -541,8 +534,8 @@ codegenOpenExp dev aenv = cvtE
       = let (sh, arr)   = namesOfAvar aenv idx
             ty          = accType acc
         in do
-        ix'     <- cvtE ix env
-        i       <- bind [cty| int |] $ ccall "toIndex" [ cvar sh, ccall "shape" ix' ]
+        ix'     <- mapM use =<< cvtE ix env
+        i       <- bind cint $ ctoIndex (cshape (expDim ix) sh) ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
       | otherwise
@@ -559,7 +552,7 @@ codegenOpenExp dev aenv = cvtE
       = let (_, arr)    = namesOfAvar aenv idx
             ty          = accType acc
         in do
-        ix'     <- cvtE ix env
+        ix'     <- mapM use =<< cvtE ix env
         i       <- bind [cty| int |] $ single "LinearIndex" ix'
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
@@ -575,7 +568,7 @@ codegenOpenExp dev aenv = cvtE
     shape :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> Val env -> Gen [C.Exp]
     shape acc _env
       | Manifest (Avar idx) <- acc
-      = return $ cshape (delayedDim acc) (cvar $ fst (namesOfAvar aenv idx))
+      = return $ cshape (delayedDim acc) (fst (namesOfAvar aenv idx))
 
       | otherwise
       = INTERNAL_ERROR(error) "Shape" "expected array variable"
@@ -584,11 +577,7 @@ codegenOpenExp dev aenv = cvtE
     -- definition is inlined, but we could also call the C function helpers.
     --
     shapeSize :: DelayedOpenExp env aenv sh -> Val env -> Gen [C.Exp]
-    shapeSize sh env =
-      let size [] = return $ [cexp| 1 |]
-          size ss = return $ foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) ss
-      in
-      size <$> cvtE sh env
+    shapeSize sh env = return . csize <$> cvtE sh env
 
     -- Intersection of two shapes, taken as the minimum in each dimension.
     --
@@ -596,10 +585,8 @@ codegenOpenExp dev aenv = cvtE
               => DelayedOpenExp env aenv sh
               -> DelayedOpenExp env aenv sh
               -> Val env -> Gen [C.Exp]
-    intersect sh1 sh2 env = let
-        sh1' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh1 env
-        sh2' = ccastTup (Sugar.eltType (undefined::sh)) <$> cvtE sh2 env
-      in zipWith (\a b -> ccall "min" [a,b]) <$> sh1' <*> sh2'
+    intersect sh1 sh2 env =
+      zipWith (\a b -> ccall "min" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
 
     -- Foreign scalar functions. We need to extract any header files that might
     -- be required so they can be added to the top level definitions.
@@ -645,10 +632,8 @@ codegenPrim (PrimAbs             ty) [a]   = codegenAbs ty a
 codegenPrim (PrimSig             ty) [a]   = codegenSig ty a
 codegenPrim (PrimQuot             _) [a,b] = [cexp|$exp:a / $exp:b|]
 codegenPrim (PrimRem              _) [a,b] = [cexp|$exp:a % $exp:b|]
-codegenPrim (PrimIDiv            ty) [a,b] = ccall "idiv" [ccast (NumScalarType $ IntegralNumType ty) a,
-                                                           ccast (NumScalarType $ IntegralNumType ty) b]
-codegenPrim (PrimMod             ty) [a,b] = ccall "mod"  [ccast (NumScalarType $ IntegralNumType ty) a,
-                                                           ccast (NumScalarType $ IntegralNumType ty) b]
+codegenPrim (PrimIDiv             _) [a,b] = ccall "idiv" [a,b]
+codegenPrim (PrimMod              _) [a,b] = ccall "mod"  [a,b]
 codegenPrim (PrimBAnd             _) [a,b] = [cexp|$exp:a & $exp:b|]
 codegenPrim (PrimBOr              _) [a,b] = [cexp|$exp:a | $exp:b|]
 codegenPrim (PrimBXor             _) [a,b] = [cexp|$exp:a ^ $exp:b|]
@@ -780,7 +765,10 @@ codegenIntegralSig ty x = [cexp|$exp:x == $exp:zero ? $exp:zero : $exp:(ccall "c
     one  | IntegralDict <- integralDict ty = codegenIntegralScalar ty 1
 
 codegenFloatingSig :: FloatingType a -> C.Exp -> C.Exp
-codegenFloatingSig ty x = [cexp|$exp:x == $exp:zero ? $exp:zero : $exp:(ccall (FloatingNumType ty `postfix` "copysign") [one,x]) |]
+codegenFloatingSig ty x =
+  [cexp|$exp:x == $exp:zero
+            ? $exp:zero
+            : $exp:(ccall (FloatingNumType ty `postfix` "copysign") [one,x]) |]
   where
     zero | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 0
     one  | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 1

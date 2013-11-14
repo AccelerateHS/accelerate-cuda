@@ -188,7 +188,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
         $decls:declz
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         /*
@@ -211,7 +211,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex;
 
             /*
              * Generate the next set of values
@@ -232,7 +232,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y sdata Nothing)
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -258,35 +258,48 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
                 const int last = min(numElements - seg, blockDim.x) - 1;
                 $items:(z .=. sdata "last")
             }
-            $id:( if isNothing mseed then "carryIn = 1" else [] ) ;
+            $items:setCarry
         }
 
         /*
          * Finally, exclusive scans set the overall scan result (reduction value)
          */
-        if ( $exp:(cbool (isJust mseed)) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
-            $items:(setSum .=. z)
-        }
+        $items:setFinal
     }
   |]
   where
-    scan                = "scan" ++ show dir ++ maybe "1" (const []) mseed
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (argSum, totalSum)  = setters "Sum" (undefined :: Vector e)
-    (argBlk, blkSum)    = setters "Blk" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (_, z, declz)       = locals "z" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
-    ix                  = [cvar "ix"]
-    setSum              = totalSum "0"
+    scan                        = "scan" ++ show dir ++ maybe "1" (const []) mseed
+    (texIn, argIn)              = environment dev aenv
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
+    (argSum, _, totalSum)       = writeArray "Sum" (undefined :: Vector e)
+    (argBlk, _, blkSum)         = writeArray "Blk" (undefined :: Vector e)
+    (_, x, declx)               = locals "x" (undefined :: e)
+    (_, y, decly)               = locals "y" (undefined :: e)
+    (_, z, declz)               = locals "z" (undefined :: e)
+    (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                          = [cvar "ix"]
+    setSum                      = totalSum "0"
+
+    -- depending on whether we are inclusive/exclusive scans
+    setCarry
+      | isNothing mseed         = [[citem| carryIn = 1; |]]
+      | otherwise               = []
+
+    setFinal
+      | isNothing mseed         = []
+      | otherwise               = [[citem| if ( threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
+                                               $items:(setSum .=. z)
+                                           } |]]
 
     -- accessing neighbouring blocks
     firstBlock          = if dir == L then "0" else "gridDim.x - 1"
     lastBlock           = if dir == R then "0" else "gridDim.x - 1"
     prevBlock           = if dir == L then "blockIdx.x - 1" else "blockIdx.x + 1"
+
+    firstIndex
+      | dir == L        = [cexp| start + seg |]
+      | otherwise       = [cexp| end - seg - 1 |]
 
     carryIn
       | isJust mseed    = [cexp| threadIdx.x == 0 |]
@@ -342,7 +355,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
         $decls:decly
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         const int start         = blockIdx.x * intervalSize;
@@ -355,7 +368,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex ;
 
             /*
              * Read in new values, combine with carry-in
@@ -372,7 +385,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y sdata Nothing)
 
             /*
              * Store the final result of the block to be carried in
@@ -393,14 +406,18 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
     }
   |]
   where
-    scan                = "scan" ++ show dir ++ "Up"
-    (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters "Out" (undefined :: Vector e)
-    (_, x, declx)       = locals "x" (undefined :: e)
-    (_, y, decly)       = locals "y" (undefined :: e)
-    (sh, _, _)          = locals "sh" (undefined :: DIM1)
-    (smem, sdata)       = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
-    ix                  = [cvar "ix"]
+    scan                        = "scan" ++ show dir ++ "Up"
+    (texIn, argIn)              = environment dev aenv
+    (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
+    (_, x, declx)               = locals "x" (undefined :: e)
+    (_, y, decly)               = locals "y" (undefined :: e)
+    (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    ix                          = [cvar "ix"]
+
+    firstIndex
+      | dir == L                = [cexp| start + seg |]
+      | otherwise               = [cexp| end - seg - 1 |]
 
 
 -- Second step of the upsweep phase: scan the interval sums to produce carry-in
@@ -415,7 +432,7 @@ mkScanUp2
     -> Maybe (CUExp aenv e)
     -> CUTranslSkel aenv (Vector e)
 mkScanUp2 dir dev aenv f z
-  = let (_, get) = getters "Blk" (undefined :: Vector e)
+  = let (_, get) = readArray "Blk" (undefined :: Vector e)
     in  mkScan dir dev aenv f z get
 
 
@@ -429,7 +446,7 @@ scanBlock
     -> [C.Exp] -> [C.Exp]
     -> (Name -> [C.Exp])
     -> Maybe C.Exp
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlock dev f x0 x1 sdata mlim
   | shflOK dev (undefined :: e) = error "shfl-scan"
   | otherwise                   = scanBlockTree dev f x0 x1 sdata mlim
@@ -447,7 +464,7 @@ scanBlockTree
     -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
     pow2 :: Int -> Int
@@ -458,7 +475,7 @@ scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. max
       | Just m <- mlim  = [cexp| threadIdx.x >= $int:n && threadIdx.x < $exp:m |]
       | otherwise       = [cexp| threadIdx.x >= $int:n |]
 
-    scan n = [cstm|
+    scan n = [citem|
       if ( blockDim.x > $int:n ) {
           if ( $exp:(inrange n) ) {
               $items:(x1 .=. sdata ("threadIdx.x - " ++ show n))

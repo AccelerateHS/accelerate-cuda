@@ -1,6 +1,6 @@
 AC_INIT([accelerate-cuda], [0.14.0.0], [accelerate-haskell@googlegroups.com])
 AC_CONFIG_SRCDIR([Data/Array/Accelerate/CUDA.hs])
-AC_CONFIG_FILES([accelerate-cuda.buildinfo cubits/accelerate_cuda_shape.h])
+AC_CONFIG_FILES([accelerate-cuda.buildinfo])
 
 AC_ARG_WITH([compiler], [Haskell compiler], [GHC=$withval],  [AC_PATH_PROG(GHC, ghc)])
 AC_ARG_WITH([nvcc],     [CUDA compiler],    [NVCC=$withval], [AC_PROG_CXX(nvcc)])
@@ -33,7 +33,6 @@ AC_HTYPE(Word,   Word, HTYPE_WORD, type_hs_word)
 AC_HTYPE(CLong,  Int,  HTYPE_LONG, type_hs_long)
 AC_HTYPE(CULong, Word, HTYPE_UNSIGNED_LONG, type_hs_unsigned_long)
 
-AC_SUBST([type_hs_int])         # array index type in accelerate_cuda_shape.h.in
 AC_SUBST([ghc_flags])
 AC_SUBST([cpp_flags])
 AC_OUTPUT

@@ -9,7 +9,6 @@
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -62,11 +61,8 @@ import Data.Int
 import Data.Word
 import Data.Maybe
 
-import Foreign.Ptr                                              ( Ptr, castPtr )
-import Foreign.Storable                                         ( Storable(..) )
 import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
-import qualified Foreign.Marshal.Array                          as F
 import qualified Data.HashMap.Strict                            as Map
 
 #include "accelerate.h"
@@ -360,7 +356,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           -- Phase 2: Re-scan the input using the carry-in value from each
           --          interval sum calculated in phase 1.
           --
-          execute kernel gamma aenv numElements (Z :. numElements, d_body, blk, d_sum) stream
+          execute kernel gamma aenv numElements (numElements, d_body, blk, d_sum) stream
 
       | otherwise
       = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
@@ -392,20 +388,27 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
                => Array sh a -> Array sh b -> CIO (Array sh c)
-    stencil2Op !arr1 !arr2 = do
-      let sh1   =  shape arr1
-          sh2   =  shape arr2
-          sh    =  sh1 `intersect` sh2
-      out       <- allocateArray sh
-      dev       <- asks deviceProperties
+    stencil2Op !arr1 !arr2
+      | Cons _ spec _ <- more
+      = let sh1         =  shape arr1
+            sh2         =  shape arr2
+            (sh, op)
+              | fromElt sh1 == fromElt sh2      = (sh1,                 spec)
+              | otherwise                       = (sh1 `intersect` sh2, kernel)
+        in do
+          out   <- allocateArray sh
+          dev   <- asks deviceProperties
 
-      if computeCapability dev < Compute 2 0
-         then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
-              marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) kernel arr2 >>
-              execute kernel gamma aenv (size sh) (out, sh1,  sh2) stream
-         else execute kernel gamma aenv (size sh) (out, arr1, arr2) stream
-      --
-      return out
+          if computeCapability dev < Compute 2 0
+             then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) op arr1 >>
+                  marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) op arr2 >>
+                  execute op gamma aenv (size sh) (out, sh1,  sh2) stream
+             else execute op gamma aenv (size sh) (out, arr1, arr2) stream
+          --
+          return out
+
+      | otherwise
+      = INTERNAL_ERROR(error) "stencil2Op" "missing stencil specialisation kernel"
 
 
 -- Scalar expression evaluation
@@ -515,7 +518,7 @@ instance ArrayElt e => Marshalable (ArrayData e) where
   marshal !ad = marshalArrayData ad
 
 instance Shape sh => Marshalable sh where
-  marshal !sh = return [CUDA.VArg sh]
+  marshal !sh = marshal (reverse (shapeToList sh))
 
 instance Marshalable a => Marshalable [a] where
   marshal = concatMapM marshal
@@ -552,24 +555,7 @@ primMarshalable(Word32)
 primMarshalable(Word64)
 primMarshalable(Float)
 primMarshalable(Double)
-primMarshalable(Ptr a)
 primMarshalable(CUDA.DevicePtr a)
-
-instance Shape sh => Storable sh where  -- undecidable, incoherent
-  sizeOf sh     = sizeOf    (undefined :: Int32) * (dim sh)
-  alignment _   = alignment (undefined :: Int32)
-  poke !p !sh   = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
-
-
--- Convert shapes into 32-bit integers for marshalling onto the device
---
-convertShape :: [Int] -> [Int32]
-convertShape [] = [1]
-convertShape sh = reverse (map convertIx sh)
-
-convertIx :: Int -> Int32
-convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
-              $ fromIntegral ix
 
 
 -- Note [Array references in scalar code]
