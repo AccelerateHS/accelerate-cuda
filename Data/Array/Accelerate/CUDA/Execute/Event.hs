@@ -1,4 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns  #-}
+{-# LANGUAGE MagicHash     #-}
+{-# LANGUAGE UnboxedTuples #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Event
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -19,10 +21,11 @@ module Data.Array.Accelerate.CUDA.Execute.Event (
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
-import System.Mem.Weak                                          ( addFinalizer )
-import Foreign.CUDA.Driver.Event                                ( Event )
+import Foreign.CUDA.Driver.Event                                ( Event(..) )
 import Foreign.CUDA.Driver.Stream                               ( Stream )
 import qualified Foreign.CUDA.Driver.Event                      as Event
+
+import GHC.Base
 
 
 -- Create a new event that will be automatically garbage collected. The event is
@@ -32,7 +35,7 @@ import qualified Foreign.CUDA.Driver.Event                      as Event
 create :: IO Event
 create = do
   event <- Event.create [Event.DisableTiming]
-  addFinalizer event (Event.destroy event)
+  addEventFinalizer event (Event.destroy event)
   return event
 
 -- Create a new event marker that will be filled once execution in the specified
@@ -62,9 +65,16 @@ block :: Event -> IO ()
 block = Event.block
 
 
+-- Add a finaliser to an event token
+--
+addEventFinalizer :: Event -> IO () -> IO ()
+addEventFinalizer e@(Event e#) f = IO $ \s ->
+  case mkWeak# e# e f s of (# s', _w #) -> (# s', () #)
+
+
 -- Debug
 -- -----
-
+{--
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
 trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
@@ -72,4 +82,5 @@ trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
 {-# INLINE message #-}
 message :: String -> IO ()
 message s = s `trace` return ()
+--}
 
