@@ -427,42 +427,53 @@ codegenOpenExp dev aenv = cvtE
           -> DelayedOpenExp env aenv a                  -- initial value
           -> Val env
           -> Gen [C.Exp]
-    while p f x env
-      = do x'                   <- cvtE x env
-           CUFun1 dce_p done    <- lift (codegenOpenFun1 dev env aenv p)
-           CUFun1 dce_f body    <- lift (codegenOpenFun1 dev env aenv f)
+    while test step x env
+      | Lam (Body p)    <- test
+      , Lam (Body f)    <- step
+      = do
+           -- Generate code for the initial value, then bind this to a fresh
+           -- (mutable) variable. We need build the declarations ourselves, and
+           -- twiddle the names a bit to avoid clobbering.
+           --
+           x'           <- cvtE x env
+           var_acc      <- lift fresh
+           var_ok       <- lift fresh
 
-           -- Need to keep any def-use information gathered in the predicate and
-           -- body functions. This is done with a dodgy hack, because we know
-           -- the names of the special temporaries used by codegenOpenFun1...
-           let restore set      = mapM_ (use . snd)
-                                $ filter fst
-                                $ set [ cvar ("undefined_x"++show (i::Int)) | i <- [0..] ]
-           restore dce_p
-           restore dce_f
+           let (tn_acc, acc, _)  = locals ('l':var_acc) (undefined :: a)
+               (tn_ok,  ok,  _)  = locals ('l':var_ok)  (undefined :: Bool)
 
-           -- Need some fresh variables for the loop counters. In the local
-           -- declarations we need to twiddle the name a bit to avoid later
-           -- clobbering (for a name v1, locals will generate v10, v11...)
-           var_x                <- lift fresh
-           var_ok               <- lift fresh
+           -- Generate code for the predicate and body expressions, with the new
+           -- names baked in directly. We can't use 'codegenFun1', because
+           -- def-use analysis won't be able to see into this new function.
+           --
+           -- However, we do need to generate the function with a clean set of
+           -- local bindings, and extract and new declarations afterwards.
+           --
+           let cvtF :: forall env t. Elt t => DelayedOpenExp env aenv t -> Val env -> Gen ([C.BlockItem], [C.Exp])
+               cvtF e env = do
+                 old  <- StateT $ \s -> return ( localBindings s, s { localBindings = []  } )
+                 e'   <- cvtE e env
+                 env' <- StateT $ \s -> return ( localBindings s, s { localBindings = old } )
+                 return (reverse env', e')
 
-           let (_, ok,  declok)  = locals ('l':var_ok) (undefined :: Bool)
-               (_, acc, declacc) = locals ('l':var_x)  (undefined :: a)
+           p'   <- cvtF p (env `Push` acc)
+           f'   <- cvtF f (env `Push` acc)
 
-               header            = map C.BlockDecl (declok ++ declacc)
-               loop              =
-                   [citem| {
-                       $items:(dce_f acc .=. x')
-                       $items:(ok        .=. done x')
-                       while ( $exp:(single "while" ok) ) {
-                           $items:(dce_f acc .=. body acc)
-                           $items:(ok        .=. done acc)
-                      }
-                   }|]
+           -- Piece it all together. Note that declarations are added to the
+           -- localBindings in reverse order.
+           let loop = [citem| while ( $exp:(single "while" ok) ) {
+                                  $items:(acc .=. f')
+                                  $items:(ok  .=. p')
+                              } |]
+                    : (ok .=. p')
+                   ++ map     (\(t,n)   -> [citem| $ty:t $id:n ; |])      tn_ok
+                   ++ zipWith (\(t,n) v -> [citem| $ty:t $id:n = $v ; |]) tn_acc x'
 
-           modify (\st -> st { localBindings = loop : header ++ localBindings st })
+           modify (\s -> s { localBindings = loop ++ localBindings s })
            return acc
+
+      | otherwise
+      = error "Would you say we'd be venturing into a zone of danger?"
 
     -- Restrict indices based on a slice specification. In the SliceAll case we
     -- elide the presence of IndexAny from the head of slx, as this is not
