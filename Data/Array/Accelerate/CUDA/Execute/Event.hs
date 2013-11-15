@@ -80,7 +80,7 @@ addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
 trace :: String -> IO a -> IO a
 trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
 
-{-# INLINE message #-}
-message :: String -> IO ()
-message s = s `trace` return ()
+-- {-# INLINE message #-}
+-- message :: String -> IO ()
+-- message s = s `trace` return ()
 

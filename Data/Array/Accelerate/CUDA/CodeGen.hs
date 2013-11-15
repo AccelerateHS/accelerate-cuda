@@ -4,6 +4,7 @@
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
