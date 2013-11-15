@@ -360,9 +360,8 @@ codegenOpenExp dev aenv = cvtE
     --
     elet :: DelayedOpenExp env aenv bnd -> DelayedOpenExp (env, bnd) aenv body -> Val env -> Gen [C.Exp]
     elet bnd body env = do
-      bnd'      <- cvtE bnd env
-      x         <- pushEnv bnd bnd'
-      body'     <- cvtE body (env `Push` x)
+      bnd'      <- cvtE bnd env >>= pushEnv bnd
+      body'     <- cvtE body (env `Push` bnd')
       return body'
 
     -- Convert an open expression into a sequence of C expressions. We retain
