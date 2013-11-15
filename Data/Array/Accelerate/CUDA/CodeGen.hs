@@ -435,7 +435,9 @@ codegenOpenExp dev aenv = cvtE
            -- Need to keep any def-use information gathered in the predicate and
            -- body functions. This is done with a dodgy hack, because we know
            -- the names of the special temporaries used by codegenOpenFun1...
-           let restore set      = mapM_ (use . snd) $ set [ cvar ("undefined_x"++show (i::Int)) | i <- [0..] ]
+           let restore set      = mapM_ (use . snd)
+                                $ filter fst
+                                $ set [ cvar ("undefined_x"++show (i::Int)) | i <- [0..] ]
            restore dce_p
            restore dce_f
 
