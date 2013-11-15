@@ -178,32 +178,28 @@ codegenAcc dev (Manifest pacc) aenv
 -- Generate code for scalar function abstractions.
 --
 -- This is quite awkward: we have an outer monad to generate fresh variable
--- names, but since we know that even if the function in applied many times
--- (for example, collective operations such as 'fold' and 'scan'), the variables
--- will not shadow each other. Thus, we don't need fresh names at _every_
--- invocation site, so we hack this a bit to return a pure closure.
+-- names, but since we know that even if the function in applied many times (for
+-- example, collective operations such as 'fold' and 'scan'), the variables will
+-- not shadow each other. Thus, we don't need fresh names at _every_ invocation
+-- site, so we hack this a bit to return a pure closure.
 --
--- Still, there has got to be a cleaner way to do this...
+-- Note that the implementation of def-use analysis used for dead code
+-- elimination requires that we always generate code for closed functions.
+-- Additionally, we require two passes over the function: once when performing
+-- the analysis, and a second time when instantiating the function in the
+-- skeleton.
 --
-codegenFun1 :: DeviceProperties -> Gamma aenv -> DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
-codegenFun1 dev = codegenOpenFun1 dev Empty
-
-codegenFun2 :: DeviceProperties -> Gamma aenv -> DelayedFun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
-codegenFun2 dev = codegenOpenFun2 dev Empty
-
-
-codegenOpenFun1
-    :: forall env aenv a b. DeviceProperties
-    -> Val env
+codegenFun1
+    :: forall aenv a b. DeviceProperties
     -> Gamma aenv
-    -> DelayedOpenFun env aenv (a -> b)
-    -> CUDA (CUOpenFun1 env aenv (a -> b))
-codegenOpenFun1 dev env aenv fun
+    -> DelayedFun aenv (a -> b)
+    -> CUDA (CUFun1 aenv (a -> b))
+codegenFun1 dev aenv fun
   | Lam (Body f) <- fun
   = let
         go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
         go x = do
-          code  <- mapM use =<< codegenOpenExp dev aenv f (env `Push` map rvalue x)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x)
           env'  <- getEnv
           return (env', code)
 
@@ -219,18 +215,18 @@ codegenOpenFun1 dev env aenv fun
   | otherwise
   = INTERNAL_ERROR(error) "codegenFun1" "expected unary function"
 
-codegenOpenFun2
-    :: forall env aenv a b c. DeviceProperties
-    -> Val env
+
+codegenFun2
+    :: forall aenv a b c. DeviceProperties
     -> Gamma aenv
-    -> DelayedOpenFun env aenv (a -> b -> c)
-    -> CUDA (CUOpenFun2 env  aenv (a -> b -> c))
-codegenOpenFun2 dev env aenv fun
+    -> DelayedFun aenv (a -> b -> c)
+    -> CUDA (CUFun2 aenv (a -> b -> c))
+codegenFun2 dev aenv fun
   | Lam (Lam (Body f)) <- fun
   = let
         go :: (Rvalue x, Rvalue y) => [x] -> [y] -> Gen ([C.BlockItem], [C.Exp])
         go x y = do
-          code  <- mapM use =<< codegenOpenExp dev aenv f (env `Push` map rvalue x `Push` map rvalue y)
+          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x `Push` map rvalue y)
           env'  <- getEnv
           return (env', code)
 
