@@ -107,9 +107,7 @@ getEnv = reverse `fmap` gets localBindings
 -- Generate a fresh variable name
 --
 fresh :: CUDA String
-fresh =
-  StateT $ \s -> let n = counter s
-                 in  return ('v':show n, s { counter = n+1 })
+fresh = state $ \s -> let n = counter s in ('v':show n, s { counter = n+1 })
 
 -- Add an expression of given type to the environment and return the (new,
 -- unique) binding name that can be used in place of the thing just bound.

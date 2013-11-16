@@ -448,9 +448,9 @@ codegenOpenExp dev aenv = cvtE
            --
            let cvtF :: forall env t. Elt t => DelayedOpenExp env aenv t -> Val env -> Gen ([C.BlockItem], [C.Exp])
                cvtF e env = do
-                 old  <- StateT $ \s -> return ( localBindings s, s { localBindings = []  } )
+                 old  <- state (\s -> ( localBindings s, s { localBindings = []  } ))
                  e'   <- cvtE e env
-                 env' <- StateT $ \s -> return ( localBindings s, s { localBindings = old } )
+                 env' <- state (\s -> ( localBindings s, s { localBindings = old } ))
                  return (reverse env', e')
 
            p'   <- cvtF p (env `Push` acc)

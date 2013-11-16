@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Stencil.Extra (
 import Prelude                                          hiding ( and, zipWith, zipWith3 )
 import Data.List                                        ( transpose )
 import Control.Monad
-import Control.Monad.State.Strict                       ( State, StateT(..), evalState )
+import Control.Monad.State.Strict
 
 -- language-c
 import Language.C.Quote.CUDA
@@ -150,7 +150,7 @@ withNameGen :: Name -> Gen a -> a
 withNameGen base f = evalState f (base,0)
 
 fresh :: Gen Name
-fresh = StateT $ \(base,n) -> return (base ++ show n, (base,n+1))
+fresh = state $ \(base,n) -> (base ++ show n, (base,n+1))
 
 
 -- Boundary conditions
@@ -251,9 +251,9 @@ readStencil dev grp dummy
 
         dim             = expDim (undefined :: Exp aenv sh)
         sh'             = cshape dim sh
-        get ix          = zipWith (\t a -> indexArray dev t (cvar a) (rvalue ix)) (eltType (undefined :: e)) arrs
+        fetch ix        = zipWith (\t a -> indexArray dev t (cvar a) (rvalue ix)) (eltType (undefined :: e)) arrs
     in
-    ( decl, args, sh', get )
+    ( decl, args, sh', fetch )
 
 
 -- Prelude'
