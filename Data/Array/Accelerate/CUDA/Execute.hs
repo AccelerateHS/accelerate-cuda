@@ -262,10 +262,14 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     fold1Op !sh@(_ :. sz)
       = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
-      $ foldOp sh
+      $ foldCore sh
 
     foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     foldOp !(!sh :. sz)
+      = foldCore ((listToShape . map (max 1) . shapeToList $ sh) :. sz)
+
+    foldCore :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
+    foldCore !(!sh :. sz)
       | dim sh > 0              = executeOp sh
       | otherwise
       = let !numElements        = size sh * sz

@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cint, cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, ctoIndex, cfromIndex,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, cindexTail, ctoIndex, cfromIndex,
   readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
@@ -164,6 +164,10 @@ cshape' dim sh = [ (sh ++ '_':show i) | i <- [dim-1, dim-2 .. 0] ]
 -- Get the innermost index of a shape/index
 cindexHead :: Rvalue r => [r] -> C.Exp
 cindexHead = rvalue . last
+
+-- Get the tail of a shape/index
+cindexTail :: Rvalue r => [r] -> [C.Exp]
+cindexTail = map rvalue . init
 
 -- generate code that calculates the product of the list of expressions
 csize :: Rvalue r => [r] -> C.Exp

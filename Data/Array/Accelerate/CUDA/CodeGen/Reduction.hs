@@ -242,7 +242,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
 
         $items:(sh .=. shIn)
 
-        const int numIntervals  = $exp:(csize shOut);
+        const int numIntervals  = $exp:(csize (cindexTail sh));
         const int intervalSize  = $exp:(cindexHead sh);
               int ix;
               int seg;
@@ -341,15 +341,16 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
     --
     mapseed (CUExp seed)
-      = [citem|  if ( intervalSize == 0 ) {
+      = [citem|  if ( intervalSize == 0 || numIntervals == 0 ) {
                      const int gridSize  = $exp:(gridSize dev);
 
                      for ( ix = $exp:(threadIdx dev)
-                         ; ix < numIntervals
+                         ; ix < $exp:(csize shOut)
                          ; ix += gridSize )
                      {
                          $items:(setOut "ix" .=. seed)
                      }
+                     return;
                  } |] :[]
     --
     exclusive_finish (CUExp seed)
