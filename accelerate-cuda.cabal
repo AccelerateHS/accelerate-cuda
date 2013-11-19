@@ -100,7 +100,7 @@ Library
                         cryptohash              >= 0.7,
                         cuda                    >= 0.5.1.1,
                         directory               >= 1.0,
-                        fclabels                >= 1.0,
+                        fclabels                >= 2.0,
                         filepath                >= 1.0,
                         hashable                >= 1.1,
                         hashtables              >= 1.0.1,
