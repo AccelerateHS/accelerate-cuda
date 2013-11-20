@@ -67,6 +67,8 @@ instance Binary CUDA.Compute where
 -- Interface -------------------------------------------------------------------
 -- ---------                                                                  --
 
+type HashTable key val = HT.BasicHashTable key val
+
 data KernelTable = KT {-# UNPACK #-} !ProgramCache      -- first level, in-memory cache
                       {-# UNPACK #-} !PersistentCache   -- second level, on-disk cache
 
@@ -76,7 +78,7 @@ new = do
   cacheDir <- cacheDirectory
   createDirectoryIfMissing True cacheDir
   --
-  local         <- HT.new
+  local         <- newMVar =<< HT.new
   persistent    <- restore (cacheDir </> "persistent.db")
   --
   return        $! KT local persistent
@@ -86,7 +88,7 @@ new = do
 -- the persistent cache, it is loaded and linked into the current context.
 --
 lookup :: Context -> KernelTable -> KernelKey -> IO (Maybe KernelEntry)
-lookup context (KT kt pt) !key = do
+lookup context (KT !kt_ref !pt_ref) !key = withMVar kt_ref $ \kt -> do
   -- First check the local cache. If we get a hit, this could be:
   --   a) currently compiling
   --   b) compiled, but not linked into the current context
@@ -95,7 +97,7 @@ lookup context (KT kt pt) !key = do
   v1    <- HT.lookup kt key
   case v1 of
     Just _      -> return v1
-    Nothing     -> do
+    Nothing     -> withMVar pt_ref $ \pt -> do
 
     -- Check the persistent cache. If found, read in the associated object file
     -- and link it into the current context. Also add to the first-level cache.
@@ -124,8 +126,9 @@ lookup context (KT kt pt) !key = do
 --      exists there already? Would require updating that hash table as new
 --      entries are added, which the functions currently do not do.
 --
+{-# INLINE insert #-}
 insert :: KernelTable -> KernelKey -> KernelEntry -> IO ()
-insert (KT kt _) !key !val = HT.insert kt key val
+insert (KT !kt_ref !_) !key !val = withMVar kt_ref $ \kt -> HT.insert kt key val
 
 
 -- Unload a kernel module from the specified context
@@ -160,7 +163,7 @@ module_finalizer weak_ctx key mdl = do
 -- computation and no more, but we can not do that. Instead, this is keyed to
 -- the generated kernel code.
 --
-type ProgramCache = HT.BasicHashTable KernelKey KernelEntry
+type ProgramCache = MVar ( HashTable KernelKey KernelEntry )
 
 type KernelKey    = (CUDA.Compute, ByteString)
 data KernelEntry
@@ -185,12 +188,16 @@ data KernelEntry
 -- Stash compiled code into the user's home directory so that they are available
 -- across separate runs of the program.
 --
--- TLM: we don't have any migration or versioning policy here, so cache files
+-- TLM: We don't have any migration or versioning policy here, so cache files
 --      will be kept around indefinitely. This can easily clutter the cache by
 --      generating many similar kernels that differ only by, for example, an
 --      embedded constant value.
+--
+--      One way to handle this is to put a maximum size on the cache (either as
+--      disk space consumed or number of kernels) and once the maximum size is
+--      reached keep only the most recently used files.
 
-type PersistentCache = HT.BasicHashTable KernelKey ()
+type PersistentCache = MVar ( HashTable KernelKey () )
 
 
 -- The root directory of where the various persistent cache files live; the
@@ -288,7 +295,7 @@ getMany n = go n []
 -- file is created, so that 'persist' can always append elements.
 --
 restore :: FilePath -> IO PersistentCache
-restore db = do
+restore !db = do
   D.when D.flush_cache $ do
     message "deleting persistent cache"
     cacheDir <- cacheDirectory
@@ -296,7 +303,7 @@ restore db = do
     createDirectoryIfMissing True cacheDir
   --
   exists <- doesFileExist db
-  case exists of
+  pt     <- case exists of
     False       -> encodeFile db (0::Int) >> HT.new
     True        -> do
       store         <- L.readFile db
@@ -309,6 +316,8 @@ restore db = do
       message $ "persist/restore: " ++ shows n " entries"
       go (runGet (getMany n) rest)
       evaluate pt
+  --
+  newMVar pt
 
 
 -- Append a single value to the persistent cache.
@@ -316,8 +325,8 @@ restore db = do
 -- This moves the compiled object file (first argument) to the appropriate
 -- location, and updates the database on disk.
 --
-persist :: FilePath -> KernelKey -> IO ()
-persist !cubin !key = do
+persist :: KernelTable -> FilePath -> KernelKey -> IO ()
+persist (KT !_ !pt_ref) !cubin !key = withMVar pt_ref $ \_ -> do
   cacheDir <- cacheDirectory
   let db        = cacheDir </> "persistent.db"
       cacheFile = cacheDir </> cacheFilePath key

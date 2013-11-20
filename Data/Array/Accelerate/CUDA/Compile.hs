@@ -394,7 +394,7 @@ link context table key =
         -- cache
         --
         KT.insert table key $! KernelObject bin (FL.singleton ctx mdl)
-        KT.persist cubin key
+        KT.persist table cubin key
 
         -- Remove temporary build products.
         -- If compiling kernels with debugging symbols, leave the source files
