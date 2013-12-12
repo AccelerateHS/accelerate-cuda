@@ -1,6 +1,5 @@
-{-# LANGUAGE BangPatterns  #-}
-{-# LANGUAGE MagicHash     #-}
-{-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP          #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Event
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -13,7 +12,7 @@
 --
 module Data.Array.Accelerate.CUDA.Execute.Event (
 
-  Event, create, waypoint, after, block,
+  Event, create, waypoint, after, block, Event.destroy,
 
 ) where
 
@@ -22,11 +21,8 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Foreign.CUDA.Driver.Event                                ( Event(..) )
-import Foreign.CUDA.Driver.Stream                               ( Stream )
+import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
 import qualified Foreign.CUDA.Driver.Event                      as Event
-
-import GHC.Base
-import GHC.Ptr
 
 
 -- Create a new event that will be automatically garbage collected. The event is
@@ -36,7 +32,7 @@ import GHC.Ptr
 create :: IO Event
 create = do
   event <- Event.create [Event.DisableTiming]
-  addEventFinalizer event $ trace ("destroy " ++ show event) (Event.destroy event)
+  message ("create " ++ showEvent event)
   return event
 
 -- Create a new event marker that will be filled once execution in the specified
@@ -47,7 +43,7 @@ waypoint :: Stream -> IO Event
 waypoint stream = do
   event <- create
   Event.record event (Just stream)
---  message $ "waypoint " ++ show event ++ " in " ++ show stream
+  message $ "waypoint " ++ showEvent event ++ " in " ++ showStream stream
   return event
 
 -- Make all future work submitted to the given stream wait until the event
@@ -56,7 +52,7 @@ waypoint stream = do
 {-# INLINE after #-}
 after :: Event -> Stream -> IO ()
 after event stream = do
---  message $ "after " ++ show event ++ " in " ++ show stream
+  message $ "after " ++ showEvent event ++ " in " ++ showStream stream
   Event.wait event (Just stream) []
 
 -- Block the calling thread until the event is recorded
@@ -68,9 +64,9 @@ block = Event.block
 
 -- Add a finaliser to an event token
 --
-addEventFinalizer :: Event -> IO () -> IO ()
-addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
-  case mkWeak# e# e f s of (# s', _w #) -> (# s', () #)
+-- addEventFinalizer :: Event -> IO () -> IO ()
+-- addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
+--   case mkWeak# e# e f s of (# s', _w #) -> (# s', () #)
 
 
 -- Debug
@@ -78,9 +74,21 @@ addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
-trace msg next = D.message D.dump_exec ("event: " ++ msg) >> next
+trace msg next = do
+#ifdef ACCELERATE_DEBUG
+  D.when D.verbose $ D.message D.dump_exec ("event: " ++ msg)
+#endif
+  next
 
--- {-# INLINE message #-}
--- message :: String -> IO ()
--- message s = s `trace` return ()
+{-# INLINE message #-}
+message :: String -> IO ()
+message s = s `trace` return ()
+
+{-# INLINE showEvent #-}
+showEvent :: Event -> String
+showEvent (Event e) = show e
+
+{-# INLINE showStream #-}
+showStream :: Stream -> String
+showStream (Stream s) = show s
 

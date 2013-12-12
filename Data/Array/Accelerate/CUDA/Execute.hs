@@ -108,11 +108,11 @@ wait (Async e x) = liftIO $ Event.block e >> return x
 
 -- Execute the given computation in a unique execution stream.
 --
-streaming :: (Stream -> CIO a) -> CIO (Async a)
-streaming action = do
+streaming :: (Stream -> CIO a) -> (Async a -> CIO b) -> CIO b
+streaming first second = do
   context   <- asks activeContext
   reservoir <- gets streamReservoir
-  uncurry Async <$> Stream.streaming context reservoir action
+  Stream.streaming context reservoir first (\e a -> second (Async e a))
 
 
 -- Array expression evaluation
@@ -132,20 +132,21 @@ streaming action = do
 --    skeleton are invoked
 --
 executeAcc :: Arrays a => ExecAcc a -> CIO a
-executeAcc !acc = wait =<< streaming (executeOpenAcc acc Aempty)
+executeAcc !acc = streaming (executeOpenAcc acc Aempty) wait
 
 executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
 executeAfun1 !afun !arrs = do
-  Async event () <- streaming $ \st -> useArrays (arrays arrs) (fromArr arrs) st
-  executeOpenAfun1 afun Aempty (Async event arrs)
+  streaming (useArrays (arrays arrs) (fromArr arrs))
+            (\(Async event ()) -> executeOpenAfun1 afun Aempty (Async event arrs))
   where
     useArrays :: ArraysR arrs -> arrs -> Stream -> CIO ()
     useArrays ArraysRunit         ()       _  = return ()
     useArrays (ArraysRpair r1 r0) (a1, a0) st = useArrays r1 a1 st >> useArrays r0 a0 st
     useArrays ArraysRarray        arr      st = useArrayAsync arr (Just st)
 
+
 executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Aval aenv -> Async a -> CIO b
-executeOpenAfun1 (Alam (Abody f)) aenv x = wait =<< streaming (executeOpenAcc f (aenv `Apush` x))
+executeOpenAfun1 (Alam (Abody f)) aenv x = streaming (executeOpenAcc f (aenv `Apush` x)) wait
 executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
 
 
@@ -168,10 +169,10 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
       -- Environment manipulation
       Avar ix                   -> after stream (aprj ix aenv)
-      Alet bnd body             -> streamA bnd >>= \x -> executeOpenAcc body (aenv `Apush` x) stream
+      Alet bnd body             -> streaming (executeOpenAcc bnd aenv) (\x -> executeOpenAcc body (aenv `Apush` x) stream)
+      Apply f a                 -> streaming (executeOpenAcc a aenv)   (executeOpenAfun1 f aenv)
       Atuple tup                -> toTuple <$> travT tup
       Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
-      Apply f a                 -> executeOpenAfun1 f aenv =<< streamA a
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
       Awhile p f a              -> awhile p f =<< travA a
 
@@ -211,9 +212,6 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
-
-    streamA :: ExecOpenAcc aenv a -> CIO (Async a)
-    streamA !acc = streaming $ \st -> executeOpenAcc acc aenv st
 
     travE :: ExecExp aenv t -> CIO t
     travE !exp = executeExp exp aenv stream

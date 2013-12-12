@@ -1,6 +1,5 @@
-{-# LANGUAGE BangPatterns  #-}
-{-# LANGUAGE MagicHash     #-}
-{-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP          #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
 -- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -37,9 +36,6 @@ import qualified Foreign.CUDA.Driver.Stream                     as Stream
 
 import qualified Data.HashTable.IO                              as HT
 
-import GHC.Base
-import GHC.Ptr
-
 
 -- Representation
 -- --------------
@@ -58,15 +54,21 @@ data Reservoir          = Reservoir {-# UNPACK #-} !RSV
 -- Executing operations in streams
 -- -------------------------------
 
--- Execute an operation in a unique execution stream.
+-- Execute an operation in a unique execution stream. The (asynchronous) result
+-- is passed to a second operation together with an event that will be signalled
+-- once the operation is complete. The stream and event are released after the
+-- second operation completes.
 --
 {-# INLINE streaming #-}
-streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> m (Event, a)
-streaming !ctx !rsv !action = do
+streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> (Event -> a -> m b) -> m b
+streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !action !after = do
   stream <- liftIO $ create ctx rsv
-  result <- action stream
+  first  <- action stream
   end    <- liftIO $ Event.waypoint stream
-  return (end, result)
+  final  <- after end first
+  liftIO $! destroy (weakContext ctx) weak_rsv stream
+  liftIO $! Event.destroy end
+  return final
 
 
 -- Primitive operations
@@ -88,11 +90,11 @@ new = do
 --
 {-# INLINE create #-}
 create :: Context -> Reservoir -> IO Stream
-create !ctx (Reservoir !ref !weak_rsv) = withMVar ref $ \tbl -> do
+create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
   let key = deviceContext ctx
   --
-  old    <- HT.lookup tbl key
-  stream <- case old of
+  ms    <- HT.lookup tbl key
+  case ms of
     Nothing -> do
       stream <- Stream.create []
       message ("new " ++ showStream stream)
@@ -104,19 +106,17 @@ create !ctx (Reservoir !ref !weak_rsv) = withMVar ref $ \tbl -> do
         FL.Cons () s ss -> HT.insert tbl key (FL () s ss)
         --
       return stream
-  --
-  addStreamFinalizer stream $ merge (weakContext ctx) weak_rsv stream
-  return stream
 
 
--- Merge a stream back into the reservoir. This is done asynchronously, once all
+-- Merge a stream back into the reservoir. This must only be done once all
 -- pending operations in the stream have completed.
 --
-{-# INLINE merge #-}
-merge :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
-merge !weak_ctx !weak_rsv !stream = do
-  -- wait for all preceding operations submitted to the stream to complete
-  Stream.block stream
+{-# INLINE destroy #-}
+destroy :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
+destroy !weak_ctx !weak_rsv !stream = do
+  -- Wait for all preceding operations submitted to the stream to complete. Not
+  -- necessary because of the setup of 'streaming'.
+  -- Stream.block stream
 
   -- Now check whether the context and reservoir are still active. Return
   -- the stream back to the reservoir for later reuse if we can, otherwise
@@ -128,8 +128,8 @@ merge !weak_ctx !weak_rsv !stream = do
       --
       mr <- deRefWeak weak_rsv
       case mr of
-        Nothing   -> trace ("merge/free " ++ showStream stream) $ Stream.destroy stream
-        Just ref  -> trace ("merge/save " ++ showStream stream) $ withMVar ref $ \tbl -> do
+        Nothing   -> trace ("destroy/free " ++ showStream stream) $ Stream.destroy stream
+        Just ref  -> trace ("destroy/save " ++ showStream stream) $ withMVar ref $ \tbl -> do
           --
           ms <- HT.lookup tbl ctx
           case ms of
@@ -139,9 +139,9 @@ merge !weak_ctx !weak_rsv !stream = do
 
 -- Add a finaliser to an execution stream
 --
-addStreamFinalizer :: Stream -> IO () -> IO ()
-addStreamFinalizer st@(Stream (Ptr st#)) f = IO $ \s ->
-  case mkWeak# st# st f s of (# s', _w #) -> (# s', () #)
+-- addStreamFinalizer :: Stream -> IO () -> IO ()
+-- addStreamFinalizer st@(Stream (Ptr st#)) f = IO $ \s ->
+--   case mkWeak# st# st f s of (# s', _w #) -> (# s', () #)
 
 
 -- Destroy all streams in the reservoir.
@@ -160,7 +160,11 @@ flush !tbl =
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
-trace msg next = D.message D.dump_exec ("stream: " ++ msg) >> next
+trace msg next = do
+#ifdef ACCELERATE_DEBUG
+  D.when D.verbose $ D.message D.dump_exec ("stream: " ++ msg)
+#endif
+  next
 
 {-# INLINE message #-}
 message :: String -> IO ()
@@ -168,5 +172,5 @@ message s = s `trace` return ()
 
 {-# INLINE showStream #-}
 showStream :: Stream -> String
-showStream (Stream.Stream s) = show s
+showStream (Stream s) = show s
 
