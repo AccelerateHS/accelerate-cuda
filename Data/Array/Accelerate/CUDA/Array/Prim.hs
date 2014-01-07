@@ -439,5 +439,5 @@ transfer name bytes action
                                      ++ showBytes bytes ++ " @ " ++ showRate bytes gpuTime ++ ", "
                                      ++ D.elapsed gpuTime cpuTime
     in
-    D.timed D.dump_gc msg action
+    D.timed D.dump_gc msg Nothing action
 

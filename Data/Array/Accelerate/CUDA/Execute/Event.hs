@@ -25,7 +25,7 @@ import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
 import qualified Foreign.CUDA.Driver.Event                      as Event
 
 
--- Create a new event that will be automatically garbage collected. The event is
+-- Create a new event. It will not be automatically garbage collected, and is
 -- not suitable for timing purposes.
 --
 {-# INLINE create #-}

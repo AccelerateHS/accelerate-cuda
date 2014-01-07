@@ -40,6 +40,7 @@ import System.CPUTime
 import System.IO.Unsafe
 import System.Environment
 import System.Console.GetOpt
+import Foreign.CUDA.Driver.Stream                       ( Stream )
 import qualified Foreign.CUDA.Driver.Event              as Event
 
 import GHC.Float
@@ -178,18 +179,19 @@ timed
     :: MonadIO m
     => (Flags :-> Bool)
     -> (Double -> Double -> String)
+    -> Maybe Stream
     -> m ()
     -> m ()
-timed _f _str action
+timed _f _str _stream action
 #ifdef ACCELERATE_DEBUG
   | mode _f
   = do
       gpuBegin  <- liftIO $ Event.create []
       gpuEnd    <- liftIO $ Event.create []
       cpuBegin  <- liftIO getCPUTime
-      liftIO $ Event.record gpuBegin Nothing
+      liftIO $ Event.record gpuBegin _stream
       action
-      liftIO $ Event.record gpuEnd Nothing
+      liftIO $ Event.record gpuEnd _stream
       cpuEnd    <- liftIO getCPUTime
 
       -- Wait for the GPU to finish executing then display the timing execution

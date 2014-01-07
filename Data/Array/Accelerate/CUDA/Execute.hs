@@ -657,7 +657,7 @@ execute !kernel !gamma !aenv !n !a !stream = do
 --
 launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> Stream -> CIO ()
 launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
-  = D.timed D.dump_exec msg
+  = D.timed D.dump_exec msg (Just stream)
   $ liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem (Just stream) args
   where
     msg gpuTime cpuTime
