@@ -59,7 +59,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  CUDA(..), Context, create, destroy,
+  CUDA(..), Context, create, destroy, defaultBackend, 
 
 ) where
 
@@ -250,6 +250,9 @@ config =  Phase
 -- -------------
 
 data CUDA = CUDA { withContext :: !Context }
+
+defaultBackend :: CUDA
+defaultBackend = CUDA defaultContext
 
 data CUDARemote a = CUR
   { remoteContext :: !Context
