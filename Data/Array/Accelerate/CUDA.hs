@@ -59,7 +59,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  CUDA(..), Context, create, destroy, defaultBackend, 
+  CUDA(..), Context, create, destroy, defaultBackend
 
 ) where
 

@@ -25,6 +25,7 @@ module Data.Array.Accelerate.CUDA.Debug (
   verbose, flush_cache,
   dump_gc, dump_cc, debug_cc, dump_exec,
 
+  initialise
 ) where
 
 import Numeric
@@ -79,6 +80,7 @@ data Flags = Flags
   , _verbose            :: !Bool        -- additional status messages
   , _flush_cache        :: !Bool        -- delete the persistent cache directory
   }
+ deriving Show
 
 $(mkLabels [''Flags])
 

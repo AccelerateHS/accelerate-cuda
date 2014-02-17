@@ -8,10 +8,16 @@ module Main where
 import Data.Array.Accelerate.BackendKit.Tests (testCompiler, allProgs)
 import Data.Array.Accelerate.BackendKit.ConsoleTester 
 import Data.Array.Accelerate.BackendClass
-import qualified Data.Array.Accelerate.CUDA as CUDA
+import qualified Data.Array.Accelerate.CUDA  as CUDA
+import qualified Data.Array.Accelerate.CUDA.Debug as Dbg
+import System.Environment (withArgs) 
 
 main :: IO ()
 main = do
+       -- Simulate command line args passed in for debugging;
+       flags <- withArgs ["-fflush-cache", "-dverbose"] $ Dbg.initialise 
+       putStrLn$ "Proceeding with Accelerate flags: "++show flags
+
        makeMain $ BackendTestConf {
          backend  = CUDA.defaultBackend,
          sbackend = Nothing,
