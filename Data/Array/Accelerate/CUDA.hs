@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
@@ -260,6 +261,10 @@ data CUDABlob a
   | CUAfun { blobAfun :: ExecAfun a }
 
 
+instance Show CUDA where
+  show (CUDA Context{deviceProperties,deviceContext}) = 
+    "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
+
 instance Backend CUDA where
   type Remote CUDA a    = CUDARemote a
   type Blob CUDA a      = CUDABlob a
@@ -336,7 +341,7 @@ instance Backend CUDA where
 
   -- Wait for a remote to finish executing
   --
-  waitRemote    = void . wait . remoteArray
+  waitRemote _  = void . wait . remoteArray
 
   -- Inject a remote array into an AST node
   --
