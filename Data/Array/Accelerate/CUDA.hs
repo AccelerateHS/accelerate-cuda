@@ -149,7 +149,7 @@ runIn ctx a
 runAsyncIn :: Arrays a => Context -> Acc a -> Async a
 runAsyncIn ctx a = unsafePerformIO $ async execute
   where
-    !acc    = convertAccWith config a
+    !acc    = convertAccWith defaultTrafoConfig a
     execute = evalCUDA ctx (compileAcc acc >>= executeAcc >>= collect)
               `catch`
               \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
