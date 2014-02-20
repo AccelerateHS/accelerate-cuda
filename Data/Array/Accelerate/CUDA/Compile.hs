@@ -55,7 +55,7 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Time
+-- import System.Time
 import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
