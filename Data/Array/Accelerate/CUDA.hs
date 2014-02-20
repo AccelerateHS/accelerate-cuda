@@ -59,7 +59,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  CUDA(..), Context, create, destroy, defaultBackend
+  CUDA(..), Context, create, destroy, defaultBackend, defaultTrafoConfig
 
 ) where
 
@@ -195,7 +195,7 @@ run1In ctx f = let go = run1AsyncIn ctx f
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
   where
-    !acc      = convertAccFun1With config f
+    !acc      = convertAccFun1With defaultTrafoConfig f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc)
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
                 `catch`
@@ -236,8 +236,8 @@ collect !arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
 -- How the Accelerate program should be interpreted.
 -- TODO: make sharing/fusion runtime configurable via debug flags or otherwise.
 --
-config :: Phase
-config =  Phase
+defaultTrafoConfig :: Phase
+defaultTrafoConfig =  Phase
   { recoverAccSharing      = True
   , recoverExpSharing      = True
   , floatOutAccFromExp     = True
