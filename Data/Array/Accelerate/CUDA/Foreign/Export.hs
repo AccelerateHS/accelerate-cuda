@@ -232,7 +232,7 @@ exportAfun fname ename = do
   genCompileFun n ename ty
 
 genCompileFun :: Name -> String -> Type -> Q [Dec]
-genCompileFun fname ename ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
+genCompileFun fname ename (AppT (AppT ArrowT (AppT _ _)) (AppT _ _))
   = sequence [sig, dec, expt]
   where
     initName = mkName ename

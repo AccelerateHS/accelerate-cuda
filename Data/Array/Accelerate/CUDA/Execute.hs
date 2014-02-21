@@ -61,7 +61,7 @@ import Data.Int
 import Data.Word
 import Data.Maybe
 
-import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
+import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.HashMap.Strict                            as Map
 
