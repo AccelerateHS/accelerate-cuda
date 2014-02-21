@@ -94,7 +94,7 @@ Library
 
   Build-depends:        accelerate              == 0.15.*,
                         array                   >= 0.3,
-                        base                    == 4.6.*,
+                        base                    == 4.7.*,
                         binary                  >= 0.5,
                         bytestring              >= 0.9,
                         cryptohash              >= 0.7,

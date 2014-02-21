@@ -7,31 +7,31 @@ AC_ARG_WITH([nvcc],     [CUDA compiler],    [NVCC=$withval], [AC_PROG_CXX(nvcc)]
 AC_ARG_WITH([gcc],      [C compiler],       [CC=$withval])
 
 AC_DEFUN([AC_HTYPE], [
-    AC_MSG_CHECKING(size of [$1])
+    AC_MSG_CHECKING(size of [$2])
 
-    sizeof_hs_[$1]=`$GHC -w -ignore-dot-ghci -e "import Foreign" -e "import Foreign.C" -e "putStr . show $ sizeOf (undefined::$1)"`
-    AC_MSG_RESULT($sizeof_hs_[$1])
+    sizeof_hs_[$2]=`$GHC -w -ignore-dot-ghci -e "putStr . show $ Foreign.sizeOf (undefined::$1)"`
+    AC_MSG_RESULT($sizeof_hs_[$2])
 
-    case $sizeof_hs_[$1] in
-        4) [$4]=[$2]32 ;;
-        8) [$4]=[$2]64 ;;
+    case $sizeof_hs_[$2] in
+        4) [$5]=[$3]32 ;;
+        8) [$5]=[$3]64 ;;
     esac
 
     # The type name
-    def="-D[$3]=$[$4]"
+    def="-D[$4]=$[$5]"
     cpp_flags="$cpp_flags $def"
     ghc_flags="$ghc_flags -optP$def"
 
     # And size
-    def="-DSIZEOF_[$3]=$sizeof_hs_[$1]"
+    def="-DSIZEOF_[$4]=$sizeof_hs_[$2]"
     cpp_flags="$cpp_flags $def"
     ghc_flags="$ghc_flags -optP$def"
 ])
 
-AC_HTYPE(Int,    Int,  HTYPE_INT,  type_hs_int)
-AC_HTYPE(Word,   Word, HTYPE_WORD, type_hs_word)
-AC_HTYPE(CLong,  Int,  HTYPE_LONG, type_hs_long)
-AC_HTYPE(CULong, Word, HTYPE_UNSIGNED_LONG, type_hs_unsigned_long)
+AC_HTYPE(Data.Int.Int,     Int,  Int,  HTYPE_INT,  type_hs_int)
+AC_HTYPE(Data.Word.Word,   Word, Word, HTYPE_WORD, type_hs_word)
+AC_HTYPE(Foreign.C.CLong,  Int,  Int,  HTYPE_LONG, type_hs_long)
+AC_HTYPE(Foreign.C.CULong, Word, Word, HTYPE_UNSIGNED_LONG, type_hs_unsigned_long)
 
 AC_SUBST([ghc_flags])
 AC_SUBST([cpp_flags])
