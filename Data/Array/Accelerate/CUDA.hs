@@ -349,6 +349,7 @@ instance Backend CUDA where
   -- Inject a remote array into an AST node
   --
   useRemote _ a = OpenAcc . Use . fromArr <$> wait (remoteArray a)
+  -- FIXME!  Ideally this would not copy!
 
   -- Configuration
   -- -------------
