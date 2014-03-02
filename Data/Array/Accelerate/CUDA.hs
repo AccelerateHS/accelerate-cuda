@@ -301,7 +301,9 @@ instance Backend CUDA where
   runRaw c acc cache = do
     result <- async . evalCUDA (withContext c) $
                 executeAcc =<< maybe (compileAcc acc) (return . blobAcc) cache
-    return $! CUR (withContext c) result
+    let remt = CUR (withContext c) result
+    waitRemote c remt -- RRN: adding this TEMPORARILY
+    return $! remt
 
   runRawFun1 c acc cache r = do
     result <- async . evalCUDA (withContext c) $ do
