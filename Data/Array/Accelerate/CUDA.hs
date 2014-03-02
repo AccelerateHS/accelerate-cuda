@@ -59,7 +59,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  CUDA(..), Context, create, destroy, defaultBackend, defaultTrafoConfig
+  CUDA(..), Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends
 
 ) where
 
@@ -73,6 +73,7 @@ import Control.Exception
 import Control.Applicative
 import System.IO.Unsafe
 import Foreign.CUDA.Driver.Error
+import qualified Foreign.CUDA.Driver                    as Driver
 
 -- friends
 import Data.Array.Accelerate.Trafo
@@ -85,6 +86,8 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 import Data.Array.Accelerate.CUDA.Array.Data
+
+import Data.Array.Accelerate.CUDA.Analysis.Device (allDevices)
 
 import Data.Array.Accelerate.BackendClass               -- temporarily imported from backend-kit
 
@@ -253,6 +256,16 @@ data CUDA = CUDA { withContext :: !Context }
 
 defaultBackend :: CUDA
 defaultBackend = CUDA defaultContext
+
+-- | All CUDA cards on the system:
+allBackends :: [CUDA]
+allBackends = unsafePerformIO $ do
+ prs <- allDevices
+ forM prs $ \ (dev,_) -> do
+  -- message dump_gc "gc: initialise allBackends"
+  Driver.initialise []
+  ctxt <- create dev [Driver.SchedAuto]
+  return $ CUDA ctxt
 
 data CUDARemote a = CUR
   { remoteContext :: !Context
