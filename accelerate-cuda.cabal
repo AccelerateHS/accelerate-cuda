@@ -157,7 +157,6 @@ Library
                         Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
-                        Data.Array.Accelerate.Internal.Check
                         Paths_accelerate_cuda
 
   if flag(debug)
