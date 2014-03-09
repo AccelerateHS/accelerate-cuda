@@ -2,8 +2,9 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -38,6 +39,7 @@ import Data.Maybe
 import Data.Functor
 import Data.Typeable
 import Control.Monad
+import Language.Haskell.TH
 import System.Mem.StableName
 import Foreign.Ptr
 import Foreign.C.Types
@@ -140,10 +142,11 @@ instance TextureData CChar   where format _ = (CUDA.Int8,   1)
 instance TextureData CSChar  where format _ = (CUDA.Int8,   1)
 instance TextureData CUChar  where format _ = (CUDA.Word8,  1)
 instance TextureData Char    where format _ = (CUDA.Word32, 1)
-instance TextureData Int     where format _ = (CUDA.Int32,  SIZEOF_HTYPE_INT           `div` 4)
-instance TextureData Word    where format _ = (CUDA.Word32, SIZEOF_HTYPE_WORD          `div` 4)
-instance TextureData CLong   where format _ = (CUDA.Int32,  SIZEOF_HTYPE_LONG          `div` 4)
-instance TextureData CULong  where format _ = (CUDA.Word32, SIZEOF_HTYPE_UNSIGNED_LONG `div` 4)
+
+$( runQ [d| instance TextureData Int    where format _ = (CUDA.Int32,  sizeOf (undefined::Int)    `div` 4) |] )
+$( runQ [d| instance TextureData Word   where format _ = (CUDA.Word32, sizeOf (undefined::Word)   `div` 4) |] )
+$( runQ [d| instance TextureData CLong  where format _ = (CUDA.Int32,  sizeOf (undefined::CLong)  `div` 4) |] )
+$( runQ [d| instance TextureData CULong where format _ = (CUDA.Word32, sizeOf (undefined::CULong) `div` 4) |] )
 
 
 -- Primitive array operations
