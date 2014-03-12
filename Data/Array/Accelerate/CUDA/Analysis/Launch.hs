@@ -148,6 +148,8 @@ sharedMem _ Use{}      _ = INTERNAL_ERROR(error) "sharedMem" "Use"
 sharedMem _ Unit{}     _ = INTERNAL_ERROR(error) "sharedMem" "Unit"
 sharedMem _ Reshape{}  _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
 sharedMem _ Aforeign{} _ = INTERNAL_ERROR(error) "sharedMem" "Aforeign"
+sharedMem _ MapStream{}  _ = INTERNAL_ERROR(error) "sharedMem" "MapStream"
+sharedMem _ FoldStream{} _ = INTERNAL_ERROR(error) "sharedMem" "FoldStream"
 
 -- skeleton nodes
 sharedMem _ Generate{}          _        = 0
@@ -172,4 +174,5 @@ sharedMem p (FoldSeg _ x _ _)   blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedExpType x)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
-
+sharedMem _ (ToStream _)        _        = 0
+sharedMem _ (FromStream _)      _        = 0

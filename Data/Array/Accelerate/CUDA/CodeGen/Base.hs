@@ -1,3 +1,4 @@
+
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
@@ -247,7 +248,9 @@ readArray
     :: forall aenv sh e. (Shape sh, Elt e)
     => Name                             -- group names
     -> Array sh e                       -- dummy to fix types
-    -> ( [C.Param], CUDelayedAcc aenv sh e )
+    -> ( [C.Param]
+       , [C.Exp]
+       , CUDelayedAcc aenv sh e )
 readArray grp dummy
   = let (sh, arrs)      = namesOfArray grp (undefined :: e)
         args            = arrayAsArg dummy grp
@@ -258,7 +261,7 @@ readArray grp dummy
         manifest        = CUDelayed (CUExp ([], sh'))
                                     (INTERNAL_ERROR(error) "readArray" "linear indexing only")
                                     (CUFun1 (zip (repeat True)) (\[i] -> get (rvalue i)))
-    in ( args, manifest )
+    in ( args, sh', manifest )
 
 
 -- Generate function parameters and corresponding variable names for the
