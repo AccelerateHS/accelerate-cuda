@@ -114,6 +114,7 @@ streaming first second = do
   reservoir <- gets streamReservoir
   Stream.streaming context reservoir first (\e a -> second (Async e a))
 
+
 -- Array expression evaluation
 -- ---------------------------
 
@@ -202,7 +203,6 @@ scheduleOpenAccStream (ExecAcc (FL () kernel _) !gamma !pacc) !aenv !stream
 --
 executeOpenAcc
     :: forall aenv arrs.
-       Arrays arrs =>
        ExecOpenAcc aenv arrs
     -> Aval aenv
     -> Stream
@@ -213,7 +213,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
       -- Array introduction
-      Use arr                   -> return (toArr arr :: arrs)
+      Use arr                   -> return (toArr arr)
       Unit x                    -> newArray Z . const =<< travE x
 
       -- Environment manipulation
@@ -261,14 +261,13 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       FoldStream f a1 a2        -> join $ foldStreamOp f <$> travA a1 <*> travAstream a2
 
   where
-    fusionError :: CIO arrs
     fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
 
     execStream :: KernelStream a => CIO [a]
     execStream = sequence
 
     -- term traversals
-    travA :: Arrays a => ExecOpenAcc aenv a -> CIO a
+    travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
     
     travAstream :: Arrays a => ExecOpenAcc aenv [a] -> CIO (KernelStream a)
@@ -281,7 +280,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     travT NilAtup          = return ()
     travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
 
-    awhile :: Arrays a => PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
+    awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
       nop <- liftIO Event.create                -- record event never call, so this is a functional no-op
       r   <- executeOpenAfun1 p aenv (Async nop a)
@@ -540,7 +539,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       NilTup            -> return ()
       SnocTup !t !e     -> (,) <$> travT t <*> travE e
 
-    travA :: Arrays a => ExecOpenAcc aenv a -> CIO a
+    travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
 
     foreign :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
@@ -760,3 +759,4 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
     msg gpuTime cpuTime
       = "exec: " ++ entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
                  ++ D.elapsed gpuTime cpuTime
+

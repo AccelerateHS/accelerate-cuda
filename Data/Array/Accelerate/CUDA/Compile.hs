@@ -368,6 +368,7 @@ build1 acc code = do
       --
       message   $ intercalate "\n     ... " [msg1, msg2]
 
+
 -- Link a compiled binary and update the associated kernel entry in the hash
 -- table. This may entail waiting for the external compilation process to
 -- complete. If successful, the temporary files are removed.
