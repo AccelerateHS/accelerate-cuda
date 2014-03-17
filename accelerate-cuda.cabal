@@ -145,6 +145,7 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil.Extra
+                        Data.Array.Accelerate.CUDA.CodeGen.Streaming
                         Data.Array.Accelerate.CUDA.CodeGen.Type
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Context

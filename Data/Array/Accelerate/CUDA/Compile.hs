@@ -161,11 +161,18 @@ compileOpenAcc = traverseAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
+        -- Streams
+        MapStream f a       -> node =<< liftA2 MapStream   <$> travAF f <*> travA a
+        ToStream a          -> exec =<< liftA  ToStream    <$> travA a
+        FromStream a        -> exec =<< liftA  FromStream  <$> travA a
+        FoldStream f a1 a2  -> node =<< liftA3 FoldStream  <$> travAF f <*> travA a1 <*> travA a2
+
       where
         use :: ArraysR a -> a -> CIO ()
         use ArraysRunit         ()       = return ()
         use ArraysRarray        arr      = useArrayAsync arr Nothing
         use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
+        use (ArraysRstream r) as        = sequence_ $ map (use r) as -- TODO laziness?
 
         exec :: (Free aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
         exec (aenv, eacc) = do
@@ -360,7 +367,6 @@ build1 acc code = do
       -- than 'unlines' to avoid a trailing newline.
       --
       message   $ intercalate "\n     ... " [msg1, msg2]
-
 
 -- Link a compiled binary and update the associated kernel entry in the hash
 -- table. This may entail waiting for the external compilation process to

@@ -54,6 +54,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
+import Data.Array.Accelerate.CUDA.CodeGen.Streaming
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
 #include "accelerate.h"
@@ -112,6 +113,12 @@ codegenAcc dev (Manifest pacc) aenv
       Permute f _ p a           -> mkPermute dev aenv   <$> travF2 f <*> travF1 p <*> travD a
       Stencil f b a             -> mkStencil dev aenv   <$> travF1 f <*> travB a b
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
+
+      -- Stream operations
+      MapStream{}               -> unexpectedError
+      ToStream a                -> mkToStream dev aenv <$> travD a
+      FromStream _              -> return $ mkFromStream dev aenv
+      FoldStream{}              -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError

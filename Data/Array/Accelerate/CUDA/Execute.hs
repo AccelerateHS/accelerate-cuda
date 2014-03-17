@@ -114,7 +114,6 @@ streaming first second = do
   reservoir <- gets streamReservoir
   Stream.streaming context reservoir first (\e a -> second (Async e a))
 
-
 -- Array expression evaluation
 -- ---------------------------
 
@@ -131,6 +130,9 @@ streaming first second = do
 --    memory allocated for the result, and the kernel(s) that implement the
 --    skeleton are invoked
 --
+
+type KernelStream a = [CIO a]
+
 executeAcc :: Arrays a => ExecAcc a -> CIO a
 executeAcc !acc = streaming (executeOpenAcc acc Aempty) wait
 
@@ -143,28 +145,75 @@ executeAfun1 !afun !arrs = do
     useArrays ArraysRunit         ()       _  = return ()
     useArrays (ArraysRpair r1 r0) (a1, a0) st = useArrays r1 a1 st >> useArrays r0 a0 st
     useArrays ArraysRarray        arr      st = useArrayAsync arr (Just st)
+    useArrays (ArraysRstream r)   arrs'    st = sequence_ (map (\ arr -> useArrays r arr st) arrs')
 
 
 executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Aval aenv -> Async a -> CIO b
 executeOpenAfun1 (Alam (Abody f)) aenv x = streaming (executeOpenAcc f (aenv `Apush` x)) wait
 executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
 
+-- Similar to execOpenAcc but returns a list of computations of type
+-- [CIO Arrs] instead of a single computation. The list is the stream.
+scheduleOpenAccStream
+    :: forall aenv arrs.
+       ExecOpenAcc aenv [arrs]
+    -> Aval aenv
+    -> Stream
+    -> CIO (KernelStream arrs)
+scheduleOpenAccStream (ExecAcc (FL () kernel _) !gamma !pacc) !aenv !stream
+  = case pacc of
+    MapStream f a -> return . (mapStreamOp f)  =<< scheduleOpenAccStream a aenv stream
+    ToStream a    -> toStreamOp =<< extent a
+    Avar ix       -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream variables"
+    Alet bnd body -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream let-binding"
+    _             -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "unexpected non-stream matter"
+ where
+   
+   -- Stream operations
+    mapStreamOp :: Arrays b 
+                => PreOpenAfun ExecOpenAcc aenv (a -> b) 
+                -> KernelStream a 
+                -> KernelStream b
+    mapStreamOp (Alam (Abody body)) ks = do
+      map f ks
+        where f k = do
+                a <- k
+                nop <- liftIO Event.create
+                executeOpenAcc body (aenv `Apush` (Async nop a)) stream
+--                                      (streaming . executeOpenAcc f . Apush aenv =<<) as
+    mapStreamOp _ _ = error "Hello"
+
+    toStreamOp :: (Shape sh, Elt e) 
+               => (sh:.Int) 
+               -> CIO (KernelStream (Array sh e))
+    toStreamOp (sh :. n) = do
+      return $ map k [0..n-1]
+      where k i = 
+              do out <- allocateArray sh
+                 executeStream kernel i gamma aenv (size sh) out stream
+                 return out
+
+    -- get the extent of an embedded array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent ExecAcc{}     = INTERNAL_ERROR(error) "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh) = executeExp sh aenv stream
 
 -- Evaluate an open array computation
 --
 executeOpenAcc
     :: forall aenv arrs.
+       Arrays arrs =>
        ExecOpenAcc aenv arrs
     -> Aval aenv
     -> Stream
     -> CIO arrs
 executeOpenAcc EmbedAcc{} _ _
   = INTERNAL_ERROR(error) "execute" "unexpected delayed array"
-executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
+executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
       -- Array introduction
-      Use arr                   -> return (toArr arr)
+      Use arr                   -> return (toArr arr :: arrs)
       Unit x                    -> newArray Z . const =<< travE x
 
       -- Environment manipulation
@@ -205,13 +254,25 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
+      
+      MapStream{}               -> execStream =<< travAstream acc'
+      ToStream{}                -> execStream =<< travAstream acc'
+      FromStream a              -> fromStreamOp   =<< travAstream a
+      FoldStream f a1 a2        -> join $ foldStreamOp f <$> travA a1 <*> travAstream a2
 
   where
+    fusionError :: CIO arrs
     fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
 
+    execStream :: KernelStream a => CIO [a]
+    execStream = sequence
+
     -- term traversals
-    travA :: ExecOpenAcc aenv a -> CIO a
+    travA :: Arrays a => ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
+    
+    travAstream :: Arrays a => ExecOpenAcc aenv [a] -> CIO (KernelStream a)
+    travAstream !acc = scheduleOpenAccStream acc aenv stream
 
     travE :: ExecExp aenv t -> CIO t
     travE !exp = executeExp exp aenv stream
@@ -220,7 +281,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     travT NilAtup          = return ()
     travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
 
-    awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
+    awhile :: Arrays a => PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
       nop <- liftIO Event.create                -- record event never call, so this is a functional no-op
       r   <- executeOpenAfun1 p aenv (Async nop a)
@@ -412,6 +473,28 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       | otherwise
       = INTERNAL_ERROR(error) "stencil2Op" "missing stencil specialisation kernel"
 
+    fromStreamOp :: (Elt e) => KernelStream (Scalar e) -> CIO (Vector e)
+    fromStreamOp arrs = do
+      out <- allocateArray (Z :. length arrs)
+      _ <- mapM (k out) (zip arrs [0..])
+      return out
+      where k !out (!cioarr, i) = do
+              arr <- cioarr
+              executeStream kernel i gamma aenv (size Z) (out, arr) stream
+    
+    foldStreamOp :: PreOpenAfun ExecOpenAcc aenv (a -> a -> a) 
+                 -> a 
+                 -> KernelStream a
+                 -> CIO a
+    foldStreamOp (Alam (Alam (Abody body))) e arrs =
+      do let red a [] = return a
+             red a (cioarr:arrs') = do 
+               arr <- cioarr
+               nop <- liftIO Event.create
+               a' <- executeOpenAcc body (aenv `Apush` (Async nop a) `Apush` (Async nop arr)) stream
+               red a' arrs'
+         red e arrs
+    foldStreamOp _ _ _ = error "Hello fold"
 
 -- Scalar expression evaluation
 -- ----------------------------
@@ -457,7 +540,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       NilTup            -> return ()
       SnocTup !t !e     -> (,) <$> travT t <*> travE e
 
-    travA :: ExecOpenAcc aenv a -> CIO a
+    travA :: Arrays a => ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
 
     foreign :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
@@ -652,6 +735,20 @@ execute !kernel !gamma !aenv !n !a !stream = do
   launch kernel (configure kernel n) args stream
 
 
+executeStream :: Marshalable args
+        => AccKernel a                  -- The binary module implementing this kernel
+        -> Int                          -- Stream index
+        -> Gamma aenv                   -- variables of arrays embedded in scalar expressions
+        -> Aval aenv                    -- the environment
+        -> Int                          -- a "size" parameter, typically number of elements in the output
+        -> args                         -- arguments to marshal to the kernel function
+        -> Stream                       -- Compute stream to execute in
+        -> CIO ()
+executeStream !kernel !six !gamma !aenv !n !a !stream = do
+  args <- arguments kernel aenv gamma a stream
+  launch kernel (configure kernel n) ((CUDA.IArg six):args) stream
+
+
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
@@ -663,4 +760,3 @@ launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
     msg gpuTime cpuTime
       = "exec: " ++ entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
                  ++ D.elapsed gpuTime cpuTime
-
