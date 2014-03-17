@@ -163,7 +163,9 @@ scheduleOpenAccStream (ExecAcc (FL () kernel _) !gamma !pacc) !aenv !stream
   = case pacc of
     MapStream f a -> return . (mapStreamOp f)  =<< scheduleOpenAccStream a aenv stream
     ToStream a    -> toStreamOp =<< extent a
-    _ -> INTERNAL_ERROR(error) "executeOpenAcc" "unexpected non-stream matter"
+    Avar ix       -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream variables"
+    Alet bnd body -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream let-binding"
+    _             -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "unexpected non-stream matter"
  where
    
    -- Stream operations
