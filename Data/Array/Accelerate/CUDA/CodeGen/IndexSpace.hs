@@ -1,9 +1,9 @@
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -31,11 +31,10 @@ import Foreign.CUDA.Analysis.Device
 import qualified Language.C.Syntax                      as C
 
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, ignore, shapeToList )
+import Data.Array.Accelerate.Error                      ( internalError )
 import Data.Array.Accelerate.CUDA.AST                   ( Gamma )
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-
-#include "accelerate.h"
 
 
 -- Construct a new array by applying a function to each index. Each thread
@@ -229,7 +228,7 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
     -- If the destination index resolves to the magic index "ignore", the result
     -- is dropped from the output array.
     cignore :: Rvalue x => [x] -> C.Exp
-    cignore []  = INTERNAL_ERROR(error) "permute" "singleton arrays not supported"
+    cignore []  = $internalError "permute" "singleton arrays not supported"
     cignore xs  = foldl1 (\a b -> [cexp| $exp:a && $exp:b |])
                 $ zipWith (\a b -> [cexp| $exp:(rvalue a) == $int:b |]) xs
                 $ shapeToList (ignore :: sh')

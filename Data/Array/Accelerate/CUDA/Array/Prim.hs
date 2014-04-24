@@ -50,12 +50,11 @@ import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
-
-#include "accelerate.h"
 
 
 -- Device array representation
@@ -405,7 +404,7 @@ devicePtrsOfArrayData !ctx !mt !ad = do
     Just v  -> return v
     Nothing -> do
       sn <- makeStableName ad
-      INTERNAL_ERROR(error) "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
+      $internalError "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
 
 
 -- Advance device pointers by a given number of elements

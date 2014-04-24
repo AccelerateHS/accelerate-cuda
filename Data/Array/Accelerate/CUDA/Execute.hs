@@ -6,6 +6,7 @@
 {-# LANGUAGE NoForeignFunctionInterface #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
@@ -42,6 +43,7 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.Execute.Stream      as Stream
 
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
@@ -65,8 +67,6 @@ import Foreign.CUDA.Analysis.Device                             ( computeCapabil
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.HashMap.Strict                            as Map
 
-#include "accelerate.h"
-
 
 -- Asynchronous kernel execution
 -- -----------------------------
@@ -88,7 +88,7 @@ data Aval env where
 aprj :: Idx env t -> Aval env -> Async t
 aprj ZeroIdx       (Apush _   x) = x
 aprj (SuccIdx idx) (Apush val _) = aprj idx val
-aprj _             _             = INTERNAL_ERROR(error) "aprj" "inconsistent valuation"
+aprj _             _             = $internalError "aprj" "inconsistent valuation"
 
 
 -- All work submitted to the given stream will occur after the asynchronous
@@ -159,7 +159,7 @@ executeOpenAcc
     -> Stream
     -> CIO arrs
 executeOpenAcc EmbedAcc{} _ _
-  = INTERNAL_ERROR(error) "execute" "unexpected delayed array"
+  = $internalError "execute" "unexpected delayed array"
 executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
@@ -207,7 +207,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       ZipWith _ _ _             -> fusionError
 
   where
-    fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
+    fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
 
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
@@ -230,7 +230,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent ExecAcc{}     = INTERNAL_ERROR(error) "executeOpenAcc" "expected delayed array"
+    extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
@@ -250,7 +250,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     --
     reshapeOp :: Shape sh => sh -> Array sh' e -> Array sh e
     reshapeOp sh (Array sh' adata)
-      = BOUNDS_CHECK(check) "reshape" "shape mismatch" (size sh == R.size sh')
+      = $boundsCheck "reshape" "shape mismatch" (size sh == R.size sh')
       $ Array (fromElt sh) adata
 
     -- Executing fold operations depend on whether we are recursively collapsing
@@ -259,7 +259,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     --
     fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     fold1Op !sh@(_ :. sz)
-      = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
+      = $boundsCheck "fold1" "empty array" (sz > 0)
       $ foldCore sh
 
     foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
@@ -293,7 +293,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
                 foldRec out
 
       | otherwise
-      = INTERNAL_ERROR(error) "foldRec" "missing phase-2 kernel module"
+      = $internalError "foldRec" "missing phase-2 kernel module"
 
     -- Segmented reduction. Subtract one from the size of the segments vector as
     -- this is the result of an exclusive scan to calculate segment offsets.
@@ -361,7 +361,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           execute kernel gamma aenv numElements (numElements, d_body, blk, d_sum) stream
 
       | otherwise
-      = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
+      = $internalError "scanOp" "missing multi-block kernel module(s)"
 
     -- Forward permutation
     --
@@ -410,7 +410,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           return out
 
       | otherwise
-      = INTERNAL_ERROR(error) "stencil2Op" "missing stencil specialisation kernel"
+      = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
 
 -- Scalar expression evaluation

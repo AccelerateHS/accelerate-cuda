@@ -1,7 +1,7 @@
-{-# LANGUAGE CPP           #-}
-{-# LANGUAGE GADTs         #-}
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE QuasiQuotes   #-}
+{-# LANGUAGE GADTs           #-}
+{-# LANGUAGE PatternGuards   #-}
+{-# LANGUAGE QuasiQuotes     #-}
+{-# LANGUAGE TemplateHaskell #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -28,6 +28,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type (
 
 -- friends
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
@@ -38,8 +39,6 @@ import Data.Bits
 import Data.Typeable
 import Language.C.Quote.CUDA
 import qualified Language.C                             as C
-
-#include "accelerate.h"
 
 
 typename :: String -> C.Type
@@ -58,7 +57,7 @@ expType = codegenTupleType . Sugar.preExpType Sugar.delayedAccType
 segmentsType :: DelayedOpenAcc aenv (Sugar.Segments i) -> C.Type
 segmentsType seg
   | [s] <- accType seg  = s
-  | otherwise           = INTERNAL_ERROR(error) "accType" "non-scalar segment type"
+  | otherwise           = $internalError "accType" "non-scalar segment type"
 
 
 eltType :: Sugar.Elt a => a {- dummy -} -> [C.Type]

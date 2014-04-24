@@ -21,7 +21,8 @@ GHC_FLAGS="$GHC_FLAGS
      -DACCELERATE_DEBUG
      -DACCELERATE_BOUNDS_CHECKS
      -DACCELERATE_INTERNAL_CHECKS
-     -Iinclude -iutils -optP -include -optP dist/build/autogen/cabal_macros.h"
+     -package-db ../.cabal-sandbox/x86_64-osx-ghc-$VER-packages.conf.d
+     -iutils -optP -include -optP dist/build/autogen/cabal_macros.h"
 
 # If we have specified one command line argument, but that file doesn't exist,
 # search the source files for something with that name prefix.

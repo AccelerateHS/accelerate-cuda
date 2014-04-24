@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE ImpredicativeTypes    #-}
@@ -7,6 +6,7 @@
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TemplateHaskell       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -49,12 +49,11 @@ import Foreign.CUDA.Analysis.Device
 
 -- friends
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.Analysis.Shape
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.AST
-
-#include "accelerate.h"
 
 -- Names
 -- -----
@@ -183,7 +182,7 @@ ctoIndex extent index
     toIndex []      []     = [cexp| $int:(0::Int) |]
     toIndex [_]     [i]    = i
     toIndex (sz:sh) (i:ix) = [cexp| $exp:(toIndex sh ix) * $exp:sz + $exp:i |]
-    toIndex _       _      = INTERNAL_ERROR(error) "toIndex" "argument mismatch"
+    toIndex _       _      = $internalError "toIndex" "argument mismatch"
 
 -- Generate code to calculate a multi-dimensional index from a linear index and a given array shape.
 -- This version creates temporary values that are reused in the computation.
@@ -256,7 +255,7 @@ readArray grp dummy
         sh'             = cshape dim sh
         get ix          = ([], map (\a -> [cexp| $id:a [ $exp:ix ] |]) arrs)
         manifest        = CUDelayed (CUExp ([], sh'))
-                                    (INTERNAL_ERROR(error) "readArray" "linear indexing only")
+                                    ($internalError "readArray" "linear indexing only")
                                     (CUFun1 (zip (repeat True)) (\[i] -> get (rvalue i)))
     in ( args, manifest )
 
@@ -426,7 +425,7 @@ instance Assign l r => Assign (Bool,l) r where
 instance Assign l r => Assign [l] [r] where
   assign []     []     = []
   assign (x:xs) (y:ys) = assign x y ++ assign xs ys
-  assign _      _      = INTERNAL_ERROR(error) ".=." "argument mismatch"
+  assign _      _      = $internalError ".=." "argument mismatch"
 
 instance Assign l r => Assign l ([C.BlockItem], r) where
   assign lhs (env, rhs) = env ++ assign lhs rhs
@@ -440,10 +439,10 @@ instance Assign l r => Assign l ([C.BlockItem], r) where
 zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
 zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
 zipWith _ []     []     = []
-zipWith _ _      _      = INTERNAL_ERROR(error) "zipWith" "argument mismatch"
+zipWith _ _      _      = $internalError "zipWith" "argument mismatch"
 
 zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
 zipWith3 f (x:xs) (y:ys) (z:zs) = f x y z : zipWith3 f xs ys zs
 zipWith3 _ []     []     []     = []
-zipWith3 _ _      _      _      = INTERNAL_ERROR(error) "zipWith3" "argument mismatch"
+zipWith3 _ _      _      _      = $internalError "zipWith3" "argument mismatch"
 

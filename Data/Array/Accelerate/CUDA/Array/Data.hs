@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Data
@@ -44,6 +45,7 @@ import Foreign.C.Types
 import Foreign.Ptr
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
 import Data.Array.Accelerate.Array.Representation       ( size )
@@ -53,8 +55,6 @@ import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
-
-#include "accelerate.h"
 
 
 -- Array Operations
@@ -246,7 +246,7 @@ indexArray (Array _ !adata) i = run doIndex
 --
 copyArray :: (Shape dim, Elt e) => Array dim e -> Array dim e -> CIO ()
 copyArray (Array !sh1 !adata1) (Array !sh2 !adata2)
-  = BOUNDS_CHECK(check) "copyArray" "shape mismatch" (sh1 == sh2)
+  = $boundsCheck "copyArray" "shape mismatch" (sh1 == sh2)
   $ run doCopy
   where
     !n              = size sh1
@@ -267,7 +267,7 @@ copyArray (Array !sh1 !adata1) (Array !sh2 !adata2)
 --
 copyArrayPeer :: (Shape dim, Elt e) => Array dim e -> Context -> Array dim e -> Context -> CIO ()
 copyArrayPeer (Array !sh1 !adata1) !ctxSrc (Array !sh2 !adata2) !ctxDst
-  = BOUNDS_CHECK(check) "copyArrayPeer" "shape mismatch" (sh1 == sh2)
+  = $boundsCheck "copyArrayPeer" "shape mismatch" (sh1 == sh2)
   $ run doCopy
   where
     !n           = size sh1
@@ -284,7 +284,7 @@ copyArrayPeer (Array !sh1 !adata1) !ctxSrc (Array !sh2 !adata2) !ctxDst
 
 copyArrayPeerAsync :: (Shape dim, Elt e) => Array dim e -> Context -> Array dim e -> Context -> Maybe CUDA.Stream -> CIO ()
 copyArrayPeerAsync (Array !sh1 !adata1) !ctxSrc (Array !sh2 !adata2) !ctxDst !ms
-  = BOUNDS_CHECK(check) "copyArrayPeerAsync" "shape mismatch" (sh1 == sh2)
+  = $boundsCheck "copyArrayPeerAsync" "shape mismatch" (sh1 == sh2)
   $ run doCopy
   where
     !n           = size sh1
@@ -453,3 +453,4 @@ advancePtrsOfArrayData !adata !n = advanceR arrayElt adata
     --
     advancePrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
     mkPrimDispatch(advancePrim,Prim.advancePtrsOfArrayData n)
+

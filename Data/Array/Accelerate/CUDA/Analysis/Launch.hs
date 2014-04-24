@@ -1,5 +1,5 @@
-{-# LANGUAGE CPP   #-}
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs           #-}
+{-# LANGUAGE TemplateHaskell #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Analysis.Launch
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -19,6 +19,7 @@ module Data.Array.Accelerate.CUDA.Analysis.Launch (
 
 -- friends
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
@@ -26,8 +27,6 @@ import Data.Array.Accelerate.Analysis.Shape
 -- library
 import qualified Foreign.CUDA.Analysis                  as CUDA
 import qualified Foreign.CUDA.Driver                    as CUDA
-
-#include "accelerate.h"
 
 
 -- |
@@ -47,7 +46,7 @@ launchConfig
     -> ( Int                    -- block size
        , Int -> Int             -- number of blocks for input problem size (grid)
        , Int )                  -- shared memory (bytes)
-launchConfig Delayed{} _ _ = INTERNAL_ERROR(error) "launchConfig" "encountered delayed array"
+launchConfig Delayed{} _ _ = $internalError "launchConfig" "encountered delayed array"
 launchConfig (Manifest acc) dev occ =
   let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
       maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
@@ -66,7 +65,7 @@ determineOccupancy
     -> CUDA.Fun                 -- corresponding __global__ entry function
     -> Int                      -- maximum number of threads per block
     -> IO CUDA.Occupancy
-determineOccupancy Delayed{} _ _ _ = INTERNAL_ERROR(error) "determineOccupancy" "encountered delayed array"
+determineOccupancy Delayed{} _ _ _ = $internalError "determineOccupancy" "encountered delayed array"
 determineOccupancy (Manifest acc) dev fn maxBlock = do
   registers     <- CUDA.requires fn CUDA.NumRegs
   static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
@@ -137,17 +136,17 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 --
 sharedMem :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int
 -- non-computation forms
-sharedMem _ Alet{}     _ = INTERNAL_ERROR(error) "sharedMem" "Let"
-sharedMem _ Avar{}     _ = INTERNAL_ERROR(error) "sharedMem" "Avar"
-sharedMem _ Apply{}    _ = INTERNAL_ERROR(error) "sharedMem" "Apply"
-sharedMem _ Acond{}    _ = INTERNAL_ERROR(error) "sharedMem" "Acond"
-sharedMem _ Awhile{}   _ = INTERNAL_ERROR(error) "sharedMem" "Awhile"
-sharedMem _ Atuple{}   _ = INTERNAL_ERROR(error) "sharedMem" "Atuple"
-sharedMem _ Aprj{}     _ = INTERNAL_ERROR(error) "sharedMem" "Aprj"
-sharedMem _ Use{}      _ = INTERNAL_ERROR(error) "sharedMem" "Use"
-sharedMem _ Unit{}     _ = INTERNAL_ERROR(error) "sharedMem" "Unit"
-sharedMem _ Reshape{}  _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
-sharedMem _ Aforeign{} _ = INTERNAL_ERROR(error) "sharedMem" "Aforeign"
+sharedMem _ Alet{}     _ = $internalError "sharedMem" "Let"
+sharedMem _ Avar{}     _ = $internalError "sharedMem" "Avar"
+sharedMem _ Apply{}    _ = $internalError "sharedMem" "Apply"
+sharedMem _ Acond{}    _ = $internalError "sharedMem" "Acond"
+sharedMem _ Awhile{}   _ = $internalError "sharedMem" "Awhile"
+sharedMem _ Atuple{}   _ = $internalError "sharedMem" "Atuple"
+sharedMem _ Aprj{}     _ = $internalError "sharedMem" "Aprj"
+sharedMem _ Use{}      _ = $internalError "sharedMem" "Use"
+sharedMem _ Unit{}     _ = $internalError "sharedMem" "Unit"
+sharedMem _ Reshape{}  _ = $internalError "sharedMem" "Reshape"
+sharedMem _ Aforeign{} _ = $internalError "sharedMem" "Aforeign"
 
 -- skeleton nodes
 sharedMem _ Generate{}          _        = 0

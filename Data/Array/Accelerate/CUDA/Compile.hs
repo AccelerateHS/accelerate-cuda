@@ -3,6 +3,7 @@
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Compile
@@ -22,9 +23,8 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 ) where
 
-#include "accelerate.h"
-
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
@@ -115,7 +115,7 @@ compileOpenAcc = traverseAcc
     -- are merged at every step.
     --
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
-    traverseAcc Delayed{} = INTERNAL_ERROR(error) "compileOpenAcc" "unexpected delayed array"
+    traverseAcc Delayed{} = $internalError "compileOpenAcc" "unexpected delayed array"
     traverseAcc topAcc@(Manifest pacc) =
       case pacc of
         -- Environment and control flow
@@ -197,10 +197,10 @@ compileOpenAcc = traverseAcc
         travF (Lam  f)  = liftA Lam  <$> travF f
 
         noKernel :: FL.FullList () (AccKernel a)
-        noKernel =  FL.FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") FL.Nil
+        noKernel =  FL.FL () ($internalError "compile" "no kernel module for this node") FL.Nil
 
         fullOfList :: [a] -> FL.FullList () a
-        fullOfList []       = INTERNAL_ERROR(error) "fullList" "empty list"
+        fullOfList []       = $internalError "fullList" "empty list"
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
 
@@ -216,7 +216,7 @@ compileOpenAcc = traverseAcc
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
             where
-              err = INTERNAL_ERROR(error) "compile" "Executing pure version of a CUDA foreign function"
+              err = $internalError "compile" "Executing pure version of a CUDA foreign function"
 
     -- Traverse a scalar expression
     --
@@ -304,7 +304,7 @@ compileOpenAcc = traverseAcc
 
         bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
         bind (ExecAcc _ _ (Avar ix)) = freevar ix
-        bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
+        bind _                       = $internalError "bind" "expected array variable"
 
 
 -- Applicative
@@ -369,7 +369,7 @@ build1 acc code = do
 --
 link :: Context -> KernelTable -> KernelKey -> IO CUDA.Module
 link context table key =
-  let intErr    = INTERNAL_ERROR(error) "link" "missing kernel entry"
+  let intErr    = $internalError "link" "missing kernel entry"
       ctx       = deviceContext context
       weak_ctx  = weakContext context
   in do
@@ -471,7 +471,7 @@ compileFlags cufile = do
     machine     = case finiteBitSize (undefined :: Int) of
                     32  -> "-m32"
                     64  -> "-m64"
-                    _   -> INTERNAL_ERROR(error) "compileFlags" "unknown 'Int' size"
+                    _   -> $internalError "compileFlags" "unknown 'Int' size"
 
 
 -- Open a unique file in the temporary directory used for compilation
