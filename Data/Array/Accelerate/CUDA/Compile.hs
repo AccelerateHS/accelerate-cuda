@@ -50,6 +50,7 @@ import Control.Monad.Trans                                      ( liftIO, MonadI
 import Control.Concurrent
 import Crypto.Hash.MD5                                          ( hashlazy )
 import Data.List                                                ( intercalate )
+import Data.Bits
 import Data.Maybe
 import Data.Monoid
 import System.Directory
@@ -467,9 +468,9 @@ compileFlags cufile = do
   where
     warnings    = D.mode D.dump_cc && D.mode D.verbose
     debug       = D.mode D.debug_cc
-    machine     = case (SIZEOF_HTYPE_INT :: Int) of
-                    4   -> "-m32"
-                    8   -> "-m64"
+    machine     = case finiteBitSize (undefined :: Int) of
+                    32  -> "-m32"
+                    64  -> "-m64"
                     _   -> INTERNAL_ERROR(error) "compileFlags" "unknown 'Int' size"
 
 
