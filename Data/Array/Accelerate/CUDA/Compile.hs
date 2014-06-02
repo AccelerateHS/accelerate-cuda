@@ -343,6 +343,7 @@ compileOpenAcc = traverseAcc
         bind (ExecAcc _ _ (Avar ix)) = freevar ix
         bind _                       = $internalError "bind" "expected array variable"
 
+
 -- Applicative
 -- -----------
 --

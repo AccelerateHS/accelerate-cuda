@@ -217,3 +217,4 @@ sharedMem p (FoldSeg _ x _ _)   blockDim =
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
 sharedMem _ (Loop _)           _         = 0
+

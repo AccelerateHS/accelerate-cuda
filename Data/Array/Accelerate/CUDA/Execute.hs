@@ -149,9 +149,11 @@ executeAfun1 !afun !arrs = do
     useArrays (ArraysRpair r1 r0) (a1, a0) st = useArrays r1 a1 st >> useArrays r0 a0 st
     useArrays ArraysRarray        arr      st = useArrayAsync arr (Just st)
 
+
 executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Aval aenv -> Async a -> CIO b
 executeOpenAfun1 (Alam (Abody f)) aenv x = streaming (executeOpenAcc f (aenv `Apush` x)) wait
 executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
+
 
 -- Evaluate an open array computation
 --
@@ -213,7 +215,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
   where
     fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
-    
+
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
@@ -786,6 +788,7 @@ execute :: Marshalable args
 execute !kernel !gamma !aenv !n !a !stream = do
   args <- arguments kernel aenv gamma a stream
   launch kernel (configure kernel n) args stream
+
 
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)

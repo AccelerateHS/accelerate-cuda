@@ -367,6 +367,7 @@ collect !arrs = toArr <$> collectR (arrays (undefined :: arrs)) (fromArr arrs)
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
 
+
 -- How the Accelerate program should be interpreted.
 -- TODO: make sharing/fusion runtime configurable via debug flags or otherwise.
 --

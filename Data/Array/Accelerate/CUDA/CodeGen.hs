@@ -187,19 +187,18 @@ codegenFromStream _ dev = codegen $ return (mkFromStream (undefined :: sh) dev)
   where
     codegen :: CUDA (CUTranslSkel aenv (Vector a)) -> CUTranslSkel aenv (Vector a)
     codegen cuda =
-      let (skeleton, st)                = runCUDA cuda
+      let (skeleton, st)                 = runCUDA cuda
           addTo (CUTranslSkel name code) =
             CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
       in
       addTo skeleton
-                  
+
 codegenToStream :: forall aenv sh e. (Shape sh, Elt e) => DeviceProperties -> DelayedOpenAcc aenv (Array (sh :. Int) e) -> Gamma aenv -> CUTranslSkel aenv (Array sh e)
 codegenToStream dev acc aenv = codegen $ (mkToStream dev aenv <$> travD acc)
   where
-    
     codegen :: CUDA (CUTranslSkel aenv (Array sh a)) -> CUTranslSkel aenv (Array sh e)
     codegen cuda =
-      let (skeleton, st)                = runCUDA cuda
+      let (skeleton, st)                 = runCUDA cuda
           addTo (CUTranslSkel name code) =
             CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
       in
@@ -211,13 +210,12 @@ codegenToStream dev acc aenv = codegen $ (mkToStream dev aenv <$> travD acc)
     travD Delayed{..} = CUDelayed <$> travE extentD
                                   <*> travF1 indexD
                                   <*> travF1 linearIndexD
-                                  
+
     travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
     travE = codegenExp dev aenv
-    
+
     travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
     travF1 = codegenFun1 dev aenv
-
 
 
 -- Scalar function abstraction
