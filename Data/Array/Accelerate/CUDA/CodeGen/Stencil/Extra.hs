@@ -1,7 +1,7 @@
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE ViewPatterns        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Stencil.Extra
@@ -33,6 +33,7 @@ import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 
 -- friends
+import Data.Array.Accelerate.Error                      ( internalError )
 import Data.Array.Accelerate.Type                       ( Boundary(..) )
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, shapeToList )
 import Data.Array.Accelerate.Analysis.Shape
@@ -41,8 +42,6 @@ import Foreign.CUDA.Analysis
 import Data.Array.Accelerate.CUDA.AST                   hiding ( stencil, stencilAccess )
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
-
-#include "accelerate.h"
 
 
 -- Stencil Access
@@ -190,7 +189,7 @@ borderRegion
 -- Test whether an index lies within the boundaries of a shape (first argument)
 --
 cinRange :: [C.Exp] -> [C.Exp] -> C.Exp
-cinRange []    []    = INTERNAL_ERROR(error) "inRange" "singleton index"
+cinRange []    []    = $internalError "inRange" "singleton index"
 cinRange shape index = foldl1 and (zipWith inside shape index)
   where
     inside sz i = [cexp| ({ const $ty:cint _i = $exp:i; _i >= 0 && _i < $exp:sz; }) |]
@@ -264,12 +263,12 @@ readStencil dev grp dummy
 zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
 zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
 zipWith _ []     []     = []
-zipWith _ _      _      = INTERNAL_ERROR(error) "zipWith" "argument mismatch"
+zipWith _ _      _      = $internalError "zipWith" "argument mismatch"
 
 zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
 zipWith3 f (x:xs) (y:ys) (z:zs) = f x y z : zipWith3 f xs ys zs
 zipWith3 _ []     []     []     = []
-zipWith3 _ _      _      _      = INTERNAL_ERROR(error) "zipWith3" "argument mismatch"
+zipWith3 _ _      _      _      = $internalError "zipWith3" "argument mismatch"
 
 
 -- Split a list into segments of given length

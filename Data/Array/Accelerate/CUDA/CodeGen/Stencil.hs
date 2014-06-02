@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |

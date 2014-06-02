@@ -36,9 +36,8 @@ newArray sh f =
 -- Allocate a new, uninitialised Accelerate array on host and device
 --
 allocateArray :: (Shape dim, Elt e) => dim -> CIO (Array dim e)
-allocateArray sh =
-  let arr = Sugar.allocateArray sh
-  in do
-      mallocArray arr
-      return arr
+allocateArray sh = do
+  arr <- fmap Sugar.allocateArray (return sh)
+  mallocArray arr
+  return arr
 

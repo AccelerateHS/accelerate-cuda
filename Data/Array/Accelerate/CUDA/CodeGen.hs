@@ -1,9 +1,10 @@
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE TypeOperators       #-}
 {-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
@@ -18,7 +19,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc,
+  CUTranslSkel, codegenAcc, codegenToStream, codegenFromStream
 
 ) where
 
@@ -35,12 +36,13 @@ import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr )
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr, Vector, (:.) )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
@@ -57,8 +59,6 @@ import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 import Data.Array.Accelerate.CUDA.CodeGen.Streaming
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
-#include "accelerate.h"
-
 
 -- Local environments
 --
@@ -69,7 +69,7 @@ data Val env where
 prj :: Idx env t -> Val env -> [C.Exp]
 prj ZeroIdx      (Push _   v) = v
 prj (SuccIdx ix) (Push val _) = prj ix val
-prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuation"
+prj _            _            = $internalError "prj" "inconsistent valuation"
 
 
 -- Array expressions
@@ -88,7 +88,7 @@ prj _            _            = INTERNAL_ERROR(error) "prj" "inconsistent valuat
 -- TODO: include a measure of how much shared memory a kernel requires.
 --
 codegenAcc :: forall aenv arrs. DeviceProperties -> DelayedOpenAcc aenv arrs -> Gamma aenv -> [ CUTranslSkel aenv arrs ]
-codegenAcc _   Delayed{}       _    = INTERNAL_ERROR(error) "codegenAcc" "expected manifest array"
+codegenAcc _   Delayed{}       _    = $internalError "codegenAcc" "expected manifest array"
 codegenAcc dev (Manifest pacc) aenv
   = codegen
   $ case pacc of
@@ -114,11 +114,13 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil f b a             -> mkStencil dev aenv   <$> travF1 f <*> travB a b
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
-      -- Stream operations
+      -- Loops
+      Loop _                    -> unexpectedError
+   {- -- Stream operations
       MapStream{}               -> unexpectedError
       ToStream a                -> mkToStream dev aenv <$> travD a
       FromStream _              -> return $ mkFromStream dev aenv
-      FoldStream{}              -> unexpectedError
+      FoldStream{}              -> unexpectedError -}
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -151,7 +153,7 @@ codegenAcc dev (Manifest pacc) aenv
 
     -- code generation for delayed arrays
     travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e)
-    travD Manifest{}  = INTERNAL_ERROR(error) "codegenAcc" "expected delayed array"
+    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
     travD Delayed{..} = CUDelayed <$> travE extentD
                                   <*> travF1 indexD
                                   <*> travF1 linearIndexD
@@ -176,8 +178,46 @@ codegenAcc dev (Manifest pacc) aenv
     -- caffeine and misery
     prim :: String
     prim                = showPreAccOp pacc
-    unexpectedError     = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected array primitive: " ++ prim
-    fusionError         = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected fusible material: " ++ prim
+    unexpectedError     = $internalError "codegenAcc" $ "unexpected array primitive: " ++ prim
+    fusionError         = $internalError "codegenAcc" $ "unexpected fusible material: " ++ prim
+
+
+codegenFromStream :: forall aenv sh a. (Shape sh, Elt a) => sh -> DeviceProperties -> CUTranslSkel aenv (Vector a)
+codegenFromStream _ dev = codegen $ return (mkFromStream (undefined :: sh) dev)
+  where
+    codegen :: CUDA (CUTranslSkel aenv (Vector a)) -> CUTranslSkel aenv (Vector a)
+    codegen cuda =
+      let (skeleton, st)                = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      addTo skeleton
+                  
+codegenToStream :: forall aenv sh e. (Shape sh, Elt e) => DeviceProperties -> DelayedOpenAcc aenv (Array (sh :. Int) e) -> Gamma aenv -> CUTranslSkel aenv (Array sh e)
+codegenToStream dev acc aenv = codegen $ (mkToStream dev aenv <$> travD acc)
+  where
+    
+    codegen :: CUDA (CUTranslSkel aenv (Array sh a)) -> CUTranslSkel aenv (Array sh e)
+    codegen cuda =
+      let (skeleton, st)                = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      addTo skeleton
+
+    -- code generation for delayed arrays
+    travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array (sh :. Int) e) -> CUDA (CUDelayedAcc aenv (sh :. Int) e )
+    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
+    travD Delayed{..} = CUDelayed <$> travE extentD
+                                  <*> travF1 indexD
+                                  <*> travF1 linearIndexD
+                                  
+    travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
+    travE = codegenExp dev aenv
+    
+    travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
+    travF1 = codegenFun1 dev aenv
+
 
 
 -- Scalar function abstraction
@@ -221,7 +261,7 @@ codegenFun1 dev aenv fun
              $ \xs -> evalState (evalCGM (go xs)) n
   --
   | otherwise
-  = INTERNAL_ERROR(error) "codegenFun1" "expected unary function"
+  = $internalError "codegenFun1" "expected unary function"
 
 
 codegenFun2
@@ -247,7 +287,7 @@ codegenFun2 dev aenv fun
              $ \xs ys -> evalState (evalCGM (go xs ys)) n
   --
   | otherwise
-  = INTERNAL_ERROR(error) "codegenFun2" "expected binary function"
+  = $internalError "codegenFun2" "expected binary function"
 
 
 -- It is important to filter output terms of a function that will not be used.
@@ -402,7 +442,7 @@ codegenOpenExp dev aenv = cvtE
     prjToInt :: TupleIdx t e -> TupleType a -> Int
     prjToInt ZeroTupIdx     _                 = 0
     prjToInt (SuccTupIdx i) (b `PairTuple` a) = sizeTupleType a + prjToInt i b
-    prjToInt _              _                 = INTERNAL_ERROR(error) "prjToInt" "inconsistent valuation"
+    prjToInt _              _                 = $internalError "prjToInt" "inconsistent valuation"
 
     sizeTupleType :: TupleType a -> Int
     sizeTupleType UnitTuple       = 0
@@ -493,7 +533,7 @@ codegenOpenExp dev aenv = cvtE
           restrict SliceNil              _       _       = []
           restrict (SliceAll   sliceIdx) slx     (sz:sl) = sz : restrict sliceIdx slx sl
           restrict (SliceFixed sliceIdx) (_:slx) ( _:sl) =      restrict sliceIdx slx sl
-          restrict _ _ _ = INTERNAL_ERROR(error) "IndexSlice" "unexpected shapes"
+          restrict _ _ _ = $internalError "IndexSlice" "unexpected shapes"
           --
           slice slix' sh' = reverse $ restrict sliceIndex (reverse slix') (reverse sh')
       in
@@ -512,7 +552,7 @@ codegenOpenExp dev aenv = cvtE
           extend SliceNil              _        _       = []
           extend (SliceAll   sliceIdx) slx      (sz:sh) = sz : extend sliceIdx slx sh
           extend (SliceFixed sliceIdx) (sz:slx) sh      = sz : extend sliceIdx slx sh
-          extend _ _ _ = INTERNAL_ERROR(error) "IndexFull" "unexpected shapes"
+          extend _ _ _ = $internalError "IndexFull" "unexpected shapes"
           --
           replicate slix' sl' = reverse $ extend sliceIndex (reverse slix') (reverse sl')
       in
@@ -562,7 +602,7 @@ codegenOpenExp dev aenv = cvtE
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
       | otherwise
-      = INTERNAL_ERROR(error) "Index" "expected array variable"
+      = $internalError "Index" "expected array variable"
 
 
     linearIndex :: (Shape sh, Elt e)
@@ -580,7 +620,7 @@ codegenOpenExp dev aenv = cvtE
         return   $ zipWith (\t a -> indexArray dev t (cvar a) i) ty arr
       --
       | otherwise
-      = INTERNAL_ERROR(error) "LinearIndex" "expected array variable"
+      = $internalError "LinearIndex" "expected array variable"
 
     -- Array shapes created in this method refer to the shape of free array
     -- variables. As such, they are always passed as arguments to the kernel,
@@ -594,7 +634,7 @@ codegenOpenExp dev aenv = cvtE
       = return $ cshape (delayedDim acc) (fst (namesOfAvar aenv idx))
 
       | otherwise
-      = INTERNAL_ERROR(error) "Shape" "expected array variable"
+      = $internalError "Shape" "expected array variable"
 
     -- The size of a shape, as the product of the extent in each dimension. The
     -- definition is inlined, but we could also call the C function helpers.
@@ -623,7 +663,7 @@ codegenOpenExp dev aenv = cvtE
              -> Val env
              -> Gen [C.Exp]
     foreignE ff x env = case canExecuteExp ff of
-      Nothing      -> INTERNAL_ERROR(error) "codegenOpenExp" "Non-CUDA foreign expression encountered"
+      Nothing      -> $internalError "codegenOpenExp" "Non-CUDA foreign expression encountered"
       Just (hs, f) -> do
         lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
         args    <- cvtE x env
@@ -634,7 +674,7 @@ codegenOpenExp dev aenv = cvtE
     --
     single :: String -> [C.Exp] -> C.Exp
     single _   [x] = x
-    single loc _   = INTERNAL_ERROR(error) loc "expected single expression"
+    single loc _   = $internalError loc "expected single expression"
 
 
 -- Scalar Primitives
@@ -704,7 +744,7 @@ codegenPrim (PrimFromIntegral ta tb) [a]   = codegenFromIntegral ta tb a
 
 -- If the argument lists are not the correct length
 codegenPrim _ _ =
-  INTERNAL_ERROR(error) "codegenPrim" "inconsistent valuation"
+  $internalError "codegenPrim" "inconsistent valuation"
 
 -- Implementation of scalar primitives
 --
@@ -875,7 +915,7 @@ ccastTup ty = fst . travTup ty
                                          (ls, xs' ) = travTup l xs
                                          (rs, xs'') = travTup r xs'
                                        in (ls ++ rs, xs'')
-    travTup _ _                      = INTERNAL_ERROR(error) "ccastTup" "not enough expressions to match type"
+    travTup _ _                      = $internalError "ccastTup" "not enough expressions to match type"
 
 
 postfix :: NumType a -> String -> String

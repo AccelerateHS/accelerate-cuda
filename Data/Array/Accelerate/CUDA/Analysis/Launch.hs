@@ -1,5 +1,5 @@
-{-# LANGUAGE CPP   #-}
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs           #-}
+{-# LANGUAGE TemplateHaskell #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Analysis.Launch
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -13,12 +13,14 @@
 
 module Data.Array.Accelerate.CUDA.Analysis.Launch (
 
-  launchConfig, determineOccupancy
+  launchConfig, determineOccupancy,
+  launchConfigSimple, determineOccupancySimple
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Analysis.Shape
@@ -26,8 +28,6 @@ import Data.Array.Accelerate.Analysis.Shape
 -- library
 import qualified Foreign.CUDA.Analysis                  as CUDA
 import qualified Foreign.CUDA.Driver                    as CUDA
-
-#include "accelerate.h"
 
 
 -- |
@@ -47,13 +47,26 @@ launchConfig
     -> ( Int                    -- block size
        , Int -> Int             -- number of blocks for input problem size (grid)
        , Int )                  -- shared memory (bytes)
-launchConfig Delayed{} _ _ = INTERNAL_ERROR(error) "launchConfig" "encountered delayed array"
+launchConfig Delayed{} _ _ = $internalError "launchConfig" "encountered delayed array"
 launchConfig (Manifest acc) dev occ =
   let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
       maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
       smem      = sharedMem dev acc cta
   in
   (cta, \n -> maxGrid `min` gridSize dev acc n cta, smem)
+
+launchConfigSimple
+    :: CUDA.DeviceProperties    -- the device being executed on
+    -> CUDA.Occupancy           -- kernel occupancy information
+    -> ( Int                    -- block size
+       , Int -> Int             -- number of blocks for input problem size (grid)
+       , Int )                  -- shared memory (bytes)
+launchConfigSimple dev occ =
+  let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
+      maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
+      smem      = 0
+  in
+  (cta, \n -> maxGrid `min` gridSizeSimple dev n cta, smem)
 
 
 -- |
@@ -66,13 +79,25 @@ determineOccupancy
     -> CUDA.Fun                 -- corresponding __global__ entry function
     -> Int                      -- maximum number of threads per block
     -> IO CUDA.Occupancy
-determineOccupancy Delayed{} _ _ _ = INTERNAL_ERROR(error) "determineOccupancy" "encountered delayed array"
+determineOccupancy Delayed{} _ _ _ = $internalError "determineOccupancy" "encountered delayed array"
 determineOccupancy (Manifest acc) dev fn maxBlock = do
   registers     <- CUDA.requires fn CUDA.NumRegs
   static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
   return . snd  $  blockSize dev acc maxBlock registers (\threads -> static_smem + dynamic_smem threads)
   where
     dynamic_smem = sharedMem dev acc
+
+determineOccupancySimple
+    :: CUDA.DeviceProperties
+    -> CUDA.Fun                 -- corresponding __global__ entry function
+    -> Int                      -- maximum number of threads per block
+    -> IO CUDA.Occupancy
+determineOccupancySimple dev fn maxBlock = do
+  registers     <- CUDA.requires fn CUDA.NumRegs
+  static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
+  return . snd  $  blockSizeSimple dev maxBlock registers (\threads -> static_smem + dynamic_smem threads)
+  where
+    dynamic_smem _ = 0
 
 
 -- |
@@ -102,6 +127,16 @@ blockSize dev acc lim regs smem =
       Scanr1 _ _        -> CUDA.incWarp
       _                 -> CUDA.decWarp
 
+blockSizeSimple
+    :: CUDA.DeviceProperties
+    -> Int                      -- maximum number of threads per block
+    -> Int                      -- number of registers used
+    -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
+    -> (Int, CUDA.Occupancy)
+blockSizeSimple dev lim regs smem =
+  CUDA.optimalBlockSizeBy dev (filter (<= lim) . strategy) (const regs) smem
+  where
+    strategy = CUDA.decWarp
 
 -- |
 -- Determine the number of blocks of the given size necessary to process the
@@ -123,11 +158,20 @@ gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim delayedDim acc == 0 the
 gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim delayedDim acc == 0 then split acc size cta else max 1 size
 gridSize _ acc                   size cta = split acc size cta
 
+gridSizeSimple :: CUDA.DeviceProperties -> Int -> Int -> Int
+gridSizeSimple _ size cta = splitSimple size cta
+
 split :: acc aenv a -> Int -> Int -> Int
 split acc size cta = (size `between` eltsPerThread acc) `between` cta
   where
     between arr n   = 1 `max` ((n + arr - 1) `div` n)
     eltsPerThread _ = 1
+
+splitSimple :: Int -> Int -> Int
+splitSimple size cta = (size `between` eltsPerThread) `between` cta
+  where
+    between arr n   = 1 `max` ((n + arr - 1) `div` n)
+    eltsPerThread   = 1
 
 
 -- |
@@ -137,19 +181,17 @@ split acc size cta = (size `between` eltsPerThread acc) `between` cta
 --
 sharedMem :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int
 -- non-computation forms
-sharedMem _ Alet{}     _ = INTERNAL_ERROR(error) "sharedMem" "Let"
-sharedMem _ Avar{}     _ = INTERNAL_ERROR(error) "sharedMem" "Avar"
-sharedMem _ Apply{}    _ = INTERNAL_ERROR(error) "sharedMem" "Apply"
-sharedMem _ Acond{}    _ = INTERNAL_ERROR(error) "sharedMem" "Acond"
-sharedMem _ Awhile{}   _ = INTERNAL_ERROR(error) "sharedMem" "Awhile"
-sharedMem _ Atuple{}   _ = INTERNAL_ERROR(error) "sharedMem" "Atuple"
-sharedMem _ Aprj{}     _ = INTERNAL_ERROR(error) "sharedMem" "Aprj"
-sharedMem _ Use{}      _ = INTERNAL_ERROR(error) "sharedMem" "Use"
-sharedMem _ Unit{}     _ = INTERNAL_ERROR(error) "sharedMem" "Unit"
-sharedMem _ Reshape{}  _ = INTERNAL_ERROR(error) "sharedMem" "Reshape"
-sharedMem _ Aforeign{} _ = INTERNAL_ERROR(error) "sharedMem" "Aforeign"
-sharedMem _ MapStream{}  _ = INTERNAL_ERROR(error) "sharedMem" "MapStream"
-sharedMem _ FoldStream{} _ = INTERNAL_ERROR(error) "sharedMem" "FoldStream"
+sharedMem _ Alet{}     _ = $internalError "sharedMem" "Let"
+sharedMem _ Avar{}     _ = $internalError "sharedMem" "Avar"
+sharedMem _ Apply{}    _ = $internalError "sharedMem" "Apply"
+sharedMem _ Acond{}    _ = $internalError "sharedMem" "Acond"
+sharedMem _ Awhile{}   _ = $internalError "sharedMem" "Awhile"
+sharedMem _ Atuple{}   _ = $internalError "sharedMem" "Atuple"
+sharedMem _ Aprj{}     _ = $internalError "sharedMem" "Aprj"
+sharedMem _ Use{}      _ = $internalError "sharedMem" "Use"
+sharedMem _ Unit{}     _ = $internalError "sharedMem" "Unit"
+sharedMem _ Reshape{}  _ = $internalError "sharedMem" "Reshape"
+sharedMem _ Aforeign{} _ = $internalError "sharedMem" "Aforeign"
 
 -- skeleton nodes
 sharedMem _ Generate{}          _        = 0
@@ -174,5 +216,4 @@ sharedMem p (FoldSeg _ x _ _)   blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedExpType x)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
-sharedMem _ (ToStream _)        _        = 0
-sharedMem _ (FromStream _)      _        = 0
+sharedMem _ (Loop _)           _         = 0

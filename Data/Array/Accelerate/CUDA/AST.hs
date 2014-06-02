@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -18,8 +19,9 @@ module Data.Array.Accelerate.CUDA.AST (
   module Data.Array.Accelerate.AST,
 
   AccKernel(..), Free, Gamma(..), Idx_(..),
-  ExecAcc, ExecAfun, ExecOpenAcc(..),
+  ExecAcc, ExecAfun, ExecOpenAfun, ExecOpenAcc(..),
   ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
+  ExecLoop(..), ExecP(..), ExecT(..), ExecC(..),
   freevar, makeEnvMap,
 
 ) where
@@ -27,7 +29,7 @@ module Data.Array.Accelerate.CUDA.AST (
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, (:.) )
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -35,6 +37,7 @@ import qualified Foreign.CUDA.Analysis                  as CUDA
 -- system
 import Text.PrettyPrint
 import Data.Hashable
+import Data.IORef                                       ( IORef )
 import Data.Monoid                                      ( Monoid(..) )
 import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
@@ -120,12 +123,17 @@ data ExecOpenAcc aenv a where
   EmbedAcc  :: (Shape sh, Elt e)
             => !(PreExp ExecOpenAcc aenv sh)                    -- shape of the result array, used by execution
             -> ExecOpenAcc aenv (Array sh e)
+               
+  ExecLoop :: Arrays arrs
+           => ExecLoop aenv () arrs
+           -> ExecOpenAcc aenv arrs
 
 
 -- An annotated AST suitable for execution in the CUDA environment
 --
 type ExecAcc  a         = ExecOpenAcc () a
 type ExecAfun a         = PreAfun ExecOpenAcc a
+type ExecOpenAfun aenv a = PreOpenAfun ExecOpenAcc aenv a
 
 type ExecOpenExp        = PreOpenExp ExecOpenAcc
 type ExecOpenFun        = PreOpenFun ExecOpenAcc
@@ -169,3 +177,42 @@ prettyExecAcc alvl wrap exec =
         Aprj{}          -> base
         _               -> ann <+> base
 
+data ExecLoop aenv lenv arrs where
+  ExecEmpty :: ExecLoop aenv lenv ()
+  ExecP :: (Arrays a, Arrays arrs) => ExecP aenv      a -> ExecLoop aenv (lenv, a) arrs -> ExecLoop aenv lenv  arrs
+  ExecT :: (Arrays a, Arrays arrs) => ExecT aenv lenv a -> ExecLoop aenv (lenv, a) arrs -> ExecLoop aenv lenv  arrs
+  ExecC :: (Arrays a, Arrays arrs) => ExecC aenv lenv a -> ExecLoop aenv  lenv     arrs -> ExecLoop aenv lenv (arrs, a)
+
+data ExecP aenv a where
+  ExecToStream :: (Shape sh, Elt e)
+               => AccKernel (Array sh e)
+               -> !(Gamma aenv) 
+               -> ExecOpenAcc aenv (Array (sh :. Int) e)
+               -> IORef (sh, Int, Int)
+               -> ExecP aenv (Array sh e)
+
+data ExecT aenv lenv a where
+  ExecMap :: (Shape sh, Elt e, Shape sh', Elt e')
+          => ExecOpenAfun aenv (Array sh e -> Array sh' e')
+          -> Idx lenv (Array sh e)
+          -> ExecT aenv lenv (Array sh' e')
+
+  ExecZipWith :: (Shape sh, Elt e, Shape sh'', Elt e'', Shape sh', Elt e')
+          => ExecOpenAfun aenv (Array sh e -> Array sh'' e'' -> Array sh' e')
+          -> Idx lenv (Array sh e)
+          -> Idx lenv (Array sh'' e'')
+          -> ExecT aenv lenv (Array sh' e')
+  
+data ExecC aenv lenv a where
+  ExecFoldStream :: (Shape sh, Elt e)
+                 => ExecOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
+                 -> ExecOpenAcc aenv (Array sh e)
+                 -> Idx lenv (Array sh e)
+                 -> IORef (Array sh e)
+                 -> ExecC aenv lenv (Array sh e)
+
+  ExecFromStream :: (Shape sh, Elt e)
+                 => AccKernel (Vector e)
+                 -> Idx lenv (Array sh e)   
+                 -> IORef ([Array sh e])
+                 -> ExecC aenv lenv (Vector sh, Vector e)

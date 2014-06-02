@@ -3,6 +3,7 @@
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Compile
@@ -22,9 +23,8 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 ) where
 
-#include "accelerate.h"
-
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
@@ -49,7 +49,9 @@ import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( liftIO, MonadIO )
 import Control.Concurrent
 import Crypto.Hash.MD5                                          ( hashlazy )
+import Data.IORef                                               ( newIORef )
 import Data.List                                                ( intercalate )
+import Data.Bits
 import Data.Maybe
 import Data.Monoid
 import System.Directory
@@ -114,7 +116,7 @@ compileOpenAcc = traverseAcc
     -- are merged at every step.
     --
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs -> CIO (ExecOpenAcc aenv arrs)
-    traverseAcc Delayed{} = INTERNAL_ERROR(error) "compileOpenAcc" "unexpected delayed array"
+    traverseAcc Delayed{} = $internalError "compileOpenAcc" "unexpected delayed array"
     traverseAcc topAcc@(Manifest pacc) =
       case pacc of
         -- Environment and control flow
@@ -161,18 +163,14 @@ compileOpenAcc = traverseAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
-        -- Streams
-        MapStream f a       -> node =<< liftA2 MapStream   <$> travAF f <*> travA a
-        ToStream a          -> exec =<< liftA  ToStream    <$> travA a
-        FromStream a        -> exec =<< liftA  FromStream  <$> travA a
-        FoldStream f a1 a2  -> node =<< liftA3 FoldStream  <$> travAF f <*> travA a1 <*> travA a2
+        -- Loops
+        Loop l                  -> ExecLoop <$> compileLoop l
 
       where
         use :: ArraysR a -> a -> CIO ()
         use ArraysRunit         ()       = return ()
         use ArraysRarray        arr      = useArrayAsync arr Nothing
         use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
-        use (ArraysRstream r) as        = sequence_ $ map (use r) as -- TODO laziness?
 
         exec :: (Free aenv, PreOpenAcc ExecOpenAcc aenv arrs) -> CIO (ExecOpenAcc aenv arrs)
         exec (aenv, eacc) = do
@@ -203,10 +201,10 @@ compileOpenAcc = traverseAcc
         travF (Lam  f)  = liftA Lam  <$> travF f
 
         noKernel :: FL.FullList () (AccKernel a)
-        noKernel =  FL.FL () (INTERNAL_ERROR(error) "compile" "no kernel module for this node") FL.Nil
+        noKernel =  FL.FL () ($internalError "compile" "no kernel module for this node") FL.Nil
 
         fullOfList :: [a] -> FL.FullList () a
-        fullOfList []       = INTERNAL_ERROR(error) "fullList" "empty list"
+        fullOfList []       = $internalError "fullList" "empty list"
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
 
@@ -222,7 +220,40 @@ compileOpenAcc = traverseAcc
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
             where
-              err = INTERNAL_ERROR(error) "compile" "Executing pure version of a CUDA foreign function"
+              err = $internalError "compile" "Executing pure version of a CUDA foreign function"
+
+        compileLoop :: forall lenv arrs' . PreOpenLoop DelayedOpenAcc aenv lenv arrs' -> CIO (ExecLoop aenv lenv arrs')
+        compileLoop l =
+          case l of
+            EmptyLoop -> return ExecEmpty
+            Producer (ToStream acc) l' -> do
+              (aenv, eacc) <- travA acc
+              let gamma = makeEnvMap aenv
+              dev   <- asks deviceProperties
+              kernel <- build1Simple (codegenToStream dev acc gamma)
+              exel <- compileLoop l'
+              v <- liftIO $ newIORef undefined
+              return $ ExecP (ExecToStream kernel gamma eacc v) exel
+            Transducer (MapStream f x) l' -> do
+              f' <- compileOpenAfun f
+              exel <- compileLoop l'
+              return $ ExecT (ExecMap f' x) exel
+            Transducer (ZipWithStream f x y) l' -> do
+              f' <- compileOpenAfun f
+              exel <- compileLoop l'
+              return $ ExecT (ExecZipWith f' x y) exel
+            Consumer (FoldStream f acc x) l' -> do
+              acc' <- traverseAcc acc
+              f' <- compileOpenAfun f
+              exel <- compileLoop l'
+              v <- liftIO $ newIORef undefined
+              return $ ExecC (ExecFoldStream f' acc' x v) exel
+            Consumer (FromStream (x :: Idx lenv' (Array sh a))) l' -> do
+              dev <- asks deviceProperties
+              kernel <- build1Simple (codegenFromStream (undefined :: sh) dev)
+              exel <- compileLoop l'
+              v <- liftIO $ newIORef []
+              return $ ExecC (ExecFromStream kernel x v) exel
 
     -- Traverse a scalar expression
     --
@@ -310,8 +341,7 @@ compileOpenAcc = traverseAcc
 
         bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
         bind (ExecAcc _ _ (Avar ix)) = freevar ix
-        bind _                       = INTERNAL_ERROR(error) "bind" "expected array variable"
-
+        bind _                       = $internalError "bind" "expected array variable"
 
 -- Applicative
 -- -----------
@@ -368,6 +398,41 @@ build1 acc code = do
       --
       message   $ intercalate "\n     ... " [msg1, msg2]
 
+build1Simple :: CUTranslSkel aenv a -> CIO (AccKernel a)
+build1Simple code = do
+  context       <- asks activeContext
+  let dev       =  deviceProperties context
+  table         <- gets kernelTable
+  (entry,key)   <- compile table dev code
+  let (cta,blocks,smem) = launchConfigSimple dev occ
+      (mdl,fun,occ)     = unsafePerformIO $ do
+        m <- link context table key
+        f <- CUDA.getFun m entry
+        l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
+        o <- determineOccupancySimple dev f l
+        D.when D.dump_cc (stats entry f o)
+        return (m,f,o)
+  --
+  return $ AccKernel entry fun mdl occ cta smem blocks
+  where
+    stats name fn occ = do
+      regs      <- CUDA.requires fn CUDA.NumRegs
+      smem      <- CUDA.requires fn CUDA.SharedSizeBytes
+      cmem      <- CUDA.requires fn CUDA.ConstSizeBytes
+      lmem      <- CUDA.requires fn CUDA.LocalSizeBytes
+      let msg1  = "entry function '" ++ name ++ "' used "
+                  ++ shows regs " registers, "  ++ shows smem " bytes smem, "
+                  ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
+          msg2  = "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
+                  ++ shows (CUDA.activeThreads occ)      " threads over "
+                  ++ shows (CUDA.activeWarps occ)        " warps in "
+                  ++ shows (CUDA.activeThreadBlocks occ) " blocks"
+      --
+      -- make sure kernel/stats are printed together. Use 'intercalate' rather
+      -- than 'unlines' to avoid a trailing newline.
+      --
+      message   $ intercalate "\n     ... " [msg1, msg2]
+
 
 -- Link a compiled binary and update the associated kernel entry in the hash
 -- table. This may entail waiting for the external compilation process to
@@ -375,7 +440,7 @@ build1 acc code = do
 --
 link :: Context -> KernelTable -> KernelKey -> IO CUDA.Module
 link context table key =
-  let intErr    = INTERNAL_ERROR(error) "link" "missing kernel entry"
+  let intErr    = $internalError "link" "missing kernel entry"
       ctx       = deviceContext context
       weak_ctx  = weakContext context
   in do
@@ -474,10 +539,10 @@ compileFlags cufile = do
   where
     warnings    = D.mode D.dump_cc && D.mode D.verbose
     debug       = D.mode D.debug_cc
-    machine     = case (SIZEOF_HTYPE_INT :: Int) of
-                    4   -> "-m32"
-                    8   -> "-m64"
-                    _   -> INTERNAL_ERROR(error) "compileFlags" "unknown 'Int' size"
+    machine     = case finiteBitSize (undefined :: Int) of
+                    32  -> "-m32"
+                    64  -> "-m64"
+                    _   -> $internalError "compileFlags" "unknown 'Int' size"
 
 
 -- Open a unique file in the temporary directory used for compilation

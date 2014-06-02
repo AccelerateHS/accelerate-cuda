@@ -2,8 +2,9 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -38,6 +39,7 @@ import Data.Maybe
 import Data.Functor
 import Data.Typeable
 import Control.Monad
+import Language.Haskell.TH
 import System.Mem.StableName
 import Foreign.Ptr
 import Foreign.C.Types
@@ -48,12 +50,11 @@ import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
-
-#include "accelerate.h"
 
 
 -- Device array representation
@@ -140,10 +141,11 @@ instance TextureData CChar   where format _ = (CUDA.Int8,   1)
 instance TextureData CSChar  where format _ = (CUDA.Int8,   1)
 instance TextureData CUChar  where format _ = (CUDA.Word8,  1)
 instance TextureData Char    where format _ = (CUDA.Word32, 1)
-instance TextureData Int     where format _ = (CUDA.Int32,  SIZEOF_HTYPE_INT           `div` 4)
-instance TextureData Word    where format _ = (CUDA.Word32, SIZEOF_HTYPE_WORD          `div` 4)
-instance TextureData CLong   where format _ = (CUDA.Int32,  SIZEOF_HTYPE_LONG          `div` 4)
-instance TextureData CULong  where format _ = (CUDA.Word32, SIZEOF_HTYPE_UNSIGNED_LONG `div` 4)
+
+$( runQ [d| instance TextureData Int    where format _ = (CUDA.Int32,  sizeOf (undefined::Int)    `div` 4) |] )
+$( runQ [d| instance TextureData Word   where format _ = (CUDA.Word32, sizeOf (undefined::Word)   `div` 4) |] )
+$( runQ [d| instance TextureData CLong  where format _ = (CUDA.Int32,  sizeOf (undefined::CLong)  `div` 4) |] )
+$( runQ [d| instance TextureData CULong where format _ = (CUDA.Word32, sizeOf (undefined::CULong) `div` 4) |] )
 
 
 -- Primitive array operations
@@ -402,7 +404,7 @@ devicePtrsOfArrayData !ctx !mt !ad = do
     Just v  -> return v
     Nothing -> do
       sn <- makeStableName ad
-      INTERNAL_ERROR(error) "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
+      $internalError "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
 
 
 -- Advance device pointers by a given number of elements
@@ -439,5 +441,5 @@ transfer name bytes action
                                      ++ showBytes bytes ++ " @ " ++ showRate bytes gpuTime ++ ", "
                                      ++ D.elapsed gpuTime cpuTime
     in
-    D.timed D.dump_gc msg action
+    D.timed D.dump_gc msg Nothing action
 

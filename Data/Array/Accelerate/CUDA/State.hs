@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns               #-}
-{-# LANGUAGE CPP                        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.State
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -28,6 +28,7 @@ module Data.Array.Accelerate.CUDA.State (
 ) where
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Debug                 ( message, dump_gc )
 import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
@@ -46,8 +47,6 @@ import System.Mem                                       ( performGC )
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                    as CUDA
-
-#include "accelerate.h"
 
 
 -- Execution State
@@ -83,7 +82,7 @@ evalCUDA :: Context -> CIO a -> IO a
 evalCUDA !ctx !acc =
   runInBoundThread (bracket_ setup teardown action)
   `catch`
-  \e -> INTERNAL_ERROR(error) "unhandled" (show (e :: CUDAException))
+  \e -> $internalError "unhandled" (show (e :: CUDAException))
   where
     setup       = push ctx
     teardown    = pop >> performGC

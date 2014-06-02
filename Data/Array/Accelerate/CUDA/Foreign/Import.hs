@@ -78,7 +78,7 @@ data CUDAForeignAcc as bs where
                  -> (as -> CIO bs)              -- operation to execute
                  -> CUDAForeignAcc as bs
 
-deriving instance Typeable2 CUDAForeignAcc
+deriving instance Typeable CUDAForeignAcc
 
 instance Foreign CUDAForeignAcc where
   strForeign (CUDAForeignAcc n _) = n
@@ -106,7 +106,7 @@ data CUDAForeignExp x y where
                  -> String                      -- name of the foreign function
                  -> CUDAForeignExp x y
 
-deriving instance Typeable2 CUDAForeignExp
+deriving instance Typeable CUDAForeignExp
 
 instance Foreign CUDAForeignExp where
   strForeign (CUDAForeignExp _ n) = n

@@ -71,6 +71,7 @@ create dev flags = do
   return actx
 
 -- |Given a device context, construct a new context around it.
+--
 fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
 fromDeviceContext dev ctx = do
   prp           <- CUDA.props dev

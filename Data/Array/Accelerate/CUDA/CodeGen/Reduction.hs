@@ -1,7 +1,8 @@
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeOperators       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Reduction
@@ -24,14 +25,13 @@ import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Type                       ( IsIntegral )
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Z(..), (:.)(..) )
 import Data.Array.Accelerate.Analysis.Shape
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Z(..), (:.)(..) )
+import Data.Array.Accelerate.Error                      ( internalError )
+import Data.Array.Accelerate.Type                       ( IsIntegral )
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
-
-#include "accelerate.h"
 
 
 -- Reduce an array along the innermost dimension. The function must be
@@ -718,7 +718,7 @@ reduceWarpShfl _dev (CUFun2 _ _ f) x0 x1 n tid
       where
         shfl 4  = "shfl_xor32"
         shfl 8  = "shfl_xor64"
-        shfl _  = INTERNAL_ERROR(error) "shfl_xor" "I only know about 32- and 64-bit types"
+        shfl _  = $internalError "shfl_xor" "I only know about 32- and 64-bit types"
 
 
 -- Reduce a block of values in butterfly fashion using __shfl_xor(). Each warp

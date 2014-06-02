@@ -196,7 +196,6 @@ runProgram hndl fun input output = do
       (x, ptr')  <- marshalIn aR1 ptr
       (y, ptr'') <- marshalIn aR2 ptr'
       return ((x,y), ptr'')
-    marshalIn (ArraysRstream _) _ = error "Cannot marshal a stream"
 
     marshalOut :: ArraysR b -> b -> Ptr OutputArray -> CIO (Ptr OutputArray)
     marshalOut ArraysRunit  () ptr = return ptr
@@ -221,8 +220,6 @@ runProgram hndl fun input output = do
     marshalOut (ArraysRpair aR1 aR2) (x,y) ptr = do
       ptr' <- marshalOut aR1 x ptr
       marshalOut aR2 y ptr'
-      
-    marshalOut (ArraysRstream _) _ _ = error "Cannot marshal a stream"
 
 
 -- |Given the 'Name' of an Accelerate function (a function of type ''Acc a -> Acc b'') generate a
@@ -235,7 +232,7 @@ exportAfun fname ename = do
   genCompileFun n ename ty
 
 genCompileFun :: Name -> String -> Type -> Q [Dec]
-genCompileFun fname ename ty@(AppT (AppT ArrowT (AppT _ a)) (AppT _ b))
+genCompileFun fname ename (AppT (AppT ArrowT (AppT _ _)) (AppT _ _))
   = sequence [sig, dec, expt]
   where
     initName = mkName ename

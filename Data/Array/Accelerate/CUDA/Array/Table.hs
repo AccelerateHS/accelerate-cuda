@@ -1,8 +1,8 @@
 {-# LANGUAGE BangPatterns        #-}
-{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Table
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -41,13 +41,12 @@ import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.HashTable.IO                              as HT
 
+import Data.Array.Accelerate.Error                              ( internalError )
 import Data.Array.Accelerate.Array.Data                         ( ArrayData )
 import Data.Array.Accelerate.CUDA.Context                       ( Context, weakContext, deviceContext )
 import Data.Array.Accelerate.CUDA.Array.Nursery                 ( Nursery(..), NRS )
 import qualified Data.Array.Accelerate.CUDA.Array.Nursery       as N
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-
-#include "accelerate.h"
 
 
 -- We use an MVar to the hash table, so that several threads may safely access
@@ -125,7 +124,7 @@ lookup ctx (MemoryTable !ref _ _) !arr = do
       mv <- deRefWeak w
       case mv of
         Just v | Just p <- gcast v -> trace ("lookup/found: " ++ show sa) $ return (Just p)
-               | otherwise         -> INTERNAL_ERROR(error) "lookup" $ "type mismatch"
+               | otherwise         -> $internalError "lookup" $ "type mismatch"
 
         -- Note: [Weak pointer weirdness]
         --
@@ -140,7 +139,7 @@ lookup ctx (MemoryTable !ref _ _) !arr = do
         -- above in the error message.
         --
         Nothing                    ->
-          makeStableArray ctx arr >>= \x -> INTERNAL_ERROR(error) "lookup" $ "dead weak pair: " ++ show x
+          makeStableArray ctx arr >>= \x -> $internalError "lookup" $ "dead weak pair: " ++ show x
 
 
 -- Allocate a new device array to be associated with the given host-side array.

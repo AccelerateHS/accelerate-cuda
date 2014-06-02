@@ -6,9 +6,11 @@
 {-# LANGUAGE NoForeignFunctionInterface #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -42,6 +44,7 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.Execute.Stream      as Stream
 
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
@@ -52,20 +55,21 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 -- standard library
 import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
-import Control.Monad                                            ( join, when, liftM )
+import Control.Monad                                            ( join, when, liftM, mzero )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
-import Control.Monad.Trans                                      ( MonadIO, liftIO )
+import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
+import Control.Monad.Trans.Maybe                                ( MaybeT, runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
+import Data.IORef                                               ( readIORef, modifyIORef, writeIORef )
 import Data.Word
 import Data.Maybe
+import Data.Monoid                                              ( mempty )
 
-import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
+import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.HashMap.Strict                            as Map
-
-#include "accelerate.h"
 
 
 -- Asynchronous kernel execution
@@ -88,7 +92,7 @@ data Aval env where
 aprj :: Idx env t -> Aval env -> Async t
 aprj ZeroIdx       (Apush _   x) = x
 aprj (SuccIdx idx) (Apush val _) = aprj idx val
-aprj _             _             = INTERNAL_ERROR(error) "aprj" "inconsistent valuation"
+aprj _             _             = $internalError "aprj" "inconsistent valuation"
 
 
 -- All work submitted to the given stream will occur after the asynchronous
@@ -132,8 +136,6 @@ streaming first second = do
 --    skeleton are invoked
 --
 
-type KernelStream a = [CIO a]
-
 executeAcc :: Arrays a => ExecAcc a -> CIO a
 executeAcc !acc = streaming (executeOpenAcc acc Aempty) wait
 
@@ -146,58 +148,10 @@ executeAfun1 !afun !arrs = do
     useArrays ArraysRunit         ()       _  = return ()
     useArrays (ArraysRpair r1 r0) (a1, a0) st = useArrays r1 a1 st >> useArrays r0 a0 st
     useArrays ArraysRarray        arr      st = useArrayAsync arr (Just st)
-    useArrays (ArraysRstream r)   arrs'    st = sequence_ (map (\ arr -> useArrays r arr st) arrs')
-
 
 executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Aval aenv -> Async a -> CIO b
 executeOpenAfun1 (Alam (Abody f)) aenv x = streaming (executeOpenAcc f (aenv `Apush` x)) wait
 executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
-
--- Similar to execOpenAcc but returns a list of computations of type
--- [CIO Arrs] instead of a single computation. The list is the stream.
-scheduleOpenAccStream
-    :: forall aenv arrs.
-       ExecOpenAcc aenv [arrs]
-    -> Aval aenv
-    -> Stream
-    -> CIO (KernelStream arrs)
-scheduleOpenAccStream (ExecAcc (FL () kernel _) !gamma !pacc) !aenv !stream
-  = case pacc of
-    MapStream f a -> return . (mapStreamOp f)  =<< scheduleOpenAccStream a aenv stream
-    ToStream a    -> toStreamOp =<< extent a
-    Avar ix       -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream variables"
-    Alet bnd body -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "not implemented yet: Stream let-binding"
-    _             -> INTERNAL_ERROR(error) "scheduleOpenAccStream" "unexpected non-stream matter"
- where
-   
-   -- Stream operations
-    mapStreamOp :: Arrays b 
-                => PreOpenAfun ExecOpenAcc aenv (a -> b) 
-                -> KernelStream a 
-                -> KernelStream b
-    mapStreamOp (Alam (Abody body)) ks = do
-      map f ks
-        where f k = do
-                a <- k
-                nop <- liftIO Event.create
-                executeOpenAcc body (aenv `Apush` (Async nop a)) stream
---                                      (streaming . executeOpenAcc f . Apush aenv =<<) as
-    mapStreamOp _ _ = error "Hello"
-
-    toStreamOp :: (Shape sh, Elt e) 
-               => (sh:.Int) 
-               -> CIO (KernelStream (Array sh e))
-    toStreamOp (sh :. n) = do
-      return $ map k [0..n-1]
-      where k i = 
-              do out <- allocateArray sh
-                 executeStream kernel i gamma aenv (size sh) out stream
-                 return out
-
-    -- get the extent of an embedded array
-    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent ExecAcc{}     = INTERNAL_ERROR(error) "executeOpenAcc" "expected delayed array"
-    extent (EmbedAcc sh) = executeExp sh aenv stream
 
 -- Evaluate an open array computation
 --
@@ -208,8 +162,8 @@ executeOpenAcc
     -> Stream
     -> CIO arrs
 executeOpenAcc EmbedAcc{} _ _
-  = INTERNAL_ERROR(error) "execute" "unexpected delayed array"
-executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
+  = $internalError "execute" "unexpected delayed array"
+executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
       -- Array introduction
@@ -255,24 +209,15 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
       
-      MapStream{}               -> execStream =<< travAstream acc'
-      ToStream{}                -> execStream =<< travAstream acc'
-      FromStream a              -> fromStreamOp   =<< travAstream a
-      FoldStream f a1 a2        -> join $ foldStreamOp f <$> travA a1 <*> travAstream a2
+      Loop _                    -> $internalError "executeOpenAcc" "uncompiled loop"
 
   where
-    fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
-
-    execStream :: KernelStream a => CIO [a]
-    execStream = sequence
-
+    fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
+    
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
     
-    travAstream :: Arrays a => ExecOpenAcc aenv [a] -> CIO (KernelStream a)
-    travAstream !acc = scheduleOpenAccStream acc aenv stream
-
     travE :: ExecExp aenv t -> CIO t
     travE !exp = executeExp exp aenv stream
 
@@ -290,7 +235,8 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent ExecAcc{}     = INTERNAL_ERROR(error) "executeOpenAcc" "expected delayed array"
+    extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecLoop{}    = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
@@ -310,7 +256,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     --
     reshapeOp :: Shape sh => sh -> Array sh' e -> Array sh e
     reshapeOp sh (Array sh' adata)
-      = BOUNDS_CHECK(check) "reshape" "shape mismatch" (size sh == R.size sh')
+      = $boundsCheck "reshape" "shape mismatch" (size sh == R.size sh')
       $ Array (fromElt sh) adata
 
     -- Executing fold operations depend on whether we are recursively collapsing
@@ -319,7 +265,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     --
     fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     fold1Op !sh@(_ :. sz)
-      = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
+      = $boundsCheck "fold1" "empty array" (sz > 0)
       $ foldCore sh
 
     foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
@@ -353,7 +299,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
                 foldRec out
 
       | otherwise
-      = INTERNAL_ERROR(error) "foldRec" "missing phase-2 kernel module"
+      = $internalError "foldRec" "missing phase-2 kernel module"
 
     -- Segmented reduction. Subtract one from the size of the segments vector as
     -- this is the result of an exclusive scan to calculate segment offsets.
@@ -421,7 +367,7 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           execute kernel gamma aenv numElements (numElements, d_body, blk, d_sum) stream
 
       | otherwise
-      = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
+      = $internalError "scanOp" "missing multi-block kernel module(s)"
 
     -- Forward permutation
     --
@@ -470,30 +416,138 @@ executeOpenAcc acc'@(ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           return out
 
       | otherwise
-      = INTERNAL_ERROR(error) "stencil2Op" "missing stencil specialisation kernel"
+      = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
-    fromStreamOp :: (Elt e) => KernelStream (Scalar e) -> CIO (Vector e)
-    fromStreamOp arrs = do
-      out <- allocateArray (Z :. length arrs)
-      _ <- mapM (k out) (zip arrs [0..])
-      return out
-      where k !out (!cioarr, i) = do
-              arr <- cioarr
-              executeStream kernel i gamma aenv (size Z) (out, arr) stream
-    
-    foldStreamOp :: PreOpenAfun ExecOpenAcc aenv (a -> a -> a) 
-                 -> a 
-                 -> KernelStream a
-                 -> CIO a
-    foldStreamOp (Alam (Alam (Abody body))) e arrs =
-      do let red a [] = return a
-             red a (cioarr:arrs') = do 
-               arr <- cioarr
-               nop <- liftIO Event.create
-               a' <- executeOpenAcc body (aenv `Apush` (Async nop a) `Apush` (Async nop arr)) stream
-               red a' arrs'
-         red e arrs
-    foldStreamOp _ _ _ = error "Hello fold"
+executeOpenAcc (ExecLoop l) aenv stream = executeLoop l aenv stream
+
+executeLoop :: forall aenv arrs . ExecLoop aenv () arrs -> Aval aenv -> Stream -> CIO arrs
+executeLoop topLoop aenv stream 
+  | degenerate topLoop = initLoop topLoop >>         returnOut topLoop
+  | otherwise          = initLoop topLoop >> loop >> returnOut topLoop
+
+  where
+    degenerate :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> Bool
+    degenerate l =
+      case l of
+        ExecEmpty -> True
+        ExecP _ _ -> False
+        ExecT _ l' -> degenerate l'
+        ExecC _ l' -> degenerate l'
+
+    initLoop :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> CIO ()
+    initLoop l =
+      case l of
+        ExecEmpty  -> return ()
+        ExecP p l' -> initP p >> initLoop l'
+        ExecT _ l' -> initLoop l'
+        ExecC c l' -> initC c >> initLoop l'
+
+      where
+        initP :: forall a. ExecP aenv a -> CIO ()
+        initP (ExecToStream _ _ a v) =
+          do (sh :. n) <- extent a
+             liftIO $ writeIORef v (sh, 0, n)
+
+        initC :: forall a. ExecC aenv lenv a -> CIO ()
+        initC c =
+          case c of
+            ExecFoldStream _ acc _ v ->
+              do a <- executeOpenAcc acc aenv stream
+                 liftIO $ writeIORef v a
+            ExecFromStream{} -> return ()
+
+    loop :: CIO ()
+    loop = 
+      do ml <- runMaybeT (go topLoop Empty)
+         case ml of
+           Nothing -> return ()
+           Just () -> loop
+
+    go :: forall lenv arrs'. ExecLoop aenv lenv arrs' -> Val lenv -> MaybeT CIO ()
+    go !l !lenv =
+      case l of
+        ExecEmpty -> return ()
+        ExecP p l' ->       produce   p  >>= \ a -> go l' (lenv `Push` a)
+        ExecT t l' -> lift (transduce t) >>= \ a -> go l' (lenv `Push` a)
+        ExecC c l' -> lift (consume   c) >>         go l'  lenv
+      
+      where
+        produce :: forall a . ExecP aenv a -> MaybeT CIO a
+        produce (ExecToStream kernel gamma _ v) =
+          do (sh, i, n) <- liftIO $ readIORef v
+             if i < n
+               then lift $
+                 do out <- allocateArray sh
+                    execute kernel gamma aenv (size sh) (i, out) stream
+                    liftIO $ writeIORef v (sh, i + 1, n)
+                    return out
+               else mzero
+
+        transduce :: forall a . ExecT aenv lenv a -> CIO a
+        transduce t =
+          case t of
+            ExecMap afun x -> travAfun1 afun (prj x lenv)
+            ExecZipWith afun x y -> travAfun2 afun (prj x lenv) (prj y lenv)
+
+        consume :: forall a . ExecC aenv lenv a -> CIO ()
+        consume c =
+          case c of
+            ExecFoldStream afun _ x v ->
+              do acc <- liftIO $ readIORef v
+                 acc' <- travAfun2 afun acc (prj x lenv)
+                 liftIO $ writeIORef v acc'
+            ExecFromStream _ x v ->
+              do liftIO $ modifyIORef v (prj x lenv:)
+
+    returnOut :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> CIO arrs'
+    returnOut !l =
+      case l of
+        ExecEmpty  -> return ()
+        ExecP _ l' -> returnOut l'
+        ExecT _ l' -> returnOut l'
+        ExecC c l' -> returnOut l' >>= \ arrs -> readConsumer c >>= \ a -> return $ (arrs, a)
+
+      where
+        readConsumer :: forall a . ExecC aenv lenv a -> CIO a
+        readConsumer c =
+          case c of
+            ExecFoldStream _ _ _ v -> liftIO $ readIORef v
+            ExecFromStream kernel _ v ->
+              do as <- liftIO $ readIORef v
+                 fromStreamOp (reverse as)
+              where
+                fromStreamOp as =
+                  let shs = map shape as
+                      ns  = map size shs
+                      is' = scanl (+) 0 ns
+                      is  = init is'
+                      n   = last is'
+                      out_shs = fromList (Z :. length shs) shs
+                      k !out (!arr, i) = execute kernel mempty aenv (size (shape arr)) (i, out, arr) stream
+                  in 
+                   do useArray out_shs
+                      out_els <- allocateArray (Z :. n)
+                      _ <- mapM (k out_els) (zip as is)
+                      return (out_shs, out_els)
+
+    -- get the extent of an embedded array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecLoop{}    = $internalError "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh) = executeExp sh aenv stream
+
+    travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b
+    travAfun1 (Alam (Abody afun)) a = 
+      do nop <- liftIO Event.create
+         executeOpenAcc afun (aenv `Apush` (Async nop a)) stream
+    travAfun1 _ _ = error "travAfun1"
+
+    travAfun2 :: forall a b c. PreOpenAfun ExecOpenAcc aenv (a -> b -> c) -> a -> b -> CIO c
+    travAfun2 (Alam (Alam (Abody afun))) a b = 
+      do nop <- liftIO Event.create
+         executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b)) stream
+    travAfun2 _ _ _ = error "travAfun2"
+
 
 -- Scalar expression evaluation
 -- ----------------------------
@@ -733,27 +787,12 @@ execute !kernel !gamma !aenv !n !a !stream = do
   args <- arguments kernel aenv gamma a stream
   launch kernel (configure kernel n) args stream
 
-
-executeStream :: Marshalable args
-        => AccKernel a                  -- The binary module implementing this kernel
-        -> Int                          -- Stream index
-        -> Gamma aenv                   -- variables of arrays embedded in scalar expressions
-        -> Aval aenv                    -- the environment
-        -> Int                          -- a "size" parameter, typically number of elements in the output
-        -> args                         -- arguments to marshal to the kernel function
-        -> Stream                       -- Compute stream to execute in
-        -> CIO ()
-executeStream !kernel !six !gamma !aenv !n !a !stream = do
-  args <- arguments kernel aenv gamma a stream
-  launch kernel (configure kernel n) ((CUDA.IArg six):args) stream
-
-
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
 launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> Stream -> CIO ()
 launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
-  = D.timed D.dump_exec msg
+  = D.timed D.dump_exec msg (Just stream)
   $ liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem (Just stream) args
   where
     msg gpuTime cpuTime
