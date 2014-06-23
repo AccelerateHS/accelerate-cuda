@@ -55,11 +55,11 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 -- standard library
 import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
-import Control.Monad                                            ( join, when, liftM, mzero )
+import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
-import Control.Monad.Trans.Maybe                                ( MaybeT, runMaybeT )
+import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.IORef                                               ( readIORef, modifyIORef, writeIORef )
@@ -441,14 +441,35 @@ executeLoop topLoop aenv stream
       case l of
         ExecEmpty  -> return ()
         ExecP p l' -> initP p >> initLoop l'
-        ExecT _ l' -> initLoop l'
+        ExecT t l' -> initT t >> initLoop l'
         ExecC c l' -> initC c >> initLoop l'
 
       where
         initP :: forall a. ExecP aenv a -> CIO ()
-        initP (ExecToStream _ _ a v) =
-          do (sh :. n) <- extent a
-             liftIO $ writeIORef v (sh, 0, n)
+        initP (ExecToStream slix exp acc _ _ v) =
+          do sl <- executeExp exp aenv stream
+             sh <- extent acc
+             let sl' = restrictSlice slix sh sl
+                 sl0 = listToMaybe (enumSlices slix sl')
+             liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
+        initP (ExecUseLazy slix exp arr v) = 
+          do sl <- executeExp exp aenv stream
+             let sh = shape arr
+                 sl' = restrictSlice slix sh sl
+                 sl0 = listToMaybe (enumSlices slix sl')
+             liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
+        
+        initT :: forall a. ExecT aenv lenv a -> CIO ()
+        initT t =
+          case t of
+            ExecMap{} -> return ()
+            ExecZipWith{} -> return ()
+            ExecScanStream _ acc _ v ->
+              do a <- executeOpenAcc acc aenv stream
+                 liftIO $ writeIORef v a
+            ExecScanStreamAct _ _ acc _ v ->
+              do a <- executeOpenAcc acc aenv stream
+                 liftIO $ writeIORef v a
 
         initC :: forall a. ExecC aenv lenv a -> CIO ()
         initC c =
@@ -456,7 +477,14 @@ executeLoop topLoop aenv stream
             ExecFoldStream _ acc _ v ->
               do a <- executeOpenAcc acc aenv stream
                  liftIO $ writeIORef v a
+            ExecFoldStreamAct _ _ acc _ v ->
+              do a <- executeOpenAcc acc aenv stream
+                 liftIO $ writeIORef v a
+            ExecFoldStreamFlatten _ acc _ v ->
+              do a <- executeOpenAcc acc aenv stream
+                 liftIO $ writeIORef v a
             ExecFromStream{} -> return ()
+            ExecCollectStream{} -> return ()
 
     loop :: CIO ()
     loop = 
@@ -475,21 +503,39 @@ executeLoop topLoop aenv stream
       
       where
         produce :: forall a . ExecP aenv a -> MaybeT CIO a
-        produce (ExecToStream kernel gamma _ v) =
-          do (sh, i, n) <- liftIO $ readIORef v
-             if i < n
-               then lift $
-                 do out <- allocateArray sh
-                    execute kernel gamma aenv (size sh) (i, out) stream
-                    liftIO $ writeIORef v (sh, i + 1, n)
-                    return out
-               else mzero
+        produce (ExecToStream slix _ _ kernel gamma v) =
+          do (msl', sl, sh) <- liftIO $ readIORef v
+             sl' <- MaybeT (return msl')
+             lift $ do
+               out <- allocateArray sh
+               m <- marshalSlice slix sl'
+               execute kernel gamma aenv (size sh) (m, out) stream
+               liftIO $ writeIORef v (nextSlice slix sl sl', sl, sh)
+               return out
+        produce (ExecUseLazy slix _ arr v) =
+          do (msl', sl, sh) <- liftIO $ readIORef v
+             sl' <- MaybeT (return msl')
+             lift $ do
+               out <- allocateArray sh
+               useArraySlice slix sl' arr out
+               liftIO $ writeIORef v (nextSlice slix sl sl', sl, sh)
+               return out
 
         transduce :: forall a . ExecT aenv lenv a -> CIO a
         transduce t =
           case t of
             ExecMap afun x -> travAfun1 afun (prj x lenv)
             ExecZipWith afun x y -> travAfun2 afun (prj x lenv) (prj y lenv)
+            ExecScanStream afun _ x v ->
+              do acc <- liftIO $ readIORef v
+                 acc' <- travAfun2 afun acc (prj x lenv)
+                 liftIO $ writeIORef v acc'
+                 return acc
+            ExecScanStreamAct afun _ _ x v ->
+              do acc <- liftIO $ readIORef v
+                 acc' <- travAfun2 afun acc (prj x lenv)
+                 liftIO $ writeIORef v acc'
+                 return acc
 
         consume :: forall a . ExecC aenv lenv a -> CIO ()
         consume c =
@@ -498,8 +544,24 @@ executeLoop topLoop aenv stream
               do acc <- liftIO $ readIORef v
                  acc' <- travAfun2 afun acc (prj x lenv)
                  liftIO $ writeIORef v acc'
+            ExecFoldStreamAct afun _ _ x v ->
+              do acc <- liftIO $ readIORef v
+                 acc' <- travAfun2 afun acc (prj x lenv)
+                 liftIO $ writeIORef v acc'
+            ExecFoldStreamFlatten afun _ x v ->
+              do acc <- liftIO $ readIORef v
+                 useArray shapes
+                 acc' <- travAfun3 afun acc shapes elems
+                 liftIO $ writeIORef v acc'
+                 where 
+                   Array sh adata = prj x lenv
+                   elems  = Array ((), R.size sh) adata
+                   shapes = fromList (Z:.1) [toElt sh]
             ExecFromStream _ x v ->
               do liftIO $ modifyIORef v (prj x lenv:)
+            ExecCollectStream f x ->
+              do peekArray (prj x lenv)
+                 liftIO $ f (prj x lenv)
 
     returnOut :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> CIO arrs'
     returnOut !l =
@@ -514,6 +576,8 @@ executeLoop topLoop aenv stream
         readConsumer c =
           case c of
             ExecFoldStream _ _ _ v -> liftIO $ readIORef v
+            ExecFoldStreamAct _ _ _ _ v -> liftIO $ readIORef v
+            ExecFoldStreamFlatten _ _ _ v -> liftIO $ readIORef v
             ExecFromStream kernel _ v ->
               do as <- liftIO $ readIORef v
                  fromStreamOp (reverse as)
@@ -531,6 +595,7 @@ executeLoop topLoop aenv stream
                       out_els <- allocateArray (Z :. n)
                       _ <- mapM (k out_els) (zip as is)
                       return (out_shs, out_els)
+            ExecCollectStream _ _ -> return ()
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
@@ -549,7 +614,12 @@ executeLoop topLoop aenv stream
       do nop <- liftIO Event.create
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b)) stream
     travAfun2 _ _ _ = error "travAfun2"
-
+    
+    travAfun3 :: forall a b c d. PreOpenAfun ExecOpenAcc aenv (a -> b -> c -> d) -> a -> b -> c -> CIO d
+    travAfun3 (Alam (Alam (Alam (Abody afun)))) a b c = 
+      do nop <- liftIO Event.create
+         executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b) `Apush` (Async nop c)) stream
+    travAfun3 _ _ _ _ = error "travAfun3"
 
 -- Scalar expression evaluation
 -- ----------------------------
@@ -643,6 +713,21 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
 
 -- Marshalling data
 -- ----------------
+
+marshalSlice' :: SliceIndex slix sl co dim 
+              -> slix 
+              -> CIO [CUDA.FunParam]
+marshalSlice' SliceNil () = return []
+marshalSlice' (SliceAll sl)   (sh, ()) = marshalSlice' sl sh
+marshalSlice' (SliceFixed sl) (sh, n)  = 
+  do x  <- marshal n
+     xs <- marshalSlice' sl sh
+     return (xs ++ x)
+
+marshalSlice :: Elt slix => SliceIndex (EltRepr slix) sl co dim 
+             -> slix 
+             -> CIO [CUDA.FunParam]
+marshalSlice slix = marshalSlice' slix . fromElt
 
 -- Data which can be marshalled as function arguments to a kernel invocation.
 --

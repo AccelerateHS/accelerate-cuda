@@ -25,7 +25,6 @@ module Data.Array.Accelerate.CUDA.Compile (
 
 -- friends
 import Data.Array.Accelerate.Error
-import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
@@ -226,34 +225,73 @@ compileOpenAcc = traverseAcc
         compileLoop l =
           case l of
             EmptyLoop -> return ExecEmpty
-            Producer (ToStream acc) l' -> do
-              (aenv, eacc) <- travA acc
-              let gamma = makeEnvMap aenv
-              dev   <- asks deviceProperties
-              kernel <- build1Simple (codegenToStream dev acc gamma)
-              exel <- compileLoop l'
-              v <- liftIO $ newIORef undefined
-              return $ ExecP (ExecToStream kernel gamma eacc v) exel
-            Transducer (MapStream f x) l' -> do
-              f' <- compileOpenAfun f
-              exel <- compileLoop l'
-              return $ ExecT (ExecMap f' x) exel
-            Transducer (ZipWithStream f x y) l' -> do
-              f' <- compileOpenAfun f
-              exel <- compileLoop l'
-              return $ ExecT (ExecZipWith f' x y) exel
-            Consumer (FoldStream f acc x) l' -> do
-              acc' <- traverseAcc acc
-              f' <- compileOpenAfun f
-              exel <- compileLoop l'
-              v <- liftIO $ newIORef undefined
-              return $ ExecC (ExecFoldStream f' acc' x v) exel
-            Consumer (FromStream (x :: Idx lenv' (Array sh a))) l' -> do
-              dev <- asks deviceProperties
-              kernel <- build1Simple (codegenFromStream (undefined :: sh) dev)
-              exel <- compileLoop l'
-              v <- liftIO $ newIORef []
-              return $ ExecC (ExecFromStream kernel x v) exel
+            Producer   p l' -> ExecP <$> compileP p <*> compileLoop l'
+            Transducer t l' -> ExecT <$> compileT t <*> compileLoop l'
+            Consumer   c l' -> ExecC <$> compileC c <*> compileLoop l'
+          where
+            compileP :: forall a. Producer DelayedOpenAcc aenv a -> CIO (ExecP aenv a)
+            compileP p =
+              case p of
+                ToStream slix sl acc -> do
+                  (free1, acc') <- travA acc
+                  (free2, sl' ) <- travE sl
+                  let gamma = makeEnvMap (free1 <> free2)
+                  dev   <- asks deviceProperties
+                  kernel <- build1Simple (codegenToStream slix dev acc gamma)
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecToStream slix sl' acc' kernel gamma v
+                UseLazy slix sl arr -> do
+                  (_, sl') <- travE sl
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecUseLazy slix sl' arr v
+
+            compileT :: forall a. Transducer DelayedOpenAcc aenv lenv a -> CIO (ExecT aenv lenv a)
+            compileT t =
+              case t of
+                MapStream f x -> do
+                  f' <- compileOpenAfun f
+                  return $ ExecMap f' x
+                ZipWithStream f x y -> do
+                  f' <- compileOpenAfun f
+                  return $ ExecZipWith f' x y
+                ScanStream f acc x ->  do
+                  acc' <- traverseAcc acc
+                  f' <- compileOpenAfun f
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecScanStream f' acc' x v
+                ScanStreamAct f g acc x ->  do
+                  acc' <- traverseAcc acc
+                  f' <- compileOpenAfun f
+                  g' <- compileOpenAfun g
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecScanStreamAct f' g' acc' x v
+
+            compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
+            compileC c =
+              case c of
+                FoldStream f acc x -> do
+                  acc' <- traverseAcc acc
+                  f' <- compileOpenAfun f
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecFoldStream f' acc' x v
+                FoldStreamAct f g acc x -> do
+                  acc' <- traverseAcc acc
+                  f' <- compileOpenAfun f
+                  g' <- compileOpenAfun g
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecFoldStreamAct f' g' acc' x v
+                FoldStreamFlatten f acc x -> do
+                  acc' <- traverseAcc acc
+                  f' <- compileOpenAfun f
+                  v <- liftIO $ newIORef undefined
+                  return $ ExecFoldStreamFlatten f' acc' x v
+                FromStream (x :: Idx lenv' (Array sh a')) -> do
+                  dev <- asks deviceProperties
+                  kernel <- build1Simple (codegenFromStream (undefined :: sh) dev)
+                  v <- liftIO $ newIORef []
+                  return $ ExecFromStream kernel x v
+                CollectStream f x ->
+                  return $ ExecCollectStream f x
 
     -- Traverse a scalar expression
     --

@@ -1,4 +1,3 @@
-{-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -29,7 +28,8 @@ module Data.Array.Accelerate.CUDA.AST (
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, (:.) )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr )
+import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -152,6 +152,9 @@ instance Show (ExecAfun a) where
   show = render . prettyExecAfun 0
 
 
+prettyLoop :: Int -> ExecLoop aenv lenv arrs -> Doc
+prettyLoop alvl l = text "loop" -- TODO
+
 prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
 
@@ -177,6 +180,8 @@ prettyExecAcc alvl wrap exec =
         Aprj{}          -> base
         _               -> ann <+> base
 
+    ExecLoop l -> prettyLoop alvl l
+
 data ExecLoop aenv lenv arrs where
   ExecEmpty :: ExecLoop aenv lenv ()
   ExecP :: (Arrays a, Arrays arrs) => ExecP aenv      a -> ExecLoop aenv (lenv, a) arrs -> ExecLoop aenv lenv  arrs
@@ -184,12 +189,28 @@ data ExecLoop aenv lenv arrs where
   ExecC :: (Arrays a, Arrays arrs) => ExecC aenv lenv a -> ExecLoop aenv  lenv     arrs -> ExecLoop aenv lenv (arrs, a)
 
 data ExecP aenv a where
-  ExecToStream :: (Shape sh, Elt e)
-               => AccKernel (Array sh e)
+  
+  ExecToStream :: (Elt slix, Shape sl, Shape sh, Elt e)
+               => SliceIndex (EltRepr slix)
+                             (EltRepr sl)
+                             co
+                             (EltRepr sh)
+               -> ExecExp aenv slix
+               -> ExecOpenAcc aenv (Array sh e)
+               -> AccKernel (Array sl e)
                -> !(Gamma aenv) 
-               -> ExecOpenAcc aenv (Array (sh :. Int) e)
-               -> IORef (sh, Int, Int)
-               -> ExecP aenv (Array sh e)
+               -> IORef (Maybe slix, slix, sl)
+               -> ExecP aenv (Array sl e)
+
+  ExecUseLazy :: (Elt slix, Shape sl, Shape sh, Elt e)
+              => SliceIndex (EltRepr slix)
+                            (EltRepr sl)
+                            co
+                            (EltRepr sh)
+              -> ExecExp aenv slix
+              -> Array sh e
+              -> IORef (Maybe slix, slix, sl)
+              -> ExecP aenv (Array sl e)
 
 data ExecT aenv lenv a where
   ExecMap :: (Shape sh, Elt e, Shape sh', Elt e')
@@ -202,6 +223,21 @@ data ExecT aenv lenv a where
           -> Idx lenv (Array sh e)
           -> Idx lenv (Array sh'' e'')
           -> ExecT aenv lenv (Array sh' e')
+  
+  ExecScanStream :: (Shape sh, Elt e)
+                 => ExecOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
+                 -> ExecOpenAcc aenv (Array sh e)
+                 -> Idx lenv (Array sh e)
+                 -> IORef (Array sh e)
+                 -> ExecT aenv lenv (Array sh e)
+  
+  ExecScanStreamAct :: (Shape sh, Elt e, Shape sh', Elt e')
+                    => ExecOpenAfun aenv (Array sh e -> Array sh' e' -> Array sh e)
+                    -> ExecOpenAfun aenv (Array sh' e' -> Array sh' e' -> Array sh' e')                    
+                    -> ExecOpenAcc aenv (Array sh e)
+                    -> Idx lenv (Array sh' e')
+                    -> IORef (Array sh e)
+                    -> ExecT aenv lenv (Array sh e)
   
 data ExecC aenv lenv a where
   ExecFoldStream :: (Shape sh, Elt e)
@@ -216,3 +252,24 @@ data ExecC aenv lenv a where
                  -> Idx lenv (Array sh e)   
                  -> IORef ([Array sh e])
                  -> ExecC aenv lenv (Vector sh, Vector e)
+
+  ExecFoldStreamAct :: (Shape sh, Elt e, Shape sh', Elt e')
+                    => ExecOpenAfun aenv (Array sh e -> Array sh' e' -> Array sh e)
+                    -> ExecOpenAfun aenv (Array sh' e' -> Array sh' e' -> Array sh' e')                    
+                    -> ExecOpenAcc aenv (Array sh e)
+                    -> Idx lenv (Array sh' e')
+                    -> IORef (Array sh e)
+                    -> ExecC aenv lenv (Array sh e)
+
+  ExecFoldStreamFlatten :: (Shape sh, Elt e, Shape sh', Elt e')
+                        => ExecOpenAfun aenv (Array sh e -> Vector sh' -> Vector e' -> Array sh e)
+                        -> ExecOpenAcc aenv (Array sh e)
+                        -> Idx lenv (Array sh' e')
+                        -> IORef (Array sh e)
+                        -> ExecC aenv lenv (Array sh e)
+
+  ExecCollectStream :: (Shape sh, Elt e)
+                    => (Array sh e -> IO ())
+                    -> Idx lenv (Array sh e)
+                    -> ExecC aenv lenv ()
+  

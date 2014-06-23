@@ -122,6 +122,7 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Nursery
                         Data.Array.Accelerate.CUDA.Array.Prim
+                        Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
                         Data.Array.Accelerate.CUDA.Async
