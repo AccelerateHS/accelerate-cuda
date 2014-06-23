@@ -721,7 +721,7 @@ marshalSlice' (SliceAll sl)   (sh, ()) = marshalSlice' sl sh
 marshalSlice' (SliceFixed sl) (sh, n)  = 
   do x  <- marshal n
      xs <- marshalSlice' sl sh
-     return (x ++ xs)
+     return (xs ++ x)
 
 marshalSlice :: Elt slix => SliceIndex (EltRepr slix) sl co dim 
              -> slix 

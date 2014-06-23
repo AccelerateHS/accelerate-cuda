@@ -79,6 +79,7 @@ data TransferType =
 -- Convert a slice index to internal representation used by this
 -- algorithm. Initially, all dimensions are represented as strided
 -- (transfer entire dimension) or fixed (transfer specific element).
+
 toIR :: SliceIndex slix sl co dim 
      -> slix
      -> dim
@@ -103,7 +104,6 @@ toIR slix sl dim =
     f (SliceAll   si) (sl, ()) (sh, n) res = f si sl sh ((Strided, n):res)
     f (SliceFixed si) (sl, i ) (sh, n) res = f si sl sh ((Fixed i, n):res)
 -}
-
 
 -- Promote strided slice indices to contiguous slice indices when
 -- possible (= all strided innermost dimensions).
