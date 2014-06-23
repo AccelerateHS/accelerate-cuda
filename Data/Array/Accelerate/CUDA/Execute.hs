@@ -176,8 +176,8 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Avar ix                   -> after stream (aprj ix aenv)
       Alet bnd body             -> streaming (executeOpenAcc bnd aenv) (\x -> executeOpenAcc body (aenv `Apush` x) stream)
       Apply f a                 -> streaming (executeOpenAcc a aenv)   (executeOpenAfun1 f aenv)
-      Atuple tup                -> toTuple <$> travT tup
-      Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
+      Atuple tup                -> toTuple ArraysProxy <$> travT tup
+      Aprj ix tup               -> evalPrj ix . fromTuple ArraysProxy <$> travA tup
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
       Awhile p f a              -> awhile p f =<< travA a
 
@@ -567,8 +567,8 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       Const c                   -> return (toElt c)
       PrimConst c               -> return (evalPrimConst c)
       PrimApp f x               -> evalPrim f <$> travE x
-      Tuple t                   -> toTuple <$> travT t
-      Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
+      Tuple t                   -> toTuple EltProxy <$> travT t
+      Prj ix e                  -> evalPrj ix . fromTuple EltProxy <$> travE e
       Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
       While p f x               -> while p f =<< travE x
       IndexAny                  -> return Any

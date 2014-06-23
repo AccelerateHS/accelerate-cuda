@@ -327,7 +327,7 @@ compileOpenAcc = traverseAcc
               -- Twiddle the environment variables
               --
               apply :: DelayedFun () (a -> b) -> DelayedOpenExp env aenv a -> DelayedOpenExp env aenv b
-              apply (Lam (Body b)) e    = Let e $ weakenEA rebuildAcc wAcc $ weakenE wExp b
+              apply (Lam (Body b)) e    = Let e $ weaken wAcc $ weakenE wExp b
               apply _ _                 = error "This was a triumph."
 
               -- As the expression we want to weaken is closed with respect to the array
