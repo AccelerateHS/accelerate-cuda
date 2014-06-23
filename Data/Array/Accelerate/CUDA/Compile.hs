@@ -286,6 +286,7 @@ compileOpenAcc = traverseAcc
         Shape a                 -> liftA  Shape                 <$> travA a
         ShapeSize e             -> liftA  ShapeSize             <$> travE e
         Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
+        Union x y               -> liftA2 Union                 <$> travE x <*> travE y
 
       where
         travA :: (Shape sh, Elt e)

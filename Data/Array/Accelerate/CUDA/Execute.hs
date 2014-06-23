@@ -581,6 +581,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       ToIndex sh ix             -> toIndex   <$> travE sh  <*> travE ix
       FromIndex sh ix           -> fromIndex <$> travE sh  <*> travE ix
       Intersect sh1 sh2         -> intersect <$> travE sh1 <*> travE sh2
+      Union sh1 sh2             -> union <$> travE sh1 <*> travE sh2
       ShapeSize sh              -> size  <$> travE sh
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix

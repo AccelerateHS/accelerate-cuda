@@ -384,6 +384,7 @@ codegenOpenExp dev aenv = cvtE
         Shape acc               -> shape acc env
         ShapeSize sh            -> shapeSize sh env
         Intersect sh1 sh2       -> intersect sh1 sh2 env
+        Union sh1 sh2           -> union sh1 sh2 env
 
         --Foreign function
         Foreign ff _ e          -> foreignE ff e env
@@ -648,6 +649,15 @@ codegenOpenExp dev aenv = cvtE
               -> Val env -> Gen [C.Exp]
     intersect sh1 sh2 env =
       zipWith (\a b -> ccall "min" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
+
+    -- Union of two shapes, taken as the maximum in each dimension.
+    --
+    union :: forall env sh. Elt sh
+          => DelayedOpenExp env aenv sh
+          -> DelayedOpenExp env aenv sh
+          -> Val env -> Gen [C.Exp]
+    union sh1 sh2 env =
+      zipWith (\a b -> ccall "max" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
 
     -- Foreign scalar functions. We need to extract any header files that might
     -- be required so they can be added to the top level definitions.
