@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cint, cvar, ccall, cchar, cintegral, cbool, cshape, csize, cindexHead, cindexTail, ctoIndex, cfromIndex,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, cslice, csize, cindexHead, cindexTail, ctoIndex, cfromIndex,
   readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
@@ -50,6 +50,7 @@ import Foreign.CUDA.Analysis.Device
 -- friends
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import Data.Array.Accelerate.Analysis.Shape
 import Data.Array.Accelerate.CUDA.CodeGen.Type
@@ -152,6 +153,17 @@ cintegral n = [cexp|$int:n|]
 
 cbool :: Bool -> C.Exp
 cbool = cintegral . fromEnum
+
+cslice :: SliceIndex slix sl co dim -> Name -> ([C.Param], [C.Exp], [(C.Type, Name)])
+cslice slix sl =
+  let xs = cshape' (ncodims slix) sl
+      args = [ [cparam| const $ty:cint $id:x |] | x <- xs ]
+  in (args, map cvar xs, zip (repeat cint) xs)
+  where
+    ncodims :: SliceIndex slix sl co dim -> Int
+    ncodims SliceNil = 0
+    ncodims (SliceAll   s) = ncodims s
+    ncodims (SliceFixed s) = ncodims s + 1
 
 -- Generate all the names of a shape given a base name and dimensionality
 cshape :: Int -> Name -> [C.Exp]
@@ -384,7 +396,6 @@ locals base _
                           in ( (t, name), cvar name, [cdecl| $ty:t $id:name; |] )
     in
     unzip3 $ zipWith local elt [n-1, n-2 .. 0]
-
 
 class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem

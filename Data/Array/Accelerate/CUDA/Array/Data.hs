@@ -4,6 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TypeOperators       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Data
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -20,7 +21,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 
   -- * Array operations and representations
   mallocArray, indexArray,
-  useArray,  useArrayAsync,
+  useArray,  useArrayAsync, useArraySlice,
   useDevicePtrs,
   copyArray, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
@@ -30,7 +31,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   devicePtrsFromList, devicePtrsToWordPtrs,
 
   -- * Garbage collection
-  cleanupArrayData
+  cleanupArrayData,
 
 ) where
 
@@ -44,12 +45,14 @@ import Control.Monad.Trans                              ( liftIO )
 import Foreign.C.Types
 import Foreign.Ptr
 
+
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
-import Data.Array.Accelerate.Array.Representation       ( size )
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt, EltRepr )
+import Data.Array.Accelerate.Array.Representation       ( size, SliceIndex )
 import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -163,6 +166,27 @@ useArrayAsync (Array !sh !adata) ms = run doUse
         usePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> Maybe CUDA.Stream -> IO ()
         mkPrimDispatch(usePrim,Prim.useArrayAsync)
 
+
+-- | Upload a slice of an existing array (eg. row of a matrix) to the
+-- device. TODO : Bounds checking, generalize slices to more than just
+-- inner dimension?
+useArraySlice :: (Elt slix, Shape sl, Shape dim, Elt e)
+              => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
+              -> slix        -- Slice
+              -> Array dim e -- Host array
+              -> Array sl e  -- Device array
+              -> CIO ()
+useArraySlice slix sl (Array dim !adata_host) (Array _ !adata_dev) = run doUse
+  where
+    tdesc = transferDesc slix (fromElt sl) dim
+    doUse !ctx !mt = useR arrayElt adata_host adata_dev
+      where
+        useR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        useR ArrayEltRunit             _   _   = return ()
+        useR (ArrayEltRpair aeR1 aeR2) adh add = useR aeR1 (fst adh) (fst add) >> useR aeR2 (snd adh) (snd add)
+        useR aer                       adh add = usePrim aer ctx mt adh add tdesc -- usePrim aer ctx mt adh add tdesc
+        usePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> TransferDesc -> IO ()
+        mkPrimDispatch(usePrim,Prim.useArraySlice)
 
 useDevicePtrs :: (Shape sh, Elt e) => EltRepr sh -> Prim.DevicePtrs (EltRepr e) -> CIO (Array sh e)
 useDevicePtrs sh ptrs = run doUse

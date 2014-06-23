@@ -4,7 +4,6 @@
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeOperators       #-}
 {-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
@@ -42,7 +41,7 @@ import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr, Vector, (:.) )
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr, Vector )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
@@ -116,11 +115,6 @@ codegenAcc dev (Manifest pacc) aenv
 
       -- Loops
       Loop _                    -> unexpectedError
-   {- -- Stream operations
-      MapStream{}               -> unexpectedError
-      ToStream a                -> mkToStream dev aenv <$> travD a
-      FromStream _              -> return $ mkFromStream dev aenv
-      FoldStream{}              -> unexpectedError -}
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -181,6 +175,37 @@ codegenAcc dev (Manifest pacc) aenv
     unexpectedError     = $internalError "codegenAcc" $ "unexpected array primitive: " ++ prim
     fusionError         = $internalError "codegenAcc" $ "unexpected fusible material: " ++ prim
 
+codegenToStream :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e) 
+                => SliceIndex slix
+                              (EltRepr sl)
+                              co
+                              (EltRepr sh)
+                -> DeviceProperties
+                -> DelayedOpenAcc aenv (Array sh e)
+                -> Gamma aenv
+                -> CUTranslSkel aenv (Array sl e)
+codegenToStream slix dev acc aenv = codegen $ (mkToStream slix dev aenv <$> travD acc)
+  where
+    codegen :: CUDA (CUTranslSkel aenv (Array sl e)) -> CUTranslSkel aenv (Array sl e)
+    codegen cuda =
+      let (skeleton, st)                 = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      addTo skeleton
+
+    -- code generation for delayed arrays
+    travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e )
+    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
+    travD Delayed{..} = CUDelayed <$> travE extentD
+                                  <*> travF1 indexD
+                                  <*> travF1 linearIndexD
+
+    travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
+    travE = codegenExp dev aenv
+
+    travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
+    travF1 = codegenFun1 dev aenv
 
 codegenFromStream :: forall aenv sh a. (Shape sh, Elt a) => sh -> DeviceProperties -> CUTranslSkel aenv (Vector a)
 codegenFromStream _ dev = codegen $ return (mkFromStream (undefined :: sh) dev)
@@ -192,30 +217,6 @@ codegenFromStream _ dev = codegen $ return (mkFromStream (undefined :: sh) dev)
             CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
       in
       addTo skeleton
-
-codegenToStream :: forall aenv sh e. (Shape sh, Elt e) => DeviceProperties -> DelayedOpenAcc aenv (Array (sh :. Int) e) -> Gamma aenv -> CUTranslSkel aenv (Array sh e)
-codegenToStream dev acc aenv = codegen $ (mkToStream dev aenv <$> travD acc)
-  where
-    codegen :: CUDA (CUTranslSkel aenv (Array sh a)) -> CUTranslSkel aenv (Array sh e)
-    codegen cuda =
-      let (skeleton, st)                 = runCUDA cuda
-          addTo (CUTranslSkel name code) =
-            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
-      in
-      addTo skeleton
-
-    -- code generation for delayed arrays
-    travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array (sh :. Int) e) -> CUDA (CUDelayedAcc aenv (sh :. Int) e )
-    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
-    travD Delayed{..} = CUDelayed <$> travE extentD
-                                  <*> travF1 indexD
-                                  <*> travF1 linearIndexD
-
-    travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
-    travE = codegenExp dev aenv
-
-    travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
-    travF1 = codegenFun1 dev aenv
 
 
 -- Scalar function abstraction
