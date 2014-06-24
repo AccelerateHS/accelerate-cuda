@@ -60,7 +60,7 @@ mkToStream slix dev aenv arr
     )
     {
         $items:(sh .=. shIn)
-        
+
         const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;

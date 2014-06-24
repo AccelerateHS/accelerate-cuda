@@ -210,7 +210,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
-      
+
       Loop _                    -> $internalError "executeOpenAcc" "uncompiled loop"
 
   where
@@ -219,7 +219,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
     travA !acc = executeOpenAcc acc aenv stream
-    
+
     travE :: ExecExp aenv t -> CIO t
     travE !exp = executeExp exp aenv stream
 
@@ -423,7 +423,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 executeOpenAcc (ExecLoop l) aenv stream = executeLoop l aenv stream
 
 executeLoop :: forall aenv arrs . ExecLoop aenv () arrs -> Aval aenv -> Stream -> CIO arrs
-executeLoop topLoop aenv stream 
+executeLoop topLoop aenv stream
   | degenerate topLoop = initLoop topLoop >>         returnOut topLoop
   | otherwise          = initLoop topLoop >> loop >> returnOut topLoop
 
@@ -452,13 +452,13 @@ executeLoop topLoop aenv stream
              let sl' = restrictSlice slix sh sl
                  sl0 = listToMaybe (enumSlices slix sl')
              liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
-        initP (ExecUseLazy slix exp arr v) = 
+        initP (ExecUseLazy slix exp arr v) =
           do sl <- executeExp exp aenv stream
              let sh = shape arr
                  sl' = restrictSlice slix sh sl
                  sl0 = listToMaybe (enumSlices slix sl')
              liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
-        
+
         initT :: forall a. ExecT aenv lenv a -> CIO ()
         initT t =
           case t of
@@ -487,7 +487,7 @@ executeLoop topLoop aenv stream
             ExecCollectStream{} -> return ()
 
     loop :: CIO ()
-    loop = 
+    loop =
       do ml <- runMaybeT (go topLoop Empty)
          case ml of
            Nothing -> return ()
@@ -500,7 +500,7 @@ executeLoop topLoop aenv stream
         ExecP p l' ->       produce   p  >>= \ a -> go l' (lenv `Push` a)
         ExecT t l' -> lift (transduce t) >>= \ a -> go l' (lenv `Push` a)
         ExecC c l' -> lift (consume   c) >>         go l'  lenv
-      
+
       where
         produce :: forall a . ExecP aenv a -> MaybeT CIO a
         produce (ExecToStream slix _ _ kernel gamma v) =
@@ -553,7 +553,7 @@ executeLoop topLoop aenv stream
                  useArray shapes
                  acc' <- travAfun3 afun acc shapes elems
                  liftIO $ writeIORef v acc'
-                 where 
+                 where
                    Array sh adata = prj x lenv
                    elems  = Array ((), R.size sh) adata
                    shapes = fromList (Z:.1) [toElt sh]
@@ -590,7 +590,7 @@ executeLoop topLoop aenv stream
                       n   = last is'
                       out_shs = fromList (Z :. length shs) shs
                       k !out (!arr, i) = execute kernel mempty aenv (size (shape arr)) (i, out, arr) stream
-                  in 
+                  in
                    do useArray out_shs
                       out_els <- allocateArray (Z :. n)
                       _ <- mapM (k out_els) (zip as is)
@@ -604,19 +604,19 @@ executeLoop topLoop aenv stream
     extent (EmbedAcc sh) = executeExp sh aenv stream
 
     travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b
-    travAfun1 (Alam (Abody afun)) a = 
+    travAfun1 (Alam (Abody afun)) a =
       do nop <- liftIO Event.create
          executeOpenAcc afun (aenv `Apush` (Async nop a)) stream
     travAfun1 _ _ = error "travAfun1"
 
     travAfun2 :: forall a b c. PreOpenAfun ExecOpenAcc aenv (a -> b -> c) -> a -> b -> CIO c
-    travAfun2 (Alam (Alam (Abody afun))) a b = 
+    travAfun2 (Alam (Alam (Abody afun))) a b =
       do nop <- liftIO Event.create
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b)) stream
     travAfun2 _ _ _ = error "travAfun2"
-    
+
     travAfun3 :: forall a b c d. PreOpenAfun ExecOpenAcc aenv (a -> b -> c -> d) -> a -> b -> c -> CIO d
-    travAfun3 (Alam (Alam (Alam (Abody afun)))) a b c = 
+    travAfun3 (Alam (Alam (Alam (Abody afun)))) a b c =
       do nop <- liftIO Event.create
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b) `Apush` (Async nop c)) stream
     travAfun3 _ _ _ _ = error "travAfun3"
@@ -714,18 +714,18 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
 -- Marshalling data
 -- ----------------
 
-marshalSlice' :: SliceIndex slix sl co dim 
-              -> slix 
+marshalSlice' :: SliceIndex slix sl co dim
+              -> slix
               -> CIO [CUDA.FunParam]
 marshalSlice' SliceNil () = return []
 marshalSlice' (SliceAll sl)   (sh, ()) = marshalSlice' sl sh
-marshalSlice' (SliceFixed sl) (sh, n)  = 
+marshalSlice' (SliceFixed sl) (sh, n)  =
   do x  <- marshal n
      xs <- marshalSlice' sl sh
      return (xs ++ x)
 
-marshalSlice :: Elt slix => SliceIndex (EltRepr slix) sl co dim 
-             -> slix 
+marshalSlice :: Elt slix => SliceIndex (EltRepr slix) sl co dim
+             -> slix
              -> CIO [CUDA.FunParam]
 marshalSlice slix = marshalSlice' slix . fromElt
 

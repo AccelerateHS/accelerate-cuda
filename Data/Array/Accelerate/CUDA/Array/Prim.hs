@@ -212,13 +212,13 @@ useArraySlice !ctx !mt !ad_host !ad_dev !tdesc =
   in do
     maybe_dst <- lookup ctx mt ad_dev :: IO (Maybe (CUDA.DevicePtr a))
     case maybe_dst of
-      Just dst -> 
-        sequence_ 
+      Just dst ->
+        sequence_
           [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
           | (src_offset, dst_offset, size) <- blocksOf tdesc]
-      Nothing -> 
-        do dst <- malloc ctx mt ad_dev (k * nblocks tdesc * blocksize tdesc) :: IO (CUDA.DevicePtr a) 
-           sequence_ 
+      Nothing ->
+        do dst <- malloc ctx mt ad_dev (k * nblocks tdesc * blocksize tdesc) :: IO (CUDA.DevicePtr a)
+           sequence_
              [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
              | (src_offset, dst_offset, size) <- blocksOf tdesc]
 

@@ -35,7 +35,7 @@ import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 -- cudaMemcpu2D. The number of calls necessary is given by the length
 -- of the starting offsets. The unit is basic elements of the target
 -- array.
-data TransferDesc = 
+data TransferDesc =
   TransferDesc { starts    :: [Int] -- Starting offsets.
                , stride    :: Int   -- Stride.
                , nblocks   :: Int   -- Number of blocks.
@@ -50,7 +50,7 @@ blocksOf :: TransferDesc -> [(Int, Int, Int)]
 blocksOf tdesc =
   [ ( start + i * stride tdesc
     , i * blocksize tdesc
-    , blocksize tdesc) 
+    , blocksize tdesc)
   | start <- starts tdesc
   , i <- [0..nblocks tdesc-1]]
 
@@ -63,7 +63,7 @@ data TransferType =
             Strided -- Transfer the entire dimension. Each element
                     -- will be transfered in a different block, but in
                     -- a single transfer.
-            
+
           | Contiguous -- Transfer the entire dimension in one
                        -- contiguous data transfer. Each element will
                        -- be transfered in the same block in the same
@@ -80,7 +80,7 @@ data TransferType =
 -- algorithm. Initially, all dimensions are represented as strided
 -- (transfer entire dimension) or fixed (transfer specific element).
 
-toIR :: SliceIndex slix sl co dim 
+toIR :: SliceIndex slix sl co dim
      -> slix
      -> dim
      -> [SliceIR]
@@ -88,14 +88,14 @@ toIR SliceNil        ()       ()      = []
 toIR (SliceAll   si) (sl, ()) (sh, n) = (Strided, n):toIR si sl sh
 toIR (SliceFixed si) (sl, i ) (sh, n) = (Fixed i, n):toIR si sl sh
 {-
-toIR :: SliceIndex slix sl co dim 
+toIR :: SliceIndex slix sl co dim
      -> slix
      -> dim
      -> [SliceIR]
 toIR slix sl dim =
   f slix sl dim []
   where
-    f :: SliceIndex slix' sl' co' dim' 
+    f :: SliceIndex slix' sl' co' dim'
       -> slix'
       -> dim'
       -> [SliceIR]
@@ -115,7 +115,7 @@ strideToContiguous slirs =
   where
     isStrided Strided = True
     isStrided _ = False
-    
+
     promote Strided = Contiguous
     promote x = x
 
@@ -128,7 +128,7 @@ strideToContiguous slirs =
 -- dimensions). This step chooses the split that results in fewest
 -- possible data transfers by selecting the largest stride pivot.
 selectStridePivot :: [SliceIR] -> [SliceIR]
-selectStridePivot slirs = 
+selectStridePivot slirs =
   let -- Group the slice dimensions in groups of same transfer types.
       groups = groupBy sameTransferType slirs
 
@@ -148,7 +148,7 @@ selectStridePivot slirs =
   where
     sameTransferType :: SliceIR -> SliceIR -> Bool
     sameTransferType x y = fst x ~= fst y
-      where         
+      where
         (~=) :: TransferType -> TransferType -> Bool
         Contiguous ~= Contiguous = True
         Strided    ~= Strided    = True
@@ -166,11 +166,11 @@ selectStridePivot slirs =
 
 -- Compute a description of the transfers necessary to copy the
 -- specified slice.
-transferDesc :: SliceIndex slix sl co dim 
+transferDesc :: SliceIndex slix sl co dim
              -> slix -- Slice index.
              -> dim  -- Full shape.
              -> TransferDesc
-transferDesc slix sl dim = 
+transferDesc slix sl dim =
   let slirs  = selectStridePivot $ strideToContiguous $ toIR slix sl dim
       tdesc0 = TransferDesc [0] 1 1 1
       size0  = 1
@@ -180,7 +180,7 @@ transferDesc slix sl dim =
     f slirs m tdesc =
       case slirs of
         [] -> tdesc
-        
+
         (ttyp, n):slirs' -> f slirs' (n * m) $
           case ttyp of
             Strided ->
