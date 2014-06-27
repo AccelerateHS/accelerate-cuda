@@ -194,7 +194,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy,
+  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends
 
 ) where
 
@@ -389,6 +389,8 @@ config =  Phase
   , convertOffsetOfSegment = True
   }
 
+defaultTrafoConfig :: Phase  
+defaultTrafoConfig = config
 
 dumpStats :: MonadIO m => a -> m a
 #if ACCELERATE_DEBUG
