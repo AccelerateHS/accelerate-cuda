@@ -216,7 +216,8 @@ import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 
 --BJS:
-import Data.Array.Accelerate.CUDA.AST    ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
+import Data.Array.Accelerate.CUDA.AST      ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
+import Data.Array.Accelerate.CUDA.Device   ( allDevices )
 
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug

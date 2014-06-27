@@ -41,6 +41,20 @@ selectBestDevice = do
       | otherwise               = comparing compute x y
 
 
+-- Return a list of all devices. 
+allDevices :: IO [(Device, DeviceProperties)]
+allDevices = do
+  dev   <- mapM CUDA.device . enumFromTo 0 . subtract 1 =<< CUDA.count
+  prop  <- mapM CUDA.props dev
+  return $ zip dev prop
+  where
+    compute     = computeCapability
+    flops d     = multiProcessorCount d * coresPerMultiProcessor d * clockRate d
+    cmp x y
+      | compute x == compute y  = comparing flops   x y
+      | otherwise               = comparing compute x y
+
+
 -- Number of CUDA cores per streaming multiprocessor for a given architecture
 -- revision. This is the number of SIMD arithmetic units per multiprocessor,
 -- executing in lockstep in half-warp groupings (16 ALUs).
