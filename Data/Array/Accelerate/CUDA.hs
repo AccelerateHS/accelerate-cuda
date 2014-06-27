@@ -215,9 +215,17 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 
+--BJS:
+import Data.Array.Accelerate.CUDA.AST    ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
+
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
 #endif
+
+-- Temporarily import BackendClass
+-- BJS: BackendClass changed since the 0.13 version of this.
+import Data.Array.Accelerate.BackendClass
+
 
 
 -- Accelerate: CUDA
@@ -392,3 +400,135 @@ dumpStats next = do
 dumpStats next = return next
 #endif
 
+
+
+-- Backend class
+-- -------------
+
+data CUDA = CUDA { withContext  :: !Context }
+-- BJS: Context is an Accelerate type from Data.Array.Accelerate.CUDA.Context
+--      look at it.
+
+defaultBackend :: CUDA
+defaultBackend = CUDA defaultContext
+-- BJS: defaultContext defined elsewhere (I guess D.A.CUDA.Context)
+
+
+-- | All CUDA cards on the system:
+allBackends :: [CUDA]
+allBackends = unsafePerformIO $ do
+  prs <- allDevices
+  forM prs $ \ (dev,_) -> do
+    -- message dump_gc "gc: initialise allBackends"
+    Driver.initialise []
+    ctxt <- create dev [Driver.SchedAuto]
+    return $ CUDA ctxt
+
+
+-- BJS: a context, Ssync pair. What is an Async ? D.A.A.CUDA.Async 
+data CUDARemote a =
+  CUR { remoteContext :: !Context
+      , remoteArray   :: {-# UNPACK #-} !(Async a)
+      }
+
+-- BJS: Blobs changed with the backendkit a while ago.
+-- BJS: where do ExecAcc and ExecAfun come from ? 
+data CUDABlob a = CUAcc {blobAcc :: ExecAcc a }
+                | CUAfn {blobAfun :: ExecAfun a } 
+
+
+
+instance Show CUDA where
+  show (CUDA Context{deviceProperties,deviceContext}) = 
+    "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
+
+
+instance Backend CUDA where
+  type Remote CUDA a    = CUDARemote a
+  type Blob CUDA a      = CUDABlob a
+
+  -- Accelerate expressions
+  -- ----------------------
+
+  -- Pre-compile an Accelerate computation for the CUDA backend. This populates
+  -- the internal caches as well as producing an annotated AST to facilitate
+  -- later execution.
+  --
+  compile     c _ acc      = CUAcc  <$> evalCUDA (withContext c) (compileAcc acc)
+  compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
+
+  -- Run Accelerate expressions. This is executed asynchronously and does not
+  -- copy the result back to the host.
+  --
+  runRaw c acc cache = do
+    result <- async . evalCUDA (withContext c) $
+                executeAcc =<< maybe (compileAcc acc) (return . blobAcc) cache
+    let remt = CUR (withContext c) result
+    waitRemote c remt -- RRN: adding this TEMPORARILY
+    return $! remt
+
+  runRawFun1 c acc cache r = do
+    result <- async . evalCUDA (withContext c) $ do
+                arr  <- liftIO $ wait . remoteArray =<< copyToPeer c r
+                afun <- maybe (compileAfun acc) (return . blobAfun) cache
+                executeAfun1 afun arr
+    return $! CUR (withContext c) result
+
+  -- Array management
+  -- ----------------
+
+  -- Copying to host/device
+  --
+  copyToHost _ r        = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
+  copyToDevice c arrs   = do
+    result <- async . evalCUDA (withContext c) $ pokeR (arrays arrs) (fromArr arrs) >> return arrs
+    return $! CUR (withContext c) result
+    where
+      pokeR :: ArraysR a -> a -> CIO a
+      pokeR ArraysRunit ()               = return ()
+      pokeR ArraysRarray a               = pokeArrayAsync a Nothing >> return a
+      pokeR (ArraysRpair r1 r2) (a1, a2) = (,) <$> pokeR r1 a1 <*> pokeR r2 a2
+
+  -- If we are attempting to use the remote array on a context different from
+  -- the one the array was evaluated on, then we must copy the array data to the
+  -- new execution context. The actual host side array, for GC purposes, remains
+  -- the same.
+  --
+  copyToPeer c r
+    | srcCtx == dstCtx  = return r
+    | otherwise         = do
+        result  <- async $ do
+          src <- wait (remoteArray r)
+          evalCUDA dstCtx $ do
+            mallocR (arrays src) (fromArr src)
+            copyR (arrays src) (fromArr src) (fromArr src)
+            --
+          return src
+        return $! CUR dstCtx result
+    where
+      srcCtx = remoteContext r
+      dstCtx = withContext c
+
+      copyR :: ArraysR a -> a -> a -> CIO ()
+      copyR ArraysRunit         ()       ()       = return ()
+      copyR ArraysRarray        as       bs       = copyArrayPeer as srcCtx bs dstCtx
+      copyR (ArraysRpair r1 r2) (a1, a2) (b1, b2) = copyR r1 a1 b1 >> copyR r2 a2 b2
+
+      mallocR :: ArraysR a -> a -> CIO ()
+      mallocR ArraysRunit         ()       = return ()
+      mallocR ArraysRarray        a        = mallocArray a
+      mallocR (ArraysRpair r1 r2) (a1, a2) = mallocR r1 a1 >> mallocR r2 a2
+
+  -- Wait for a remote to finish executing
+  --
+  waitRemote _  = void . wait . remoteArray
+
+  -- Inject a remote array into an AST node
+  --
+  useRemote _ a = OpenAcc . Use . fromArr <$> wait (remoteArray a)
+  -- FIXME!  Ideally this would not copy!
+
+  -- Configuration
+  -- -------------
+
+  separateMemorySpace _         = True          -- some devices share host memory, but we still copy
