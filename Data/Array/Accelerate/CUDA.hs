@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NamedFieldPuns #-} 
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -201,6 +202,7 @@ module Data.Array.Accelerate.CUDA (
 -- standard library
 import Control.Exception
 import Control.Applicative
+import Control.Monad
 import Control.Monad.Trans
 import System.IO.Unsafe
 
@@ -216,8 +218,11 @@ import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 
 --BJS:
-import Data.Array.Accelerate.CUDA.AST      ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
-import Data.Array.Accelerate.CUDA.Device   ( allDevices )
+import Data.Array.Accelerate.CUDA.AST               ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
+import Data.Array.Accelerate.CUDA.Analysis.Device   ( allDevices )
+
+import qualified Foreign.CUDA.Driver as Driver
+import Foreign.CUDA.Driver.Error 
 
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
@@ -436,8 +441,8 @@ data CUDARemote a =
 
 -- BJS: Blobs changed with the backendkit a while ago.
 -- BJS: where do ExecAcc and ExecAfun come from ? 
-data CUDABlob a = CUAcc {blobAcc :: ExecAcc a }
-                | CUAfn {blobAfun :: ExecAfun a } 
+data CUDABlob a = CUAcc  {blobAcc :: ExecAcc a }
+                | CUAfun {blobAfun :: ExecAfun a } 
 
 
 

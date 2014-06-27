@@ -104,7 +104,8 @@ Library
                         text                    >= 0.11,
                         template-haskell        >= 2.2,
                         transformers            >= 0.2,
-                        unordered-containers    >= 0.1.4
+                        unordered-containers    >= 0.1.4,
+                        accelerate-backend-kit  >= 0.15.0.0 && < 0.16
 
   if os(windows)
     cpp-options:        -DWIN32
