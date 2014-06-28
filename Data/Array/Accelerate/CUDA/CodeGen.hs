@@ -434,9 +434,11 @@ codegenOpenExp dev aenv = cvtE
            x'           <- cvtE x env
            var_acc      <- lift fresh
            var_ok       <- lift fresh
+           var_tmp      <- lift fresh
 
-           let (tn_acc, acc, _)  = locals ('l':var_acc) (undefined :: a)
-               (tn_ok,  ok,  _)  = locals ('l':var_ok)  (undefined :: Bool)
+           let (tn_acc, acc, _)         = locals ('l':var_acc) (undefined :: a)
+               (tn_ok,  ok,  _)         = locals ('l':var_ok)  (undefined :: Bool)
+               (_    ,  tmp, decltemp)  = locals ('l':var_tmp) (undefined :: a)
 
            -- Generate code for the predicate and body expressions, with the new
            -- names baked in directly. We can't use 'codegenFun1', because
@@ -456,9 +458,14 @@ codegenOpenExp dev aenv = cvtE
            f'   <- cvtF f (env `Push` acc)
 
            -- Piece it all together. Note that declarations are added to the
-           -- localBindings in reverse order.
+           -- localBindings in reverse order. Also, we have to be careful not
+           -- to assign the results of f' direction into acc. Why? Some of the
+           -- variables in acc are referenced in f'. We risk overwriting values
+           -- that are still needed to computer f'.
            let loop = [citem| while ( $exp:(single "while" ok) ) {
-                                  $items:(acc .=. f')
+                                  $decls:decltemp
+                                  $items:(tmp .=. f')
+                                  $items:(acc .=. tmp)
                                   $items:(ok  .=. p')
                               } |]
                     : (ok .=. p')
