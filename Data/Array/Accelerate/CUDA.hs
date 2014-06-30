@@ -2,7 +2,8 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE NamedFieldPuns #-} 
+{-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE TypeFamilies        #-} 
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -452,8 +453,8 @@ instance Show CUDA where
 
 
 instance Backend CUDA where
-  type Remote CUDA a    = CUDARemote a
-  type Blob CUDA a      = CUDABlob a
+  data Remote CUDA a    = CUDARemote a
+  data Blob CUDA a      = CUDABlob a
 
   -- Accelerate expressions
   -- ----------------------
