@@ -89,6 +89,8 @@ Library
   Include-Dirs:         include
 
   Build-depends:        accelerate              == 0.13.*,
+                        accelerate-backend-kit  >= 0.13 && < 0.14,
+                        containers              >= 0.5,
                         array                   >= 0.3,
                         base                    == 4.*,
                         binary                  >= 0.5,
