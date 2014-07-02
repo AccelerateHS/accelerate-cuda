@@ -144,6 +144,7 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.Type
  --                        Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.CompileSimpleCUDA
+                        Data.Array.Accelerate.CUDA.ExecuteSimpleCUDA
                         Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
 --                        Data.Array.Accelerate.CUDA.Execute

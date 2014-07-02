@@ -16,7 +16,8 @@ import           Data.Array.Accelerate.BackendKit.Utils.Helpers (dbgPrint, dbg)
 import Data.Array.Accelerate.CUDA.AST ( ExecAcc(..)  ) -- a candidate for the role of a Blob
 import Data.Array.Accelerate.CUDA.State  -- holds evalCUDA, defaultContext
 
-import Data.Array.Accelerate.CUDA.CompileSimpleCUDA 
+import Data.Array.Accelerate.CUDA.CompileSimpleCUDA
+import Data.Array.Accelerate.CUDA.ExecuteSimpleCUDA
 
 import Control.Monad 
 import System.IO.Unsafe (unsafePerformIO) 
@@ -40,12 +41,13 @@ instance SimpleBackend SimpleCUDABackend where
 
   -- SACC = Data.Array.Accelerate.BackendKit.IRs.SimpleAcc 
   -- simpleCompile :: b -> FilePath -> SACC.Prog () -> IO (SimpleBlob b)
-  simpleCompile _ path prog = do b <- evalCUDA defaultContext ( compileSimpleAcc prog )
+  simpleCompile _ path prog = do b <- evalCUDA defaultContext (compileSimpleAcc prog )
                                  return $ SimpleCUDABlob b 
 
   --simpleCompile :: b -> FilePath -> SACC.Prog () -> IO (SimpleBlob b)
 
   --simpleRunRaw :: b -> DebugName -> SACC.Prog () -> Maybe (SimpleBlob b) -> IO [SimpleRemote b]
+  simpleRunRaw b mname prog (Just (SimpleCUDABlob blob)) = evalCUDA defaultContext $ executeSimpleAcc blob
   simpleRunRaw b mname prog Nothing = undefined
 
   --simpleRunRawFun1 :: b -> Int -> ([SACC.AVar] -> SACC.Prog ()) -> Maybe (SimpleBlob b) -> [SimpleRemote b] -> IO [SimpleRemote b]            
