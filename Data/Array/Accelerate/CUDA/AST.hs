@@ -52,27 +52,26 @@ import qualified Data.HashMap.Strict                    as Map
 -- auxiliary information together with the compiled module, such as entry point
 -- and execution information.
 --
-data AccKernel a where
-  AccKernel :: !String                          -- __global__ entry function name
-            -> {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
-            -> {-# UNPACK #-} !CUDA.Module      -- binary module
-            -> {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
-            -> {-# UNPACK #-} !Int              -- thread block size
-            -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
-            -> !(Int -> Int)                    -- number of blocks for input problem size
-            -> AccKernel a
+-- data AccKernel a where
+--   AccKernel :: !String                          -- __global__ entry function name
+--             -> {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
+--             -> {-# UNPACK #-} !CUDA.Module      -- binary module
+--             -> {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
+--             -> {-# UNPACK #-} !Int              -- thread block size
+--             -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
+--             -> !(Int -> Int)                    -- number of blocks for input problem size
+--             -> AccKernel a
 --Experiment
 -- What info is carried in that a ? its not used here..
 -- The a is passed around to keep track of array types coming out of this program
--- data AccKernel = 
---   AccKernel !String                          -- __global__ entry function name
---             {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
---             {-# UNPACK #-} !CUDA.Module      -- binary module
---             {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
---             {-# UNPACK #-} !Int              -- thread block size
---             {-# UNPACK #-} !Int              -- shared memory per block (bytes)
---             !(Int -> Int)                    -- number of blocks for input problem size
-           
+data AccKernel = 
+  AccKernel !String                          -- __global__ entry function name
+            {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
+            {-# UNPACK #-} !CUDA.Module      -- binary module
+            {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
+            {-# UNPACK #-} !Int              -- thread block size
+            {-# UNPACK #-} !Int              -- shared memory per block (bytes)
+            !(Int -> Int)                    -- number of blocks for input problem size           
 
 
 -- Kernel execution is asynchronous, barriers allow (cross-stream)
@@ -175,12 +174,11 @@ freevar = Gamma . Set.singleton
 --             -> ExecOpenAcc aenv (Array sh e)
 
 
-
 -- An annotated AST suitable for execution in the CUDA environment
 --
 -- Interleave compilation & execution state annotations.
-data ExecAcc a =
-  ExecAcc {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
+data ExecAcc =
+  ExecAcc {-# UNPACK #-} !(FL.FullList () AccKernel)     -- executable binary objects
           !(Gamma)                                      -- free array variables the kernel needs access to
           !(S.Prog ())                                       -- the actual computation
   

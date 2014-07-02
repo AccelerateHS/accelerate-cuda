@@ -84,7 +84,7 @@ import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 --
 --   * kernel object(s) required to executed the kernel
 --
-compileSimpleAcc :: S.Prog a -> CIO (ExecAcc a)
+compileSimpleAcc :: S.Prog a -> CIO ExecAcc
 compileSimpleAcc = undefined -- compileOpenAcc 
 
 {- 

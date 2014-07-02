@@ -13,7 +13,7 @@ import           Data.Array.Accelerate.BackendKit.Utils.Helpers (dbgPrint, dbg)
 --  (phase0, phase1, phase2, repackAcc, unpackArray, Phantom(..), defaultTrafoConfig)
 
  
-import Data.Array.Accelerate.CUDA.AST ( ExecAcc(..) ) -- a candidate for the role of a Blob
+import Data.Array.Accelerate.CUDA.AST ( ExecAcc(..)  ) -- a candidate for the role of a Blob
 import Data.Array.Accelerate.CUDA.State  -- holds evalCUDA
 
 import Control.Monad 
@@ -27,7 +27,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data SimpleCUDABackend = SimpleCUDABackend
                          deriving Show 
 
-data SimpleCUDABlob = SimpleCUDABlob -- ExecAcc  -- not sure what to put here! 
+data SimpleCUDABlob = SimpleCUDABlob ExecAcc  -- not sure what to put here! 
                 
 ---------------------------------------------------------------------------
 -- SimpleBackend instance
