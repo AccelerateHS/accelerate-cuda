@@ -7,7 +7,7 @@
 {-# LANGUAGE TupleSections       #-}
 
 
-module Data.Array.Accelerate.CUDA.Compile (
+module Data.Array.Accelerate.CUDA.CompileSimpleCUDA (
 
   -- * generate and compile kernels to realise a computation
   compileSimpleAcc  --  compileAfun
@@ -74,7 +74,7 @@ import Paths_accelerate_cuda                                    ( getDataDir )
 
 
 -- SIMPLECUDA SPECIFICS
-import qualified Data.Array.Accelerate.IRs.SimpleAcc as S 
+import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S 
 
 -- | Initiate code generation, compilation, and data transfer for an array
 -- expression. The returned array computation is annotated so to be suitable for
@@ -85,7 +85,7 @@ import qualified Data.Array.Accelerate.IRs.SimpleAcc as S
 --   * kernel object(s) required to executed the kernel
 --
 compileSimpleAcc :: S.Prog a -> CIO (ExecAcc a)
-compileSimpleAcc = compileOpenAcc 
+compileSimpleAcc = undefined -- compileOpenAcc 
 
 {- 
 compileAcc :: DelayedAcc a -> CIO (ExecAcc a)
