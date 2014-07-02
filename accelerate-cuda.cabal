@@ -80,7 +80,10 @@ Flag internal-checks
   Description:          Enable internal consistency checks
   Default:              False
 
+   
+
 Library
+  Include-Dirs:         include
   Build-depends:        accelerate              == 0.15.*,
                         accelerate-backend-kit  >= 0.15 && < 0.16, 
                         containers              >= 0.5.5.1,
