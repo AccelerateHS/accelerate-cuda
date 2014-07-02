@@ -61,6 +61,18 @@ data AccKernel a where
             -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
             -> !(Int -> Int)                    -- number of blocks for input problem size
             -> AccKernel a
+--Experiment
+-- What info is carried in that a ? its not used here..
+-- The a is passed around to keep track of array types coming out of this program
+-- data AccKernel = 
+--   AccKernel !String                          -- __global__ entry function name
+--             {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
+--             {-# UNPACK #-} !CUDA.Module      -- binary module
+--             {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
+--             {-# UNPACK #-} !Int              -- thread block size
+--             {-# UNPACK #-} !Int              -- shared memory per block (bytes)
+--             !(Int -> Int)                    -- number of blocks for input problem size
+           
 
 
 -- Kernel execution is asynchronous, barriers allow (cross-stream)
@@ -171,7 +183,7 @@ data ExecAcc a =
   ExecAcc {-# UNPACK #-} !(FL.FullList () (AccKernel a))     -- executable binary objects
           !(Gamma)                                      -- free array variables the kernel needs access to
           !(S.Prog ())                                       -- the actual computation
-
+  
 -- type ExecAfun a         = PreAfun ExecOpenAcc a
 
 -- type ExecOpenExp        = PreOpenExp ExecOpenAcc
