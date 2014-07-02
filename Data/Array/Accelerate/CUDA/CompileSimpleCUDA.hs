@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE NamedFieldPuns      #-} 
 
 
 module Data.Array.Accelerate.CUDA.CompileSimpleCUDA (
@@ -70,7 +71,7 @@ import System.Posix.Process
 import System.Win32.Process
 #endif
 
-import Paths_accelerate_cuda                                    ( getDataDir )
+-- import Paths_accelerate_cuda                                    ( getDataDir )
 
 
 -- SIMPLECUDA SPECIFICS
@@ -85,7 +86,24 @@ import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 --   * kernel object(s) required to executed the kernel
 --
 compileSimpleAcc :: S.Prog a -> CIO ExecAcc
-compileSimpleAcc = undefined -- compileOpenAcc 
+compileSimpleAcc prog@(S.Prog {progBinds}) = undefined
+ 
+  
+
+{-
+
+ Is this an example of a list of progbinds ? ( I think so):
+
+  a = e1
+  b = ae1
+  c = map (+a) b 
+
+  So lets, have already been compiled away. Not entirely.
+    There are potentially lets in Exps. No let in AExp however. 
+
+-} 
+  
+
 
 {- 
 compileAcc :: DelayedAcc a -> CIO (ExecAcc a)
