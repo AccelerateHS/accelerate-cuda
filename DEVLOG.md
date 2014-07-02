@@ -17,6 +17,9 @@ simple-cuda devlog
 	  be replaced with similar modules but tweaked for BackendClass 
 	  usage. 
 
+	  Started a SimpleCUDA module that houses a SimpleBackend instance.
+
+
 7-1-2014: redoing most changes from the bkit branch into a bkit0-15
 	  branch (that should be up to date with accelerate-cuda 0.15). 
 	  

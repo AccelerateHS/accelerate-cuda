@@ -24,7 +24,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data SimpleCUDABackend = SimpleCUDABackend
                          deriving Show 
 
-data SimpleCUDABlob = SimpleCUDABlob -- Leaving this empty for now. 
+data SimpleCUDABlob = SimpleCUDABlob !FilePath  -- will need at least a filepath
                       deriving Show 
 ---------------------------------------------------------------------------
 -- SimpleBackend instance
