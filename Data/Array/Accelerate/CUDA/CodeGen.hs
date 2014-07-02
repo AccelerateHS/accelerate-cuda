@@ -36,6 +36,8 @@ import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
 import qualified Data.Map                                       as M
+import qualified Data.HashMap.Strict                    as Map
+import Data.HashMap.Strict                              ( HashMap ) 
 
 -- friends
 -- import Data.Array.Accelerate.Type
@@ -61,7 +63,7 @@ import Data.Array.Accelerate.Error
 -- import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
-import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.Base                  hiding ( zipWith ) 
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
@@ -138,28 +140,24 @@ codegenProgBind dev (ProgBind v t decor (Right ae)) aenv = doAE ae
 --       DeviceProperties -> Gamma -> CUFun1 -> [CUTranslSkel]
 
 codegenFun1 :: DeviceProperties -> Gamma -> S.Fun1 S.Exp -> CUDA CUFun1 -- aenv (a -> b))
-codegenFun1 dev aenv fun = undefined 
-{-  | Lam (Body f) <- fun
-  = let
-        go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
-        go x = do
-          code  <- mapM use =<< codegenOpenExp dev aenv f (Empty `Push` map rvalue x)
-          env'  <- getEnv
-          return (env', code)
+codegenFun1 dev aenv (Lam1 (v,t) e) =
+  let
+    -- overkill simplify 
+    go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
+    go x = do
+      code  <- mapM use =<< codegenOpenExp dev e (M.singleton v (t,[cvar (show v)]) ) -- (Empty `Push` map rvalue x)
+      env'  <- getEnv
+      return (env', code)
 
-        -- Initial code generation proceeds with dummy variable names. The real
-        -- names are substituted later when we instantiate the skeleton.
-        (_,u,_) = locals "undefined_x" (undefined :: a)
-    in do
-      n                 <- get
-      ExpST _ used      <- execCGM (go u)
-      return $ CUFun1 (mark used u)
-             $ \xs -> evalState (evalCGM (go xs)) n
-  --
-  | otherwise
-  = $internalError "codegenFun1" "expected unary function"
--} 
-
+      -- Initial code generation proceeds with dummy variable names. The real
+      -- names are substituted later when we instantiate the skeleton.
+    (_,u,_) = locals t (show v) -- "undefined_x" (undefined :: a)
+  in do
+    n                   <- get
+    ExpST _ used lrms   <- execCGM (go u)
+    return $ CUFun1 (mark used u)
+      $ \xs -> evalState (evalCGM (go xs)) n 
+ 
 
 
 codegenAcc :: DeviceProperties -> S.Prog a -> Gamma -> [ CUTranslSkel ]
@@ -415,12 +413,12 @@ codegenFun2 dev aenv fun
 -- In the above map example, this means that the usage data is taken from 'f',
 -- but applies to which results of 'get ix' are committed to memory.
 --
+-}
 mark :: HashSet C.Exp -> [C.Exp] -> ([a] -> [(Bool,a)])
 mark used xs
   = let flags = map (\x -> x `Set.member` used) xs
     in  zipWith (,) flags
 
--}
 
 visit :: [C.Exp] -> Gen [C.Exp]
 visit exp
