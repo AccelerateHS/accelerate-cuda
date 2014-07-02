@@ -2,11 +2,13 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+--               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -18,40 +20,41 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 
   DevicePtrs, HostPtrs,
 
-  mallocArray, useArray, useArrayAsync, indexArray, copyArray, peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, marshalDevicePtrs, marshalArrayData, marshalTextureData,
+  mallocArray, indexArray,
+  useArray,  useArrayAsync,
+  useDevicePtrs,
+  copyArray, copyArrayPeer, copyArrayPeerAsync,
+  peekArray, peekArrayAsync,
+  pokeArray, pokeArrayAsync,
+  marshalDevicePtrs, marshalArrayData, marshalTextureData,
   devicePtrsOfArrayData, advancePtrsOfArrayData
 
 ) where
 
 -- libraries
-#if MIN_VERSION_base(4,6,0)
 import Prelude                                          hiding ( lookup )
-#else
-import Prelude                                          hiding ( catch, lookup )
-#endif
 import Data.Int
 import Data.Word
 import Data.Maybe
 import Data.Functor
 import Data.Typeable
 import Control.Monad
-import Control.Exception
+import Language.Haskell.TH
 import System.Mem.StableName
 import Foreign.Ptr
+import Foreign.C.Types
 import Foreign.Storable
-import Foreign.Marshal.Alloc
-import Foreign.CUDA.Driver.Error
+import Foreign.Marshal.Alloc                            ( alloca )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Table
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
-
-#include "accelerate.h"
 
 
 -- Device array representation
@@ -63,9 +66,11 @@ type family HostPtrs   e :: *
 type instance DevicePtrs () = ()
 type instance HostPtrs   () = ()
 
-#define primArrayElt(ty)                                                      \
-type instance DevicePtrs ty = CUDA.DevicePtr ty ;                             \
-type instance HostPtrs   ty = CUDA.HostPtr   ty ;                             \
+#define primArrayEltAs(ty,as)                                                 \
+type instance DevicePtrs ty = CUDA.DevicePtr as ;                             \
+type instance HostPtrs   ty = CUDA.HostPtr   as ;                             \
+
+#define primArrayElt(ty) primArrayEltAs(ty,ty)
 
 primArrayElt(Int)
 primArrayElt(Int8)
@@ -79,32 +84,26 @@ primArrayElt(Word16)
 primArrayElt(Word32)
 primArrayElt(Word64)
 
--- FIXME:
--- CShort
--- CUShort
--- CInt
--- CUInt
--- CLong
--- CULong
--- CLLong
--- CULLong
+primArrayEltAs(CShort,  Int16)
+primArrayEltAs(CInt,    Int32)
+primArrayEltAs(CLong,   HTYPE_LONG)
+primArrayEltAs(CLLong,  Int64)
+primArrayEltAs(CUShort, Word16)
+primArrayEltAs(CUInt,   Word32)
+primArrayEltAs(CULong,  HTYPE_UNSIGNED_LONG)
+primArrayEltAs(CULLong, Word64)
 
 primArrayElt(Float)
 primArrayElt(Double)
-
--- FIXME:
--- CFloat
--- CDouble
-
-type instance HostPtrs   Bool = CUDA.HostPtr   Word8
-type instance DevicePtrs Bool = CUDA.DevicePtr Word8
+primArrayEltAs(CFloat,  Float)
+primArrayEltAs(CDouble, Double)
 
 primArrayElt(Char)
+primArrayEltAs(CChar,  Int8)
+primArrayEltAs(CSChar, Int8)
+primArrayEltAs(CUChar, Word8)
 
--- FIXME:
--- CChar
--- CSChar
--- CUChar
+primArrayEltAs(Bool, Word8)
 
 type instance DevicePtrs (a,b) = (DevicePtrs a, DevicePtrs b)
 type instance HostPtrs   (a,b) = (HostPtrs   a, HostPtrs   b)
@@ -119,43 +118,34 @@ type instance HostPtrs   (a,b) = (HostPtrs   a, HostPtrs   b)
 class TextureData a where
   format :: a -> (CUDA.Format, Int)
 
-instance TextureData Int8   where format _ = (CUDA.Int8,   1)
-instance TextureData Int16  where format _ = (CUDA.Int16,  1)
-instance TextureData Int32  where format _ = (CUDA.Int32,  1)
-instance TextureData Int64  where format _ = (CUDA.Int32,  2)
-instance TextureData Word8  where format _ = (CUDA.Word8,  1)
-instance TextureData Word16 where format _ = (CUDA.Word16, 1)
-instance TextureData Word32 where format _ = (CUDA.Word32, 1)
-instance TextureData Word64 where format _ = (CUDA.Word32, 2)
-instance TextureData Float  where format _ = (CUDA.Float,  1)
-instance TextureData Double where format _ = (CUDA.Int32,  2)
-instance TextureData Bool   where format _ = (CUDA.Word8,  1)
-#if   SIZEOF_HSINT == 4
-instance TextureData Int    where format _ = (CUDA.Int32,  1)
-instance TextureData Word   where format _ = (CUDA.Word32, 1)
-#elif SIZEOF_HSINT == 8
-instance TextureData Int    where format _ = (CUDA.Int32,  2)
-instance TextureData Word   where format _ = (CUDA.Word32, 2)
-#else
-instance TextureData Int    where
-  format _ =
-    case sizeOf (undefined::Int) of
-      4 -> (CUDA.Int32, 1)
-      8 -> (CUDA.Int32, 2)
-instance TextureData Word   where
-  format _ =
-    case sizeOf (undefined::Word) of
-      4 -> (CUDA.Word32, 1)
-      8 -> (CUDA.Word32, 2)
-#endif
-#if SIZEOF_HSCHAR == 4
-instance TextureData Char   where format _ = (CUDA.Word32, 1)
-#else
-instance TextureData Char   where
-  format _ =
-    case sizeOf (undefined::Char) of
-         4 -> (CUDA.Word32, 1)
-#endif
+instance TextureData Int8    where format _ = (CUDA.Int8,   1)
+instance TextureData Int16   where format _ = (CUDA.Int16,  1)
+instance TextureData Int32   where format _ = (CUDA.Int32,  1)
+instance TextureData Int64   where format _ = (CUDA.Int32,  2)
+instance TextureData Word8   where format _ = (CUDA.Word8,  1)
+instance TextureData Word16  where format _ = (CUDA.Word16, 1)
+instance TextureData Word32  where format _ = (CUDA.Word32, 1)
+instance TextureData Word64  where format _ = (CUDA.Word32, 2)
+instance TextureData Float   where format _ = (CUDA.Float,  1)
+instance TextureData Double  where format _ = (CUDA.Int32,  2)
+instance TextureData Bool    where format _ = (CUDA.Word8,  1)
+instance TextureData CShort  where format _ = (CUDA.Int16,  1)
+instance TextureData CUShort where format _ = (CUDA.Word16, 1)
+instance TextureData CInt    where format _ = (CUDA.Int32,  1)
+instance TextureData CUInt   where format _ = (CUDA.Word32, 1)
+instance TextureData CLLong  where format _ = (CUDA.Int32,  2)
+instance TextureData CULLong where format _ = (CUDA.Word32, 2)
+instance TextureData CFloat  where format _ = (CUDA.Float,  1)
+instance TextureData CDouble where format _ = (CUDA.Int32,  2)
+instance TextureData CChar   where format _ = (CUDA.Int8,   1)
+instance TextureData CSChar  where format _ = (CUDA.Int8,   1)
+instance TextureData CUChar  where format _ = (CUDA.Word8,  1)
+instance TextureData Char    where format _ = (CUDA.Word32, 1)
+
+$( runQ [d| instance TextureData Int    where format _ = (CUDA.Int32,  sizeOf (undefined::Int)    `div` 4) |] )
+$( runQ [d| instance TextureData Word   where format _ = (CUDA.Word32, sizeOf (undefined::Word)   `div` 4) |] )
+$( runQ [d| instance TextureData CLong  where format _ = (CUDA.Int32,  sizeOf (undefined::CLong)  `div` 4) |] )
+$( runQ [d| instance TextureData CULong where format _ = (CUDA.Word32, sizeOf (undefined::CULong) `div` 4) |] )
 
 
 -- Primitive array operations
@@ -173,16 +163,13 @@ mallocArray
     -> Int
     -> IO ()
 mallocArray !ctx !mt !ad !n0 = do
-  let !n = 1 `max` n0
+  let !n        = 1 `max` n0
+      !bytes    = n * sizeOf (undefined :: a)
   exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
   unless exists $ do
-    message $ "mallocArray: " ++ showBytes (n * sizeOf (undefined::a))
-    ptr <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-      case e of
-        ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-        _                    -> throwIO e
-    insert ctx mt ad (ptr :: CUDA.DevicePtr a)
-
+    message $ "mallocArray: " ++ showBytes bytes
+    _ <- malloc ctx mt ad n     :: IO (CUDA.DevicePtr a)
+    return ()
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
 -- device and upload an existing array. This is specialised because if the host
@@ -196,18 +183,14 @@ useArray
     -> Int
     -> IO ()
 useArray !ctx !mt !ad !n0 =
-  let src = ptrsOfArrayData ad
-      !n  = 1 `max` n0
+  let src    = ptrsOfArrayData ad
+      !n     = 1 `max` n0
+      !bytes = n * sizeOf (undefined :: a)
   in do
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArray/malloc: " ++ showBytes (n * sizeOf (undefined::a))
-      dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-        case e of
-          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-          _                    -> throwIO e
-      CUDA.pokeArray n src dst
-      insert ctx mt ad dst
+      dst <- malloc ctx mt ad n
+      transfer "useArray/malloc" bytes $ CUDA.pokeArray n src dst
 
 
 useArrayAsync
@@ -219,18 +202,31 @@ useArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 useArrayAsync !ctx !mt !ad !n0 !ms =
-  let src = CUDA.HostPtr (ptrsOfArrayData ad)
-      !n  = 1 `max` n0
+  let src    = CUDA.HostPtr (ptrsOfArrayData ad)
+      !n     = 1 `max` n0
+      !bytes = n * sizeOf (undefined :: a)
   in do
     exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
     unless exists $ do
-      message $ "useArrayAsync/malloc: " ++ showBytes (n * sizeOf (undefined::a))
-      dst <- CUDA.mallocArray n `catch` \(e :: CUDAException) ->
-        case e of
-          ExitCode OutOfMemory -> reclaim mt >> CUDA.mallocArray n
-          _                    -> throwIO e
-      CUDA.pokeArrayAsync n src dst ms
-      insert ctx mt ad dst
+      dst <- malloc ctx mt ad n
+      transfer "useArrayAsync/malloc" bytes $ CUDA.pokeArrayAsync n src dst ms
+
+
+useDevicePtrs
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> DevicePtrs e
+    -> Int
+    -> IO (ArrayData e)
+useDevicePtrs !ctx !mt !ptr !n0 =
+  let !n         = 1 `max` n0
+      !bytes     = n * sizeOf (undefined :: a)
+      (adata, _) = runArrayData $ (,undefined) `fmap` newArrayData n
+  in do
+    message $ "useDevicePtrs: " ++ showBytes bytes
+    insertRemote ctx mt adata ptr
+    return adata
 
 
 -- Read a single element from an array at the given row-major index
@@ -262,10 +258,41 @@ copyArray
     -> Int                      -- number of array elements
     -> IO ()
 copyArray !ctx !mt !from !to !n = do
-  message $ "copyArrayAsync: " ++ showBytes (n * sizeOf (undefined :: b))
   src <- devicePtrsOfArrayData ctx mt from
   dst <- devicePtrsOfArrayData ctx mt to
-  CUDA.copyArrayAsync n src dst
+  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArrayAsync n src dst
+
+
+-- Copy data between two device arrays that exist in different contexts and/or
+-- devices.
+--
+copyArrayPeer
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => MemoryTable
+    -> ArrayData e -> Context   -- source array and context
+    -> ArrayData e -> Context   -- destination array and context
+    -> Int                      -- number of array elements
+    -> IO ()
+copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n = do
+  src <- devicePtrsOfArrayData ctxSrc mt from
+  dst <- devicePtrsOfArrayData ctxDst mt to
+  transfer "copyArrayPeer" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArrayPeer n src (deviceContext ctxSrc) dst (deviceContext ctxDst)
+
+copyArrayPeerAsync
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => MemoryTable
+    -> ArrayData e -> Context   -- source array and context
+    -> ArrayData e -> Context   -- destination array and context
+    -> Int                      -- number of array elements
+    -> Maybe CUDA.Stream
+    -> IO ()
+copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st = do
+  src <- devicePtrsOfArrayData ctxSrc mt from
+  dst <- devicePtrsOfArrayData ctxDst mt to
+  transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArrayPeerAsync n src (deviceContext ctxSrc) dst (deviceContext ctxDst) st
 
 
 -- Copy data from the device into the associated Accelerate host-side array
@@ -278,9 +305,9 @@ peekArray
     -> Int
     -> IO ()
 peekArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \src -> do
-    message $ "peekArray: " ++ showBytes (n * sizeOf (undefined :: a))
-    CUDA.peekArray n src (ptrsOfArrayData ad)
+  devicePtrsOfArrayData ctx mt ad >>= \src ->
+    transfer "peekArray" (n * sizeOf (undefined :: a)) $
+      CUDA.peekArray n src (ptrsOfArrayData ad)
 
 peekArrayAsync
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
@@ -291,9 +318,9 @@ peekArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 peekArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \src -> do
-    message $ "peekArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
-    CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) st
+  devicePtrsOfArrayData ctx mt ad >>= \src ->
+    transfer "peekArrayAsync" (n * sizeOf (undefined :: a)) $
+      CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) st
 
 
 -- Copy data from an Accelerate array into the associated device array
@@ -306,9 +333,9 @@ pokeArray
     -> Int
     -> IO ()
 pokeArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \dst -> do
-    message $ "pokeArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
-    CUDA.pokeArray n (ptrsOfArrayData ad) dst
+  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+    transfer "pokeArray: " (n * sizeOf (undefined :: a)) $
+      CUDA.pokeArray n (ptrsOfArrayData ad) dst
 
 pokeArrayAsync
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a)
@@ -319,9 +346,9 @@ pokeArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 pokeArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \dst -> do
-    message $ "pokeArrayAsync: " ++ showBytes (n * sizeOf (undefined :: a))
-    CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
+  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+    transfer "pokeArrayAsync: " (n * sizeOf (undefined :: a)) $
+      CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
 
 -- Marshal device pointers to arguments that can be passed to kernel invocation
@@ -377,7 +404,7 @@ devicePtrsOfArrayData !ctx !mt !ad = do
     Just v  -> return v
     Nothing -> do
       sn <- makeStableName ad
-      INTERNAL_ERROR(error) "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
+      $internalError "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
 
 
 -- Advance device pointers by a given number of elements
@@ -405,4 +432,14 @@ trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
 {-# INLINE message #-}
 message :: String -> IO ()
 message s = s `trace` return ()
+
+{-# INLINE transfer #-}
+transfer :: String -> Int -> IO () -> IO ()
+transfer name bytes action
+  = let showRate x t        = D.showFFloatSIBase (Just 3) 1024 (fromIntegral x / t) "B/s"
+        msg gpuTime cpuTime = "gc: " ++ name ++ ": "
+                                     ++ showBytes bytes ++ " @ " ++ showRate bytes gpuTime ++ ", "
+                                     ++ D.elapsed gpuTime cpuTime
+    in
+    D.timed D.dump_gc msg Nothing action
 

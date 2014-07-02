@@ -13,25 +13,28 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Monad (
 
-  CUDA, Gen, GenST(..),
-  runCGM, evalCGM, execCGM, pushEnv, getEnv, fresh, bind, use,
+  CUDA, Gen, {- AccST(..),-} ExpST(..),
+  runCUDA, runCGM, evalCGM, execCGM, pushEnv, getEnv, fresh, bind, use,
 
 ) where
 
 import Prelude                                          hiding ( exp )
 import Data.HashSet                                     ( HashSet )
-import Data.HashMap.Strict                              ( HashMap )
+import Data.HashMap.Strict                              ( HashMap ) 
 import Data.Hashable
 import Control.Monad
 import Control.Monad.State.Strict
-import Control.Applicative
 import Language.C.Quote.CUDA
 import qualified Language.C                             as C
 import qualified Data.HashSet                           as Set
-import qualified Data.HashMap.Strict                    as Map
+import qualified Data.HashMap.Strict                    as Map 
 
 import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 -- import Data.Array.Accelerate.AST
+
+-- New 0.15
+import Data.Array.Accelerate.Trafo
+
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base (ctype)
 
@@ -40,32 +43,52 @@ instance Hashable C.Exp where
 
 
 -- The state of the code generator monad. The outer monad is used to generate
--- fresh variable names, while the inner is used to collect local environment
--- bindings when generating code.
+-- fresh variable names and collect any headers required for foreign functions.
+-- The inner is used to collect local bindings (for let-bound expressions) and
+-- to record when previously bound variables are later used for dead-code
+-- analysis.
 --
--- This separation is require so that names are unique across all generated code
--- fragments of a skeleton.
+-- This separation is required so that names are unique across all generated
+-- code fragments of a skeleton.
 --
-type CUDA       = State Int
-type Gen        = StateT GenST CUDA
+type CUDA       = State  Int -- AccST
+type Gen        = StateT ExpST CUDA
 
-data GenST = GenST
-  { bindings    :: [C.BlockItem]
-  , terms       :: HashSet C.Exp
-  , letterms    :: HashMap C.Exp C.Exp
+-- data AccST = AccST
+--   { counter     :: {-# UNPACK #-} !Int
+--   , headers     :: !(HashSet String)
+--   }
+
+data ExpST = ExpST
+  -- A stack of (typically) declarations that must be evaluated before
+  -- computation of the main expression. These are typically introduced by
+  -- let-bindings. The list is kept in reverse order, with the last to be
+  -- evaluated (newest addition) at the front of the list.
+  --
+  { localBindings       :: [C.BlockItem]
+
+  -- A set of the Var's that we know have been used in the expression. With this
+  -- we can do def-use analysis for simple dead-code elimination.
+  --
+  , usedTerms           :: !(HashSet C.Exp)
+
+  , letterms            :: HashMap C.Exp C.Exp
   }
 
 
 -- Run the code generator with a fresh environment, returning the result and
 -- final state.
 --
-runCGM :: Gen a -> CUDA (a, GenST)
-runCGM a = runStateT a (GenST [] Set.empty Map.empty)
+runCUDA :: CUDA a -> (a, Int) -- AccST)
+runCUDA a = runState a  0 --(AccST 0 Set.empty)
+
+runCGM :: Gen a -> CUDA (a, ExpST)
+runCGM a = runStateT a (ExpST [] Set.empty Map.empty)
 
 evalCGM :: Gen a -> CUDA a
 evalCGM = fmap fst . runCGM
 
-execCGM :: Gen a -> CUDA GenST
+execCGM :: Gen a -> CUDA ExpST
 execCGM = fmap snd . runCGM
 
 
@@ -91,34 +114,35 @@ pushEnv ty exp cs =
 -- front of the list, so reverse to get in execution order.
 --
 getEnv :: Gen [C.BlockItem]
-getEnv = reverse <$> gets bindings
+getEnv = reverse `fmap` gets localBindings
 
 -- Generate a fresh variable name
 --
 fresh :: CUDA String
-fresh = do
-  n     <- get <* modify (+1)
-  return $ 'v' : show n
+--fresh = state $ \s -> let n = counter s in ('v':show n, s { counter = n+1 })
+fresh = state $ \s -> let n = s in ('v':show n, n+1)
 
 -- Add an expression of given type to the environment and return the (new,
 -- unique) binding name that can be used in place of the thing just bound.
 --
 bind :: C.Type -> C.Exp -> Gen C.Exp
-bind t e = do
-  name <- lift fresh
-  modify (\st -> st { bindings = C.BlockDecl [cdecl| const $ty:t $id:name = $exp:e;|] : bindings st })
-  return [cexp| $id:name |]
+bind t e =
+  case e of
+    C.Var{}     -> return e
+    _           -> do
+      name <- lift fresh
+      modify (\st -> st { localBindings = [citem| const $ty:t $id:name = $exp:e;|] : localBindings st })
+      return [cexp| $id:name |]
+
 
 -- Add an expression to the set marking that it will be used to generate the
 -- output value(s). If the term exists in the reverse let-map, add that binding
 -- instead.
 --
 use :: C.Exp -> Gen C.Exp
-use e = do
-  m <- gets letterms
-  case Map.lookup e m of
-    Nothing     -> modify (\st -> st { terms = Set.insert e (terms st) })
-    Just x      -> modify (\st -> st { terms = Set.insert x (terms st) })
-  --
+use e@(C.Var{}) = do
+  modify (\st -> st { usedTerms = Set.insert e (usedTerms st) })
   return e
+--
+use e           = return e
 

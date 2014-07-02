@@ -1,7 +1,8 @@
-{-# LANGUAGE CPP           #-}
-{-# LANGUAGE GADTs         #-}
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE QuasiQuotes   #-}
+{-# LANGUAGE GADTs           #-}
+{-# LANGUAGE PatternGuards   #-}
+{-# LANGUAGE QuasiQuotes     #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE CPP             #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -27,6 +28,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type {- (
 ) -} where
 
 -- friends
+
 -- import Data.Array.Accelerate.AST
 -- import Data.Array.Accelerate.Type
 -- import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
@@ -34,15 +36,25 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type {- (
 
 import Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 
+import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Trafo
+import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
+import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
+
 -- libraries
+import Data.Bits
+import Data.Typeable
 import Language.C.Quote.CUDA
 import qualified Language.C                             as C
+
 
 #if !defined(SIZEOF_HSINT) || !defined(SIZEOF_HSCHAR)
 import Foreign.Storable
 #endif
 
-#include "accelerate.h"
+-- #include "accelerate.h"
 
 typename :: String -> C.Type
 typename name = [cty| typename $id:name |]
@@ -61,9 +73,17 @@ codegenTupleType = error "codegenTupleType"
 
 
 segmentsType :: OpenAcc aenv (Sugar.Segments i) -> C.Type
+
+accType :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+accType = codegenTupleType . Sugar.delayedAccType
+
+expType :: DelayedOpenExp aenv env t -> [C.Type]
+expType = codegenTupleType . Sugar.preExpType Sugar.delayedAccType
+
+segmentsType :: DelayedOpenAcc aenv (Sugar.Segments i) -> C.Type
 segmentsType seg
   | [s] <- accType seg  = s
-  | otherwise           = INTERNAL_ERROR(error) "accType" "non-scalar segment type"
+  | otherwise           = $internalError "accType" "non-scalar segment type"
 
 
 eltType :: Sugar.Elt a => a {- dummy -} -> [C.Type]
@@ -99,7 +119,7 @@ codegenNumType (FloatingNumType ty) = codegenFloatingType ty
 
 -}
 
--- TEMP:
+-- TEMP
 codegenIntegralType = codegenType
 
 codegenType :: S.Type -> C.Type
@@ -151,6 +171,25 @@ codegenType ty =
 --    TArray _ _ -> error "typeByteSize: cannot know the size of array from its type"
 
 {-
+codegenIntegralType :: IntegralType a -> C.Type
+codegenIntegralType (TypeInt8    _) = typename "Int8"
+codegenIntegralType (TypeInt16   _) = typename "Int16"
+codegenIntegralType (TypeInt32   _) = typename "Int32"
+codegenIntegralType (TypeInt64   _) = typename "Int64"
+codegenIntegralType (TypeWord8   _) = typename "Word8"
+codegenIntegralType (TypeWord16  _) = typename "Word16"
+codegenIntegralType (TypeWord32  _) = typename "Word32"
+codegenIntegralType (TypeWord64  _) = typename "Word64"
+codegenIntegralType (TypeCShort  _) = [cty|short|]
+codegenIntegralType (TypeCUShort _) = [cty|unsigned short|]
+codegenIntegralType (TypeCInt    _) = [cty|int|]
+codegenIntegralType (TypeCUInt   _) = [cty|unsigned int|]
+codegenIntegralType (TypeCLong   _) = [cty|long int|]
+codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
+codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
+codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
+codegenIntegralType (TypeInt     _) = typename (showsTypeRep (typeOf (undefined::HTYPE_INT))  "")
+codegenIntegralType (TypeWord    _) = typename (showsTypeRep (typeOf (undefined::HTYPE_WORD)) "")
 
 codegenFloatingType :: FloatingType a -> C.Type
 codegenFloatingType (TypeFloat   _) = [cty|float|]
@@ -160,13 +199,7 @@ codegenFloatingType (TypeCDouble _) = [cty|double|]
 
 codegenNonNumType :: NonNumType a -> C.Type
 codegenNonNumType (TypeBool   _) = typename "Word8"
-#if   SIZEOF_HSCHAR == 4
 codegenNonNumType (TypeChar   _) = typename "Word32"
-#else
-codegenNonNumType (TypeChar   _) = typename
-  $ case sizeOf (undefined :: Char) of
-      4 -> "Word32"
-#endif
 codegenNonNumType (TypeCChar  _) = [cty|char|]
 codegenNonNumType (TypeCSChar _) = [cty|signed char|]
 codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
@@ -175,8 +208,8 @@ codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
 -- Texture types
 -- -------------
 
-accTypeTex :: OpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-accTypeTex = codegenTupleTex . Sugar.accType
+accTypeTex :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
+accTypeTex = codegenTupleTex . Sugar.delayedAccType
 
 
 -- Implementation
@@ -211,27 +244,8 @@ codegenIntegralTex (TypeCLong   _) = typename "TexCLong"
 codegenIntegralTex (TypeCULong  _) = typename "TexCULong"
 codegenIntegralTex (TypeCLLong  _) = typename "TexCLLong"
 codegenIntegralTex (TypeCULLong _) = typename "TexCULLong"
-#if   SIZEOF_HSINT == 4
-codegenIntegralTex (TypeInt     _) = typename "TexInt32"
-#elif SIZEOF_HSINT == 8
-codegenIntegralTex (TypeInt     _) = typename "TexInt64"
-#else
-codegenIntegralTex (TypeInt     _) = typename
-  $ case sizeOf (undefined :: Int) of
-      4 -> "TexInt32"
-      8 -> "TexInt64"
-#endif
-#if   SIZEOF_HSINT == 4
-codegenIntegralTex (TypeWord    _) = typename "TexWord32"
-#elif SIZEOF_HSINT == 8
-codegenIntegralTex (TypeWord    _) = typename "TexWord64"
-#else
-codegenIntegralTex (TypeWord    _) = typename
-  $ case sizeOf (undefined :: Word) of
-      4 -> "TexWord32"
-      8 -> "TexWord64"
-#endif
-
+codegenIntegralTex (TypeInt     _) = typename ("TexInt"  ++ show (finiteBitSize (undefined::Int)))
+codegenIntegralTex (TypeWord    _) = typename ("TexWord" ++ show (finiteBitSize (undefined::Word)))
 
 codegenFloatingTex :: FloatingType a -> C.Type
 codegenFloatingTex (TypeFloat   _) = typename "TexFloat"
@@ -242,13 +256,7 @@ codegenFloatingTex (TypeCDouble _) = typename "TexCDouble"
 
 codegenNonNumTex :: NonNumType a -> C.Type
 codegenNonNumTex (TypeBool   _) = typename "TexWord8"
-#if   SIZEOF_HSCHAR == 4
 codegenNonNumTex (TypeChar   _) = typename "TexWord32"
-#else
-codegenNonNumTex (TypeChar   _) = typename
-  $ case sizeOf (undefined :: Char) of
-      4 -> "TexWord32"
-#endif
 codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
 codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
 codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"

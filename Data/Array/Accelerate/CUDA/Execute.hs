@@ -1,14 +1,15 @@
-{-# LANGUAGE BangPatterns         #-}
-{-# LANGUAGE CPP                  #-}
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE GADTs                #-}
-{-# LANGUAGE IncoherentInstances  #-}
-{-# LANGUAGE PatternGuards        #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TypeOperators        #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS -fno-warn-orphans #-}
+{-# LANGUAGE BangPatterns               #-}
+{-# LANGUAGE CPP                        #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE IncoherentInstances        #-}
+{-# LANGUAGE NoForeignFunctionInterface #-}
+{-# LANGUAGE PatternGuards              #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
+{-# LANGUAGE UndecidableInstances       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -33,10 +34,16 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfAvar, namesOfArray )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
+import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
+import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
+import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
+import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
+import qualified Data.Array.Accelerate.CUDA.Execute.Stream      as Stream
 
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
@@ -47,28 +54,65 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 -- standard library
 import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
-import Control.Monad                                            ( join, when, liftM, forM_ )
+import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
+import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
+import Data.Maybe
 
-import Foreign.Ptr                                              ( Ptr, castPtr )
-import Foreign.Storable                                         ( Storable(..) )
-import Foreign.CUDA.Analysis.Device                             ( DeviceProperties, computeCapability, Compute(..) )
+import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
-import qualified Foreign.Marshal.Array                          as F
-import qualified Data.HashSet                                   as Set
+import qualified Data.HashMap.Strict                            as Map
 
-#ifdef ACCELERATE_DEBUG
-import Control.Monad                                            ( void )
-import Control.Concurrent                                       ( forkIO )
-import System.CPUTime
-import qualified Foreign.CUDA.Driver.Event                      as Event
-#endif
 
-#include "accelerate.h"
+-- Asynchronous kernel execution
+-- -----------------------------
+
+-- Arrays with an associated CUDA Event that will be signalled once the
+-- computation has completed.
+--
+data Async a = Async {-# UNPACK #-} !Event !a
+
+-- Valuation for an environment of asynchronous array computations
+--
+data Aval env where
+  Aempty :: Aval ()
+  Apush  :: Aval env -> Async t -> Aval (env, t)
+
+
+-- Projection of a value from a valuation using a de Bruijn index.
+--
+aprj :: Idx env t -> Aval env -> Async t
+aprj ZeroIdx       (Apush _   x) = x
+aprj (SuccIdx idx) (Apush val _) = aprj idx val
+aprj _             _             = $internalError "aprj" "inconsistent valuation"
+
+
+-- All work submitted to the given stream will occur after the asynchronous
+-- event for the given array has been fulfilled. Synchronisation is performed
+-- efficiently on the device. This function returns immediately.
+--
+after :: MonadIO m => Stream -> Async a -> m a
+after stream (Async event arr) = liftIO $ Event.after event stream >> return arr
+
+
+-- Block the calling thread until the event for the given array computation
+-- is recorded.
+--
+wait :: MonadIO m => Async a -> m a
+wait (Async e x) = liftIO $ Event.block e >> return x
+
+
+-- Execute the given computation in a unique execution stream.
+--
+streaming :: (Stream -> CIO a) -> (Async a -> CIO b) -> CIO b
+streaming first second = do
+  context   <- asks activeContext
+  reservoir <- gets streamReservoir
+  Stream.streaming context reservoir first (\e a -> second (Async e a))
 
 
 -- Array expression evaluation
@@ -88,22 +132,22 @@ import qualified Foreign.CUDA.Driver.Event                      as Event
 --    skeleton are invoked
 --
 executeAcc :: Arrays a => ExecAcc a -> CIO a
-executeAcc !acc = executeOpenAcc acc Empty
+executeAcc !acc = streaming (executeOpenAcc acc Aempty) wait
 
 executeAfun1 :: (Arrays a, Arrays b) => ExecAfun (a -> b) -> a -> CIO b
-executeAfun1 !afun !arrs
-  | Alam (Abody f) <- afun
-  = do useArrays (arrays arrs) (fromArr arrs)
-       executeOpenAcc f (Empty `Push` arrs)
-
-  | otherwise
-  = error "the sword comes out after you swallow it, right?"
-
+executeAfun1 !afun !arrs = do
+  streaming (useArrays (arrays arrs) (fromArr arrs))
+            (\(Async event ()) -> executeOpenAfun1 afun Aempty (Async event arrs))
   where
-    useArrays :: ArraysR arrs -> arrs -> CIO ()
-    useArrays ArraysRunit         ()       = return ()
-    useArrays (ArraysRpair r1 r0) (a1, a0) = useArrays r1 a1 >> useArrays r0 a0
-    useArrays ArraysRarray        arr      = useArray arr
+    useArrays :: ArraysR arrs -> arrs -> Stream -> CIO ()
+    useArrays ArraysRunit         ()       _  = return ()
+    useArrays (ArraysRpair r1 r0) (a1, a0) st = useArrays r1 a1 st >> useArrays r0 a0 st
+    useArrays ArraysRarray        arr      st = useArrayAsync arr (Just st)
+
+
+executeOpenAfun1 :: PreOpenAfun ExecOpenAcc aenv (a -> b) -> Aval aenv -> Async a -> CIO b
+executeOpenAfun1 (Alam (Abody f)) aenv x = streaming (executeOpenAcc f (aenv `Apush` x)) wait
+executeOpenAfun1 _                _    _ = error "the sword comes out after you swallow it, right?"
 
 
 -- Evaluate an open array computation
@@ -111,9 +155,12 @@ executeAfun1 !afun !arrs
 executeOpenAcc
     :: forall aenv arrs.
        ExecOpenAcc aenv arrs
-    -> Val aenv
+    -> Aval aenv
+    -> Stream
     -> CIO arrs
-executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
+executeOpenAcc EmbedAcc{} _ _
+  = $internalError "execute" "unexpected delayed array"
+executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
       -- Array introduction
@@ -121,18 +168,23 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Unit x                    -> newArray Z . const =<< travE x
 
       -- Environment manipulation
-      Avar ix                   -> return (prj ix aenv)
-      Alet bnd body             -> executeOpenAcc body . (aenv `Push`) =<< travA bnd
+      Avar ix                   -> after stream (aprj ix aenv)
+      Alet bnd body             -> streaming (executeOpenAcc bnd aenv) (\x -> executeOpenAcc body (aenv `Apush` x) stream)
+      Apply f a                 -> streaming (executeOpenAcc a aenv)   (executeOpenAfun1 f aenv)
       Atuple tup                -> toTuple <$> travT tup
       Aprj ix tup               -> evalPrj ix . fromTuple <$> travA tup
-      Apply f a                 -> executeAfun1 f =<< travA a
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
+      Awhile p f a              -> awhile p f =<< travA a
+
+      -- Foreign
+      Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecuteAcc ff) =<< travA a
 
       -- Producers
       Map _ a                   -> executeOp =<< extent a
       Generate sh _             -> executeOp =<< travE sh
       Transform sh _ _ _        -> executeOp =<< travE sh
       Backpermute sh _ _        -> executeOp =<< travE sh
+      Reshape sh a              -> reshapeOp <$> travE sh <*> travA a
 
       -- Consumers
       Fold _ _ a                -> foldOp  =<< extent a
@@ -145,41 +197,41 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
       Scanr' _ _ a              -> scan'Op =<< extent a
       Scanl _ _ a               -> scanOp True  =<< extent a
       Scanr _ _ a               -> scanOp False =<< extent a
-      Permute _ d _ _           -> permuteOp =<< travA d
+      Permute _ d _ a           -> join $ permuteOp <$> extent a <*> travA d
       Stencil _ _ a             -> stencilOp =<< travA a
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
       -- Removed by fusion
-      Reshape _ _               -> fusionError
       Replicate _ _ _           -> fusionError
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
 
   where
-    fusionError = INTERNAL_ERROR(error) "executeOpenAcc" "unexpected fusible matter"
+    fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
 
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
-    travA !acc = executeOpenAcc acc aenv
+    travA !acc = executeOpenAcc acc aenv stream
 
     travE :: ExecExp aenv t -> CIO t
-    travE !exp = executeExp exp aenv
+    travE !exp = executeExp exp aenv stream
 
     travT :: Atuple (ExecOpenAcc aenv) t -> CIO t
     travT NilAtup          = return ()
     travT (SnocAtup !t !a) = (,) <$> travT t <*> travA a
 
-    -- get the extent of a fused array
-    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent (ExecAcc _ _ acc)
-      = case acc of
-          Avar ix               -> return $! shape (prj ix aenv)
-          Map _ a               -> extent a     -- must be an Avar
-          Generate sh _         -> travE sh
-          Backpermute sh _ _    -> travE sh
-          Transform sh _ _ _    -> travE sh
-          _                     -> fusionError
+    awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
+    awhile p f a = do
+      nop <- liftIO Event.create                -- record event never call, so this is a functional no-op
+      r   <- executeOpenAfun1 p aenv (Async nop a)
+      ok  <- indexArray r 0                     -- TLM TODO: memory manager should remember what is already on the host
+      if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
+            else return a
 
+    -- get the extent of an embedded array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
     -- -----------------------
@@ -190,8 +242,16 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     executeOp :: (Shape sh, Elt e) => sh -> CIO (Array sh e)
     executeOp !sh = do
       out       <- allocateArray sh
-      execute kernel gamma aenv (size sh) out
+      execute kernel gamma aenv (size sh) out stream
       return out
+
+    -- Change the shape of an array without altering its contents. This does not
+    -- execute any kernel programs.
+    --
+    reshapeOp :: Shape sh => sh -> Array sh' e -> Array sh e
+    reshapeOp sh (Array sh' adata)
+      = $boundsCheck "reshape" "shape mismatch" (size sh == R.size sh')
+      $ Array (fromElt sh) adata
 
     -- Executing fold operations depend on whether we are recursively collapsing
     -- to a single value using multiple thread blocks, or a multidimensional
@@ -199,18 +259,22 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     --
     fold1Op :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     fold1Op !sh@(_ :. sz)
-      = BOUNDS_CHECK(check) "fold1" "empty array" (sz > 0)
-      $ foldOp sh
+      = $boundsCheck "fold1" "empty array" (sz > 0)
+      $ foldCore sh
 
     foldOp :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     foldOp !(!sh :. sz)
+      = foldCore ((listToShape . map (max 1) . shapeToList $ sh) :. sz)
+
+    foldCore :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
+    foldCore !(!sh :. sz)
       | dim sh > 0              = executeOp sh
       | otherwise
       = let !numElements        = size sh * sz
             (_,!numBlocks,_)    = configure kernel numElements
         in do
           out   <- allocateArray (sh :. numBlocks)
-          execute kernel gamma aenv numElements out
+          execute kernel gamma aenv numElements out stream
           foldRec out
 
     -- Recursive step(s) of a multi-block reduction
@@ -225,11 +289,11 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
               then return $ Array (fromElt sh) adata
               else do
                 out     <- allocateArray (sh :. numBlocks)
-                execute rec gamma aenv numElements (out, arr)
+                execute rec gamma aenv numElements (out, arr) stream
                 foldRec out
 
       | otherwise
-      = INTERNAL_ERROR(error) "foldRec" "missing phase-2 kernel module"
+      = $internalError "foldRec" "missing phase-2 kernel module"
 
     -- Segmented reduction. Subtract one from the size of the segments vector as
     -- this is the result of an exclusive scan to calculate segment offsets.
@@ -288,27 +352,25 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
           --          the final scan result from each interval.
           --
           when (numIntervals > 1) $ do
-            execute upsweep1 gamma aenv numElements blk
-            execute upsweep2 gamma aenv numIntervals (blk, blk, d_sum)
+            execute upsweep1 gamma aenv numElements blk stream
+            execute upsweep2 gamma aenv numIntervals (blk, blk, d_sum) stream
 
           -- Phase 2: Re-scan the input using the carry-in value from each
           --          interval sum calculated in phase 1.
           --
-          execute kernel gamma aenv numElements (Z :. numElements, d_body, blk, d_sum)
+          execute kernel gamma aenv numElements (numElements, d_body, blk, d_sum) stream
 
       | otherwise
-      = INTERNAL_ERROR(error) "scanOp" "missing multi-block kernel module(s)"
+      = $internalError "scanOp" "missing multi-block kernel module(s)"
 
     -- Forward permutation
     --
-    permuteOp :: (Shape sh, Elt e) => Array sh e -> CIO (Array sh e)
-    permuteOp !dfs
-      = let sh  = shape dfs
-        in do
-          out   <- allocateArray sh
-          copyArray dfs out
-          execute kernel gamma aenv (size sh) out
-          return out
+    permuteOp :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
+    permuteOp !sh !dfs = do
+      out <- allocateArray (shape dfs)
+      copyArray dfs out
+      execute kernel gamma aenv (size sh) out stream
+      return out
 
     -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the
     -- same as those given in the function 'mkStencil[2]'.
@@ -317,52 +379,60 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv
     stencilOp !arr = do
       let sh    =  shape arr
       out       <- allocateArray sh
-      dev       <- asks deviceProps
+      dev       <- asks deviceProperties
 
       if computeCapability dev < Compute 2 0
          then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
-              execute kernel gamma aenv (size sh) out
-         else execute kernel gamma aenv (size sh) (out, arr)
+              execute kernel gamma aenv (size sh) (out, sh) stream
+         else execute kernel gamma aenv (size sh) (out, arr) stream
       --
       return out
 
     stencil2Op :: forall sh a b c. (Shape sh, Elt a, Elt b, Elt c)
                => Array sh a -> Array sh b -> CIO (Array sh c)
-    stencil2Op !arr1 !arr2 = do
-      let sh    =  shape arr1 `intersect` shape arr2
-      out       <- allocateArray sh
-      dev       <- asks deviceProps
+    stencil2Op !arr1 !arr2
+      | Cons _ spec _ <- more
+      = let sh1         =  shape arr1
+            sh2         =  shape arr2
+            (sh, op)
+              | fromElt sh1 == fromElt sh2      = (sh1,                 spec)
+              | otherwise                       = (sh1 `intersect` sh2, kernel)
+        in do
+          out   <- allocateArray sh
+          dev   <- asks deviceProperties
 
-      if computeCapability dev < Compute 2 0
-         then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) kernel arr1 >>
-              marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) kernel arr2 >>
-              execute kernel gamma aenv (size sh) out
-         else execute kernel gamma aenv (size sh) (out, arr1, arr2)
-      --
-      return out
+          if computeCapability dev < Compute 2 0
+             then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) op arr1 >>
+                  marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) op arr2 >>
+                  execute op gamma aenv (size sh) (out, sh1,  sh2) stream
+             else execute op gamma aenv (size sh) (out, arr1, arr2) stream
+          --
+          return out
+
+      | otherwise
+      = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
 
 -- Scalar expression evaluation
 -- ----------------------------
 
-executeExp :: ExecExp aenv t -> Val aenv -> CIO t
-executeExp !exp !aenv = executeOpenExp exp Empty aenv
+executeExp :: ExecExp aenv t -> Aval aenv -> Stream -> CIO t
+executeExp !exp !aenv !stream = executeOpenExp exp Empty aenv stream
 
-executeOpenExp :: forall env aenv exp. ExecOpenExp env aenv exp -> Val env -> Val aenv -> CIO exp
-executeOpenExp !rootExp !env !aenv = travE rootExp
+executeOpenExp :: forall env aenv exp. ExecOpenExp env aenv exp -> Val env -> Aval aenv -> Stream -> CIO exp
+executeOpenExp !rootExp !env !aenv !stream = travE rootExp
   where
     travE :: ExecOpenExp env aenv t -> CIO t
     travE exp = case exp of
       Var ix                    -> return (prj ix env)
-      Let bnd body              -> travE bnd >>= \x -> executeOpenExp body (env `Push` x) aenv
+      Let bnd body              -> travE bnd >>= \x -> executeOpenExp body (env `Push` x) aenv stream
       Const c                   -> return (toElt c)
       PrimConst c               -> return (evalPrimConst c)
       PrimApp f x               -> evalPrim f <$> travE x
       Tuple t                   -> toTuple <$> travT t
       Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
       Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
-      Iterate n f x             -> join $ iterate f <$> travE n <*> travE x
---      While p f x               -> while p f =<< travE x
+      While p f x               -> while p f =<< travE x
       IndexAny                  -> return Any
       IndexNil                  -> return Z
       IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
@@ -377,6 +447,7 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       Shape acc                 -> shape <$> travA acc
       Index acc ix              -> join $ index      <$> travA acc <*> travE ix
       LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
+      Foreign _ f x             -> foreign f x
 
     -- Helpers
     -- -------
@@ -387,24 +458,21 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
       SnocTup !t !e     -> (,) <$> travT t <*> travE e
 
     travA :: ExecOpenAcc aenv a -> CIO a
-    travA !acc = executeOpenAcc acc aenv
+    travA !acc = executeOpenAcc acc aenv stream
 
-    iterate :: ExecOpenExp (env,a) aenv a -> Int -> a -> CIO a
-    iterate !f !limit !x
-      = let go !i !acc
-              | i >= limit      = return acc
-              | otherwise       = go (i+1) =<< executeOpenExp f (env `Push` acc) aenv
-        in
-        go 0 x
+    foreign :: ExecFun () (a -> b) -> ExecOpenExp env aenv a -> CIO b
+    foreign (Lam (Body f)) x = travE x >>= \e -> executeOpenExp f (Empty `Push` e) Aempty stream
+    foreign _              _ = error "I bless the rains down in Africa"
 
-    while :: ExecOpenExp (env,a) aenv Bool -> ExecOpenExp (env,a) aenv a -> a -> CIO a
-    while !p !f !x
-      = let go !acc = do
-              done <- executeOpenExp p (env `Push` acc) aenv
-              if done then return x
-                      else go =<< executeOpenExp f (env `Push` acc) aenv
-        in
-        go x
+    travF1 :: ExecOpenFun env aenv (a -> b) -> a -> CIO b
+    travF1 (Lam (Body f)) x = executeOpenExp f (env `Push` x) aenv stream
+    travF1 _              _ = error "Gonna take some time to do the things we never have"
+
+    while :: ExecOpenFun env aenv (a -> Bool) -> ExecOpenFun env aenv (a -> a) -> a -> CIO a
+    while !p !f !x = do
+      ok <- travF1 p x
+      if ok then while p f =<< travF1 f x
+            else return x
 
     indexSlice :: (Elt slix, Elt sh, Elt sl)
                => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
@@ -452,7 +520,7 @@ instance ArrayElt e => Marshalable (ArrayData e) where
   marshal !ad = marshalArrayData ad
 
 instance Shape sh => Marshalable sh where
-  marshal !sh = return [CUDA.VArg sh]
+  marshal !sh = marshal (reverse (shapeToList sh))
 
 instance Marshalable a => Marshalable [a] where
   marshal = concatMapM marshal
@@ -489,24 +557,7 @@ primMarshalable(Word32)
 primMarshalable(Word64)
 primMarshalable(Float)
 primMarshalable(Double)
-primMarshalable(Ptr a)
 primMarshalable(CUDA.DevicePtr a)
-
-instance Shape sh => Storable sh where  -- undecidable, incoherent
-  sizeOf sh     = sizeOf    (undefined :: Int32) * (dim sh)
-  alignment _   = alignment (undefined :: Int32)
-  poke !p !sh   = F.pokeArray (castPtr p) (convertShape (shapeToList sh))
-
-
--- Convert shapes into 32-bit integers for marshalling onto the device
---
-convertShape :: [Int] -> [Int32]
-convertShape [] = [1]
-convertShape sh = reverse (map convertIx sh)
-
-convertIx :: Int -> Int32
-convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int32))
-              $ fromIntegral ix
 
 
 -- Note [Array references in scalar code]
@@ -526,22 +577,21 @@ convertIx !ix = INTERNAL_ASSERT "convertIx" (ix <= fromIntegral (maxBound :: Int
 -- as to use the larger available caches.
 --
 
-marshalAccEnvTex :: AccKernel a -> Val aenv -> Gamma aenv -> CIO ()
-marshalAccEnvTex !kernel !aenv (Gamma !gamma)
-  = forM_ (Set.toList gamma)
-  $ \(Idx_ !idx) -> marshalAccTex (namesOfAvar idx) kernel (prj idx aenv)
+marshalAccEnvTex :: AccKernel a -> Aval aenv -> Gamma aenv -> Stream -> CIO [CUDA.FunParam]
+marshalAccEnvTex !kernel !aenv (Gamma !gamma) !stream
+  = flip concatMapM (Map.toList gamma)
+  $ \(Idx_ !(idx :: Idx aenv (Array sh e)), i) ->
+        do arr <- after stream (aprj idx aenv)
+           marshalAccTex (namesOfArray (groupOfInt i) (undefined :: e)) kernel arr
+           marshal (shape arr)
 
 marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
-marshalAccTex (!shIn, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
-  = let sh'     = convertShape (R.shapeToList sh)
-        tex     = map (CUDA.getTex mdl) (reverse arrIn)
-    in do
-      liftIO $ CUDA.pokeListArray sh' . fst =<< CUDA.getPtr mdl shIn
-      marshalTextureData adata (R.size sh)  =<< liftIO (sequence' tex)
+marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
+  = marshalTextureData adata (R.size sh) =<< liftIO (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
 
-marshalAccEnvArg :: Val aenv -> Gamma aenv -> CIO [CUDA.FunParam]
-marshalAccEnvArg !aenv (Gamma !gamma)
-  = concatMapM (\(Idx_ !idx) -> marshal (prj idx aenv)) (Set.toList gamma)
+marshalAccEnvArg :: Aval aenv -> Gamma aenv -> Stream -> CIO [CUDA.FunParam]
+marshalAccEnvArg !aenv (Gamma !gamma) !stream
+  = concatMapM (\(Idx_ !idx) -> marshal =<< after stream (aprj idx aenv)) (Map.keys gamma)
 
 
 -- A lazier version of 'Control.Monad.sequence'
@@ -572,15 +622,17 @@ configure (AccKernel _ _ _ _ !cta !smem !grid) !n = (cta, grid n, smem)
 --
 arguments :: Marshalable args
           => AccKernel a
-          -> Val aenv
+          -> Aval aenv
           -> Gamma aenv
           -> args
+          -> Stream
           -> CIO [CUDA.FunParam]
-arguments !kernel !aenv !gamma !a = do
-  dev <- asks deviceProps
-  if computeCapability dev < Compute 2 0
-     then marshalAccEnvTex kernel aenv gamma >> marshal a
-     else (++) <$> marshalAccEnvArg aenv gamma <*> marshal a
+arguments !kernel !aenv !gamma !a !stream = do
+  dev <- asks deviceProperties
+  let marshaller | computeCapability dev < Compute 2 0   = marshalAccEnvTex kernel
+                 | otherwise                             = marshalAccEnvArg
+  --
+  (++) <$> marshaller aenv gamma stream <*> marshal a
 
 
 -- Link the binary object implementing the computation, configure the kernel
@@ -590,61 +642,25 @@ arguments !kernel !aenv !gamma !a = do
 execute :: Marshalable args
         => AccKernel a                  -- The binary module implementing this kernel
         -> Gamma aenv                   -- variables of arrays embedded in scalar expressions
-        -> Val aenv                     -- the environment
+        -> Aval aenv                    -- the environment
         -> Int                          -- a "size" parameter, typically number of elements in the output
         -> args                         -- arguments to marshal to the kernel function
+        -> Stream                       -- Compute stream to execute in
         -> CIO ()
-execute !kernel !gamma !aenv !n !a = do
-  args <- arguments kernel aenv gamma a
-  launch kernel (configure kernel n) args
+execute !kernel !gamma !aenv !n !a !stream = do
+  args <- arguments kernel aenv gamma a stream
+  launch kernel (configure kernel n) args stream
 
 
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
-launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> CIO ()
-launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args
-#ifdef ACCELERATE_DEBUG
-  | D.mode D.dump_exec
-  = liftIO $ do
-      gpuBegin  <- Event.create []
-      gpuEnd    <- Event.create []
-      cpuBegin  <- getCPUTime
-      Event.record gpuBegin Nothing
-      CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
-      Event.record gpuEnd Nothing
-      cpuEnd    <- getCPUTime
-
-      -- Wait for the GPU to finish executing then display the timing execution
-      -- message. Do this in a separate thread so that the remaining kernels can
-      -- be queued asynchronously.
-      --
-      void . forkIO $ do
-        Event.block gpuEnd
-        diff    <- Event.elapsedTime gpuBegin gpuEnd
-        let gpuTime = diff * 1E-3                                        -- milliseconds
-            cpuTime = fromIntegral (cpuEnd - cpuBegin) * 1E-12 :: Double -- picoseconds
-
-        Event.destroy gpuBegin
-        Event.destroy gpuEnd
-        --
-        message $
-          entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
-                ++ "gpu: " ++ D.showFFloatSIBase (Just 3) 1000 gpuTime "s, "
-                ++ "cpu: " ++ D.showFFloatSIBase (Just 3) 1000 cpuTime "s"
-#endif
-  | otherwise
-  = liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem Nothing args
-
-
--- Debugging
--- ---------
-
-{-# INLINE trace #-}
-trace :: MonadIO m => String -> m a -> m a
-trace msg next = D.message D.dump_exec ("exec: " ++ msg) >> next
-
-{-# INLINE message #-}
-message :: MonadIO m => String -> m ()
-message s = s `trace` return ()
+launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> Stream -> CIO ()
+launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
+  = D.timed D.dump_exec msg (Just stream)
+  $ liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem (Just stream) args
+  where
+    msg gpuTime cpuTime
+      = "exec: " ++ entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "
+                 ++ D.elapsed gpuTime cpuTime
 

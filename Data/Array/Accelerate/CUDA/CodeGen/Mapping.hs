@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -44,7 +45,7 @@ mkMap tyIn tyOut dev aenv fun arr
   = return
   $ CUTranslSkel "map" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -54,7 +55,7 @@ mkMap tyIn tyOut dev aenv fun arr
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -69,7 +70,14 @@ mkMap tyIn tyOut dev aenv fun arr
   |]
   where
     (texIn, argIn)      = environment  dev aenv
-    (argOut, setOut)    = setters tyOut "Out" 
+-- TODO: shOut. shape of result ?
+    (argOut, shOut, setOut)    = setters tyOut "Out" 
     (x, _, _)           = locals tyIn "x" 
     ix                  = [cvar "ix"]
+
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh b)
+    -- (x, _, _)                   = locals "x" (undefined :: a)
+    -- ix                          = [cvar "ix"]
+
 

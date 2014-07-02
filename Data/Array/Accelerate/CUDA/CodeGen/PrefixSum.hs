@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -173,7 +174,7 @@ mkScan :: -- forall aenv e. Elt e
 mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -191,7 +192,7 @@ mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn)
         $decls:declz
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         /*
@@ -214,7 +215,7 @@ mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn)
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex;
 
             /*
              * Generate the next set of values
@@ -235,7 +236,9 @@ mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn)
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock eltTy dev fun x y sdata Nothing)
+
+            $items:(scanBlock eltTy dev fun x y sdata Nothing)
+
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -261,23 +264,22 @@ mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn)
                 const int last = min(numElements - seg, blockDim.x) - 1;
                 $items:(z .=. sdata "last")
             }
-            $id:( if isNothing mseed then "carryIn = 1" else [] ) ;
+            $items:setCarry
         }
 
         /*
          * Finally, exclusive scans set the overall scan result (reduction value)
          */
-        if ( $exp:(cbool (isJust mseed)) && threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
-            $items:(setSum .=. z)
-        }
+        $items:setFinal
     }
   |]
   where
+-- HEAD 
     scan                = "scan" ++ show dir ++ maybe "1" (const []) mseed
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters (S.TArray 1 eltTy) "Out" 
-    (argSum, totalSum)  = setters (S.TArray 1 eltTy) "Sum" 
-    (argBlk, blkSum)    = setters (S.TArray 1 eltTy) "Blk" 
+    (argOut, shOut, setOut)    = setters (S.TArray 1 eltTy) "Out" 
+    (argSum, shSum, totalSum)  = setters (S.TArray 1 eltTy) "Sum" 
+    (argBlk, shBlk, blkSum)    = setters (S.TArray 1 eltTy) "Blk" 
     (_, x, declx)       = locals eltTy "x" 
     (_, y, decly)       = locals eltTy "y" 
     (_, z, declz)       = locals eltTy "z" 
@@ -286,10 +288,38 @@ mkScan eltTy dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn)
     ix                  = [cvar "ix"]
     setSum              = totalSum "0"
 
+    -- scan                        = "scan" ++ show dir ++ maybe "1" (const []) mseed
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
+    -- (argSum, _, totalSum)       = writeArray "Sum" (undefined :: Vector e)
+    -- (argBlk, _, blkSum)         = writeArray "Blk" (undefined :: Vector e)
+    -- (_, x, declx)               = locals "x" (undefined :: e)
+    -- (_, y, decly)               = locals "y" (undefined :: e)
+    -- (_, z, declz)               = locals "z" (undefined :: e)
+    -- (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    -- (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    -- ix                          = [cvar "ix"]
+    -- setSum                      = totalSum "0"
+
+    -- depending on whether we are inclusive/exclusive scans
+    setCarry
+      | isNothing mseed         = [[citem| carryIn = 1; |]]
+      | otherwise               = []
+
+    setFinal
+      | isNothing mseed         = []
+      | otherwise               = [[citem| if ( threadIdx.x == 0 && blockIdx.x == $id:lastBlock ) {
+                                               $items:(setSum .=. z)
+                                           } |]]
+--master
     -- accessing neighbouring blocks
     firstBlock          = if dir == L then "0" else "gridDim.x - 1"
     lastBlock           = if dir == R then "0" else "gridDim.x - 1"
     prevBlock           = if dir == L then "blockIdx.x - 1" else "blockIdx.x + 1"
+
+    firstIndex
+      | dir == L        = [cexp| start + seg |]
+      | otherwise       = [cexp| end - seg - 1 |]
 
     carryIn
       | isJust mseed    = [cexp| threadIdx.x == 0 |]
@@ -330,7 +360,7 @@ mkScanUp1 :: S.Type ->
 mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun1 _ get)) =
   CUTranslSkel scan [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -345,7 +375,7 @@ mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ 
         $decls:decly
         $items:(sh .=. shIn)
 
-        const int shapeSize     = $exp:(shapeSize sh);
+        const int shapeSize     = $exp:(csize sh);
         const int intervalSize  = (shapeSize + gridDim.x - 1) / gridDim.x;
 
         const int start         = blockIdx.x * intervalSize;
@@ -358,7 +388,7 @@ mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ 
             ; seg < numElements
             ; seg += blockDim.x )
         {
-            const int ix = $id:(if dir == L then "start + seg" else "end - seg - 1") ;
+            const int ix = $exp:firstIndex ;
 
             /*
              * Read in new values, combine with carry-in
@@ -375,7 +405,8 @@ mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ 
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $stms:(scanBlock eltTy dev fun x y sdata Nothing)
+
+            $items:(scanBlock eltTy dev fun x y sdata Nothing)
 
             /*
              * Store the final result of the block to be carried in
@@ -398,12 +429,26 @@ mkScanUp1 eltTy dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ 
   where
     scan                = "scan" ++ show dir ++ "Up"
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters (S.TArray 1 eltTy) "Out"
+    (argOut, shOut, setOut)    = setters (S.TArray 1 eltTy) "Out"
     (_, x, declx)       = locals eltTy "x" 
     (_, y, decly)       = locals eltTy "y" 
     (sh, _, _)          = locals S.TInt "sh"
     (smem, sdata)       = shared eltTy  "sdata" [cexp| blockDim.x |] Nothing
     ix                  = [cvar "ix"]
+
+    -- scan                        = "scan" ++ show dir ++ "Up"
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
+    -- (_, x, declx)               = locals "x" (undefined :: e)
+    -- (_, y, decly)               = locals "y" (undefined :: e)
+    -- (sh, _, _)                  = locals "sh" (undefined :: DIM1)
+    -- (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
+    -- ix                          = [cvar "ix"]
+
+    firstIndex
+      | dir == L                = [cexp| start + seg |]
+      | otherwise               = [cexp| end - seg - 1 |]
+
 
 
 -- Second step of the upsweep phase: scan the interval sums to produce carry-in
@@ -420,6 +465,13 @@ mkScanUp2 :: S.Type ->
 mkScanUp2 eltTy dir dev aenv f z
   = let (_, get) = getters (S.TArray 1 eltTy) "Blk" 
     in  mkScan eltTy dir dev aenv f z get
+--     -> Gamma aenv
+--     -> CUFun2 aenv (e -> e -> e)
+--     -> Maybe (CUExp aenv e)
+--     -> CUTranslSkel aenv (Vector e)
+-- mkScanUp2 dir dev aenv f z
+--   = let (_, get) = readArray "Blk" (undefined :: Vector e)
+--     in  mkScan dir dev aenv f z get
 
 
 -- Block scans
@@ -432,7 +484,7 @@ scanBlock :: S.Type ->
     -> [C.Exp] -> [C.Exp]
     -> (Name -> [C.Exp])
     -> Maybe C.Exp
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlock eltTy dev f x0 x1 sdata mlim
   | shflOK dev eltTy = error "shfl-scan"
   | otherwise        = scanBlockTree dev f x0 x1 sdata mlim
@@ -450,7 +502,7 @@ scanBlockTree ::
     -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
-    -> [C.Stm]
+    -> [C.BlockItem]
 scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
     pow2 :: Int -> Int
@@ -461,7 +513,7 @@ scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. max
       | Just m <- mlim  = [cexp| threadIdx.x >= $int:n && threadIdx.x < $exp:m |]
       | otherwise       = [cexp| threadIdx.x >= $int:n |]
 
-    scan n = [cstm|
+    scan n = [citem|
       if ( blockDim.x > $int:n ) {
           if ( $exp:(inrange n) ) {
               $items:(x1 .=. sdata ("threadIdx.x - " ++ show n))

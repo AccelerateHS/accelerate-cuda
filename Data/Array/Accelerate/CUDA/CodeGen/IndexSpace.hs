@@ -1,8 +1,10 @@
 {-# LANGUAGE CPP  #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -29,12 +31,18 @@ import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis.Device
 import qualified Language.C.Syntax                      as C
 
+
 import qualified Data.Array.Accelerate.BackendKit.IRs.SimpleAcc as S
 -- import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 -- import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.CUDA.AST                   ( Gamma ) -- Exp
+-- import Data.Array.Accelerate.CUDA.AST                   ( Gamma ) -- Exp
+
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, ignore, shapeToList )
+import Data.Array.Accelerate.Error                      ( internalError )
+import Data.Array.Accelerate.CUDA.AST                   ( Gamma )
+
 import Data.Array.Accelerate.CUDA.CodeGen.Type
-import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.Base hiding (zipWith)
 
 
 -- Construct a new array by applying a function to each index. Each thread
@@ -45,6 +53,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Base
 --          -> (Exp ix -> Exp a)                -- function to apply at each index
 --          -> Acc (Array ix a)
 --
+
 mkGenerate :: S.Type -> S.Type -> 
 --    :: forall aenv sh e. (Shape sh, Elt e)
        DeviceProperties -> Gamma -> CUFun1 -> [CUTranslSkel]
@@ -52,8 +61,7 @@ mkGenerate shpTy eltTy dev aenv (CUFun1 _ f)
   = return
   $ CUTranslSkel "generate" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
-    $edecl:(cdim "DimOut" dim)
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -63,7 +71,7 @@ mkGenerate shpTy eltTy dev aenv (CUFun1 _ f)
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -81,7 +89,12 @@ mkGenerate shpTy eltTy dev aenv (CUFun1 _ f)
     dim                 = length$ S.flattenTy shpTy
     sh                  = cshape dim (cvar "sh")
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters eltTy  "Out" 
+-- TODO shOut
+    (argOut, shOut,  setOut)    = setters eltTy  "Out" 
+
+    -- (sh, _, _)                  = locals "sh" (undefined :: sh)
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh e)
 
 
 
@@ -94,7 +107,7 @@ mkGenerate shpTy eltTy dev aenv (CUFun1 _ f)
 --           -> PreFun     acc aenv (a   -> b)          -- function to apply at each element
 --           ->            acc aenv (Array sh  a)       -- source array
 --           -> PreOpenAcc acc aenv (Array sh' b)
---
+
 mkTransform :: (S.Type, S.Type) -> (S.Type, S.Type) ->
 --    :: forall aenv sh sh' a b. (Shape sh, Shape sh', Elt a, Elt b)
        DeviceProperties
@@ -110,9 +123,7 @@ mkTransform (shpTy1,shpTy2) (inTy,outTy) dev aenv perm fun arr
   = return
   $ CUTranslSkel "transform" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn"  dimIn)
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -122,7 +133,7 @@ mkTransform (shpTy1,shpTy2) (inTy,outTy) dev aenv perm fun arr
         $params:argOut
     )
     {
-        const int shapeSize     = size(shOut);
+        const int shapeSize     = $exp:(csize shOut);
         const int gridSize      = $exp:(gridSize dev);
               int ix;
 
@@ -130,21 +141,33 @@ mkTransform (shpTy1,shpTy2) (inTy,outTy) dev aenv perm fun arr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
+          
             const typename DimOut sh_ = fromIndex(shOut, ix);
-            $items:(sh          .=. p sh_)
-            $items:(dce x0      .=. get sh)
+            $items:(sh .=. p sh_)
+            $items:(dce x0 .=. get sh)
             $items:(setOut "ix" .=. f x0)
+
         }
     }
   |]
   where
+
     dimIn               = length$ S.flattenTy shpTy1
     dimOut              = length$ S.flattenTy shpTy2
     sh_                 = cshape dimOut (cvar "sh_")
     (texIn, argIn)      = environment dev aenv
-    (argOut, setOut)    = setters outTy "Out" 
+-- TODO shOut
+    (argOut, shOut, setOut)    = setters outTy "Out" 
     (x0, _, _)          = locals inTy  "x"  
     (sh, _, _)          = locals shpTy1 "sh" 
+
+
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh' b)
+    -- (x0, _, _)                  = locals "x"   (undefined :: a)
+    -- (sh, _, _)                  = locals "sh"  (undefined :: sh)
+    -- (sh', _, _)                 = locals "sh_" (undefined :: sh')
+
 
 
 -- Forward permutation specified by an index mapping that determines for each
@@ -163,6 +186,7 @@ mkTransform (shpTy1,shpTy2) (inTy,outTy) dev aenv perm fun arr
 --         -> Acc (Array ix  a)                 -- permuted array
 --         -> Acc (Array ix' a)
 --
+
 mkPermute :: (S.Type,S.Type) -> S.Type -> 
 --    :: forall aenv sh sh' e. (Shape sh, Shape sh', Elt e)
        DeviceProperties
@@ -176,9 +200,7 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
   = return
   $ CUTranslSkel "permute" [cunit|
 
-    $esc:("#include <accelerate_cuda_extras.h>")
-    $edecl:(cdim "DimOut" dimOut)
-    $edecl:(cdim "DimIn"  dimIn)
+    $esc:("#include <accelerate_cuda.h>")
     $edecls:texIn
 
     extern "C" __global__ void
@@ -188,9 +210,12 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
         $params:argOut
     )
     {
+        /*
+         * The input shape might be a complex expression. Evaluate it first to reuse the result.
+         */
         $items:(sh .=. shIn)
-        const typename DimIn shIn       = $exp:(ccall "shape" (map rvalue sh));
-        const int shapeSize             = $exp:(shapeSize sh);
+
+        const int shapeSize             = $exp:(csize sh);
         const int gridSize              = $exp:(gridSize dev);
               int ix;
 
@@ -198,12 +223,10 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
             ; ix <  shapeSize
             ; ix += gridSize )
         {
-            typename DimOut dst;
-
             const int src = fromIndex( shIn, ix );
-            $items:(dst .=. prj src)
+            $items:(dst         .=. prj src)
 
-            if ( !ignore(dst) )
+            if ( !ignore(dst) ) 
             {
                 $decls:decly
                 $decls:decly'
@@ -222,7 +245,8 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
     dimOut              = length$ S.flattenTy shpTy2
     sizeof              = map S.typeByteSize (S.flattenTy eltTy)
     (texIn, argIn)      = environment dev aenv
-    (argOut, arrOut)    = setters eltTy "Out" 
+-- TODO: shOut
+    (argOut, shOut, arrOut)    = setters eltTy "Out" 
     (sh, _, _)          = locals shpTy1 "sh" 
     (x, _, _)           = locals eltTy "x"  
     (_, y,  decly)      = locals eltTy "y"  
@@ -231,6 +255,28 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
     src                 = cshape dimIn  (cvar "src")
     dst                 = cshape dimOut (cvar "dst")
     sm                  = computeCapability dev
+
+    -- sizeof                      = eltSizeOf (undefined::e)
+    -- (texIn, argIn)              = environment dev aenv
+    -- (argOut, shOut, arrOut)     = writeArray "Out" (undefined :: Array sh' e)
+    -- (x, _, _)                   = locals "x" (undefined :: e)
+    -- (_, y,  decly)              = locals "y" (undefined :: e)
+    -- (_, y', decly')             = locals "_y" (undefined :: e)
+    -- (sh, _, _)                  = locals "shIn" (undefined :: sh)
+    -- (src, _, _)                 = locals "sh" (undefined :: sh)
+    -- (dst, _, _)                 = locals "sh_" (undefined :: sh')
+    -- ([jx], _, _)                = locals "jx" (undefined :: Int)
+    -- ix                          = [cvar "ix"]
+    -- sm                          = computeCapability dev
+
+    -- -- If the destination index resolves to the magic index "ignore", the result
+    -- -- is dropped from the output array.
+    -- cignore :: Rvalue x => [x] -> C.Exp
+    -- cignore []  = $internalError "permute" "singleton arrays not supported"
+    -- cignore xs  = foldl1 (\a b -> [cexp| $exp:a && $exp:b |])
+    --              $ zipWith (\a b -> [cexp| $exp:(rvalue a) == $int:b |]) xs
+    --              $ shapeToList (ignore :: sh')
+
 
     -- Apply the combining function between old and new values. If multiple
     -- threads attempt to write to the same location, the hardware
@@ -245,21 +291,20 @@ mkPermute (shpTy1,shpTy2) eltTy dev aenv (CUFun2 dcex dcey combine) (CUFun1 _ pr
     -- Each element of a tuple is necessarily written individually, so the tuple
     -- as a whole is not stored atomically.
     --
-    write               = env ++ zipWith6 apply sizeof (arrOut "jx") fun x (dcey y) y'
-    (env, fun)          = combine x y
+    write       = env ++ zipWith6 apply sizeof (arrOut "jx") fun x (dcey y) y'
+    (env, fun)  = combine x y
 
     apply size out f x1 (used,y1) y1'
       | used
       , Just atomicCAS <- reinterpret size
-      = C.BlockStm
-        [cstm| do {
-                      $exp:y1' = $exp:y1;
-                      $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
+      = [citem| do {
+                       $exp:y1' = $exp:y1;
+                       $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
 
-                  } while ( $exp:y1 != $exp:y1' ); |]
+                   } while ( $exp:y1 != $exp:y1' ); |]
 
       | otherwise
-      = C.BlockStm [cstm| $exp:out = $exp:(rvalue x1); |]
+      = [citem| $exp:out = $exp:(rvalue x1); |]
 
     --
     reinterpret :: Int -> Maybe C.Exp

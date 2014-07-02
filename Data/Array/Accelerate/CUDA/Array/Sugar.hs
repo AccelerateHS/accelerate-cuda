@@ -12,7 +12,7 @@
 module Data.Array.Accelerate.CUDA.Array.Sugar (
 
   module Data.Array.Accelerate.Array.Sugar,
-  newArray, allocateArray, useArray
+  newArray, allocateArray, useArray, useArrayAsync,
 
 ) where
 
