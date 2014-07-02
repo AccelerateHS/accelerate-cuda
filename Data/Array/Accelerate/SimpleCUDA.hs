@@ -27,8 +27,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data SimpleCUDABackend = SimpleCUDABackend
                          deriving Show 
 
--- Wont work. 
-data SimpleCUDABlob = forall a . SimpleCUDABlob (ExecAcc a) -- not sure what to put here! 
+data SimpleCUDABlob = SimpleCUDABlob -- ExecAcc  -- not sure what to put here! 
                 
 ---------------------------------------------------------------------------
 -- SimpleBackend instance
@@ -39,8 +38,8 @@ instance SimpleBackend SimpleCUDABackend where
 
   -- SACC = Data.Array.Accelerate.BackendKit.IRs.SimpleAcc 
   -- simpleCompile :: b -> FilePath -> SACC.Prog () -> IO (SimpleBlob b)
-  simpleCompile _ path prog = do b <- evalCUDA ( compileSimpleAcc prog )
-                                 return SimpleCUDABlob b 
+  simpleCompile _ path prog = undefined --  do b <- evalCUDA ( compileSimpleAcc prog )
+                              --   return SimpleCUDABlob b 
 
   --simpleCompile :: b -> FilePath -> SACC.Prog () -> IO (SimpleBlob b)
 

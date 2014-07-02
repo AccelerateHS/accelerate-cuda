@@ -5,16 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
--- |
--- Module      : Data.Array.Accelerate.CUDA.Compile
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
--- License     : BSD3
---
--- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
--- Stability   : experimental
--- Portability : non-portable (GHC extensions)
---
+
 
 module Data.Array.Accelerate.CUDA.Compile (
 
@@ -82,6 +73,9 @@ import System.Win32.Process
 import Paths_accelerate_cuda                                    ( getDataDir )
 
 
+-- SIMPLECUDA SPECIFICS
+import qualified Data.Array.Accelerate.IRs.SimpleAcc as S 
+
 -- | Initiate code generation, compilation, and data transfer for an array
 -- expression. The returned array computation is annotated so to be suitable for
 -- execution in the CUDA environment. This includes:
@@ -90,6 +84,10 @@ import Paths_accelerate_cuda                                    ( getDataDir )
 --
 --   * kernel object(s) required to executed the kernel
 --
+compileSimpleAcc :: S.Prog a -> CIO (ExecAcc a)
+compileSimpleAcc = compileOpenAcc 
+
+{- 
 compileAcc :: DelayedAcc a -> CIO (ExecAcc a)
 compileAcc = compileOpenAcc
 
@@ -585,3 +583,4 @@ message msg = trace msg $ return ()
 trace :: MonadIO m => String -> m a -> m a
 trace msg next = D.message D.dump_cc ("cc: " ++ msg) >> next
 
+-} 
