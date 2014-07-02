@@ -1,5 +1,5 @@
-Name:                   accelerate-cuda
-Version:                0.15.0.0
+Name:                   simple-cuda
+Version:                0.15.0.1
 Cabal-version:          >= 1.6
 Tested-with:            GHC == 7.8.*
 Build-type:             Simple
