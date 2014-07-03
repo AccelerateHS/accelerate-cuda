@@ -196,10 +196,8 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends,
+  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends
 
-  -- * Temporary:
-  CUDABlob(..)
 ) where
 
 -- standard library
@@ -437,28 +435,16 @@ allBackends = unsafePerformIO $ do
     ctxt <- create dev [Driver.SchedAuto]
     return $ CUDA ctxt
 
-
--- BJS: a context, Ssync pair. What is an Async ? D.A.A.CUDA.Async 
-data CUDARemote a =
-  CUR { remoteContext :: !Context
-      , remoteArray   :: {-# UNPACK #-} !(Async a)
-      }
-
--- BJS: Blobs changed with the backendkit a while ago.
--- BJS: where do ExecAcc and ExecAfun come from ? 
-data CUDABlob a = CUAcc  {blobAcc :: ExecAcc a }
-                | CUAfun {blobAfun :: ExecAfun a } 
--- FIXME: inline these defs below.
-
-
 instance Show CUDA where
   show (CUDA Context{deviceProperties,deviceContext}) = 
     "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
 
 
 instance Backend CUDA where
-  data Remote CUDA a    = MkRemote (CUDARemote a)
-  data Blob CUDA a      = MkBlob   (CUDABlob a)
+  data Remote CUDA a = CUR { remoteContext :: !Context
+                           , remoteArray   :: {-# UNPACK #-} !(Async a) }
+  data Blob CUDA a   = CUBlobAcc  { blobAcc  :: ExecAcc a }
+                     | CUBlobAfun { blobAfun :: ExecAfun a } 
 
   -- Accelerate expressions
   -- ----------------------
@@ -470,7 +456,7 @@ instance Backend CUDA where
   compile c _ acc =
      do let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
         x <- evalCUDA (withContext c) (compileAcc ast)
-        return $ MkBlob (CUAcc x)
+        return $ CUBlobAcc x
 
   -- FIXME: we need to handle DelayedAcc... and perhaps even change
   -- the Backend class interface?  -RRN [2014.07.02]
@@ -481,11 +467,11 @@ instance Backend CUDA where
   -- copy the result back to the host.
   --
   runRaw c acc cache = do
-    MkBlob (CUAcc{blobAcc}) <- maybe (compile c "" acc) return cache 
+    CUBlobAcc{blobAcc} <- maybe (compile c "" acc) return cache 
     result <- async $ evalCUDA (withContext c) (executeAcc blobAcc)
     let remt = CUR (withContext c) result
-    waitRemote c (MkRemote remt) -- RRN: adding this TEMPORARILY
-    return $! (MkRemote remt)
+    waitRemote c remt -- RRN: adding this TEMPORARILY
+    return $! remt
 
 {-
   runRawFun1 c acc cache r = do
