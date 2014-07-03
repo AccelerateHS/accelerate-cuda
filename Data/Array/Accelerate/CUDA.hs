@@ -448,7 +448,7 @@ data CUDARemote a =
 -- BJS: where do ExecAcc and ExecAfun come from ? 
 data CUDABlob a = CUAcc  {blobAcc :: ExecAcc a }
                 | CUAfun {blobAfun :: ExecAfun a } 
-
+-- FIXME: inline these defs below.
 
 
 instance Show CUDA where
@@ -474,20 +474,20 @@ instance Backend CUDA where
 
   -- FIXME: we need to handle DelayedAcc... and perhaps even change
   -- the Backend class interface?  -RRN [2014.07.02]
-
 {-
   compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
-
+-}
   -- Run Accelerate expressions. This is executed asynchronously and does not
   -- copy the result back to the host.
   --
   runRaw c acc cache = do
-    result <- async . evalCUDA (withContext c) $
-                executeAcc =<< maybe (compileAcc acc) (return . blobAcc) cache
+    MkBlob (CUAcc{blobAcc}) <- maybe (compile c "" acc) return cache 
+    result <- async $ evalCUDA (withContext c) (executeAcc blobAcc)
     let remt = CUR (withContext c) result
-    waitRemote c remt -- RRN: adding this TEMPORARILY
-    return $! remt
+    waitRemote c (MkRemote remt) -- RRN: adding this TEMPORARILY
+    return $! (MkRemote remt)
 
+{-
   runRawFun1 c acc cache r = do
     result <- async . evalCUDA (withContext c) $ do
                 arr  <- liftIO $ wait . remoteArray =<< copyToPeer c r
