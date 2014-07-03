@@ -196,8 +196,10 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends
+  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends,
 
+  -- * Temporary:
+  CUDABlob(..)
 ) where
 
 -- standard library
@@ -209,6 +211,7 @@ import System.IO.Unsafe
 
 -- friends
 import Data.Array.Accelerate.Trafo
+import qualified Data.Array.Accelerate.Trafo.Fusion as Fusion
 import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
@@ -232,7 +235,8 @@ import Data.Array.Accelerate.Debug
 -- Temporarily import BackendClass
 -- BJS: BackendClass changed since the 0.13 version of this.
 import Data.Array.Accelerate.BackendClass
-
+-- RRN: In the future hopefully this will come from somewhere in the "accelerate" package,
+-- and thus remove this dependency on "accelerate-backend-kit".
 
 
 -- Accelerate: CUDA
@@ -453,8 +457,8 @@ instance Show CUDA where
 
 
 instance Backend CUDA where
-  data Remote CUDA a    = CUDARemote a
-  data Blob CUDA a      = CUDABlob a
+  data Remote CUDA a    = MkRemote (CUDARemote a)
+  data Blob CUDA a      = MkBlob   (CUDABlob a)
 
   -- Accelerate expressions
   -- ----------------------
@@ -463,7 +467,15 @@ instance Backend CUDA where
   -- the internal caches as well as producing an annotated AST to facilitate
   -- later execution.
   --
-  compile     c _ acc      = CUAcc  <$> evalCUDA (withContext c) (compileAcc acc)
+  compile c _ acc =
+     do let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
+        x <- evalCUDA (withContext c) (compileAcc ast)
+        return $ MkBlob (CUAcc x)
+
+  -- FIXME: we need to handle DelayedAcc... and perhaps even change
+  -- the Backend class interface?  -RRN [2014.07.02]
+
+{-
   compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
 
   -- Run Accelerate expressions. This is executed asynchronously and does not
@@ -541,3 +553,4 @@ instance Backend CUDA where
   -- -------------
 
   separateMemorySpace _         = True          -- some devices share host memory, but we still copy
+-}
