@@ -132,7 +132,12 @@ codegenProgBind dev (ProgBind v t decor (Right ae)) aenv = doAE ae
         -- I need a shape type and an element type. Cheat for now. 
       Generate e f  ->
         do f' <- codegenFun1 dev aenv  f
-           return $ mkGenerate S.TInt t dev aenv f' 
+           return $ mkGenerate S.TInt t dev aenv f'
+
+      Map f arrVar  ->
+        do f' <- codegenFun1 dev aenv f
+           return $ mkMap S.TInt t dev aenv f' arrVar
+      
         
 
 --mkGenerate shapeTy eltTy .. 
