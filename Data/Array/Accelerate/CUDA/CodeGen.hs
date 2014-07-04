@@ -36,6 +36,8 @@ import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
 import qualified Data.Map                                       as M
+import qualified Data.HashMap.Strict                    as Map
+import Data.HashMap.Strict                              ( HashMap ) 
 
 -- friends
 -- import Data.Array.Accelerate.Type
@@ -61,7 +63,7 @@ import Data.Array.Accelerate.Error
 -- import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
-import Data.Array.Accelerate.CUDA.CodeGen.Base
+import Data.Array.Accelerate.CUDA.CodeGen.Base                  hiding ( zipWith ) 
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Mapping
@@ -116,6 +118,53 @@ type ValEnv = M.Map S.Var (S.Type,[C.Exp])
 -- TODO: include a measure of how much shared memory a kernel requires.
 --
 
+cpberror s = error $ "codedenProgBind: " ++ s
+
+codegenProgBind :: DeviceProperties -> S.ProgBind decor -> Gamma -> CUDA [CUTranslSkel]
+codegenProgBind dev (ProgBind v t decor (Left e)) aenv = undefined
+codegenProgBind dev (ProgBind v t decor (Right ae)) aenv = doAE ae
+  where
+    doAE ae = case ae of
+      Vr v          -> cpberror "Variable"
+      Unit e        -> cpberror "Unit not implemented"
+      Cond e1 e2 e3 -> cpberror "Cond not implemented"
+      Use  a        -> cpberror "Use not implemented"
+        -- I need a shape type and an element type. Cheat for now. 
+      Generate e f  ->
+        do f' <- codegenFun1 dev aenv  f
+           return $ mkGenerate S.TInt t dev aenv f'
+
+      Map f arrVar  ->
+        do f' <- codegenFun1 dev aenv f
+           return $ mkMap S.TInt t dev aenv f' arrVar
+      
+        
+
+--mkGenerate shapeTy eltTy .. 
+--mkGenerate :: S.Type -> S.Type -> 
+--       DeviceProperties -> Gamma -> CUFun1 -> [CUTranslSkel]
+
+codegenFun1 :: DeviceProperties -> Gamma -> S.Fun1 S.Exp -> CUDA CUFun1 -- aenv (a -> b))
+codegenFun1 dev aenv (Lam1 (v,t) e) =
+  let
+    -- overkill simplify 
+    go :: Rvalue x => [x] -> Gen ([C.BlockItem], [C.Exp])
+    go x = do
+      code  <- mapM use =<< codegenOpenExp dev e (M.singleton v (t,[cvar (show v)]) ) -- (Empty `Push` map rvalue x)
+      env'  <- getEnv
+      return (env', code)
+
+      -- Initial code generation proceeds with dummy variable names. The real
+      -- names are substituted later when we instantiate the skeleton.
+    (_,u,_) = locals t (show v) -- "undefined_x" (undefined :: a)
+  in do
+    n                   <- get
+    ExpST _ used lrms   <- execCGM (go u)
+    return $ CUFun1 (mark used u)
+      $ \xs -> evalState (evalCGM (go xs)) n 
+ 
+
+
 codegenAcc :: DeviceProperties -> S.Prog a -> Gamma -> [ CUTranslSkel ]
 codegenAcc dev prog@(S.Prog {progBinds}) aenv
   = concat (map doProgBind progBinds)
@@ -125,6 +174,10 @@ codegenAcc dev prog@(S.Prog {progBinds}) aenv
     doAE ae = case ae of
 --      Map f a -> mkMap dev aenv       <$> travF1 f <*> travS a
       _ -> error "FINISH codegenAcc"
+
+
+      
+      
 {- RNTODO
       -- Producers
 
@@ -179,8 +232,8 @@ codegenAcc dev (Manifest pacc) aenv
     -- id = Lam (Body (Var ZeroIdx))
 
     -- scalar code generation
-    travF1 :: S.Fun1 S.Exp -> CUDA (CUFun1)
-    travF1 = codegenFun1 dev
+   -- travF1 :: S.Fun1 S.Exp -> CUDA (CUFun1)
+   -- travF1 = codegenFun1 dev
 
     -- travF2 :: Fun aenv (a -> b -> c) -> CUDA (CUFun2 aenv (a -> b -> c))
     -- travF2 = codegenFun2 dev
@@ -204,7 +257,7 @@ codegenAcc dev (Manifest pacc) aenv
     -- unexpectedError     = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected array primitive: " ++ prim
     -- fusionError         = INTERNAL_ERROR(error) "codegenAcc" $ "unexpected fusible material: " ++ prim
 
-codegenFun1=error"codegenFun1"
+--codegenFun1=error"codegenFun1"
 codegenFun2=error"codegenFun2"
 
   --     Alet{}                    -> unexpectedError
@@ -365,12 +418,12 @@ codegenFun2 dev aenv fun
 -- In the above map example, this means that the usage data is taken from 'f',
 -- but applies to which results of 'get ix' are committed to memory.
 --
+-}
 mark :: HashSet C.Exp -> [C.Exp] -> ([a] -> [(Bool,a)])
 mark used xs
   = let flags = map (\x -> x `Set.member` used) xs
     in  zipWith (,) flags
 
--}
 
 visit :: [C.Exp] -> Gen [C.Exp]
 visit exp

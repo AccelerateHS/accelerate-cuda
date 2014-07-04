@@ -7,6 +7,7 @@
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
+
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
