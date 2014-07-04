@@ -79,7 +79,7 @@ import System.Posix.Process
 import System.Win32.Process
 #endif
 
-import Paths_accelerate_cuda                                    ( getDataDir )
+import Paths_simple_cuda                                    ( getDataDir )
 
 
 -- | Initiate code generation, compilation, and data transfer for an array

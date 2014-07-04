@@ -52,7 +52,7 @@ import qualified Data.HashTable.IO                      as HT
 
 import qualified Foreign.CUDA.Driver                    as CUDA
 
-import Paths_accelerate_cuda
+import Paths_simple_cuda
 
 
 instance Hashable CUDA.Compute where

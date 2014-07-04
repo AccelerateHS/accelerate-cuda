@@ -2,7 +2,7 @@
 -- to our local development directory.
 --
 
-module Paths_accelerate_cuda where
+module Paths_simple_cuda where
 
 import Data.Version
 import System.Directory

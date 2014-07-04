@@ -153,7 +153,7 @@ Library
                         Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
-                        Paths_accelerate_cuda
+                        Paths_simple_cuda
 
   if flag(debug)
     cpp-options:        -DACCELERATE_DEBUG
