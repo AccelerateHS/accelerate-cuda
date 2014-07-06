@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE TypeFamilies        #-} 
 -- |
@@ -205,6 +206,7 @@ import Control.Exception
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
+import Data.Typeable (Typeable)
 import System.IO.Unsafe
 
 -- friends
@@ -416,7 +418,7 @@ dumpStats next = return next
 -- Backend class
 -- -------------
 
-data CUDA = CUDA { withContext  :: !Context }
+data CUDA = CUDA { withContext  :: !Context } deriving (Typeable)
 -- BJS: Context is an Accelerate type from Data.Array.Accelerate.CUDA.Context
 --      look at it.
 
