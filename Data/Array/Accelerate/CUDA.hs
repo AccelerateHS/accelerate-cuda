@@ -457,9 +457,9 @@ instance Backend CUDA where
      do let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
         x <- evalCUDA (withContext c) (compileAcc ast)
         return $ CUBlobAcc x
-
   -- FIXME: we need to handle DelayedAcc... and perhaps even change
   -- the Backend class interface?  -RRN [2014.07.02]
+
 {-
   compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
 -}
@@ -480,6 +480,7 @@ instance Backend CUDA where
                 afun <- maybe (compileAfun acc) (return . blobAfun) cache
                 executeAfun1 afun arr
     return $! CUR (withContext c) result
+-}
 
   -- Array management
   -- ----------------
@@ -539,4 +540,3 @@ instance Backend CUDA where
   -- -------------
 
   separateMemorySpace _         = True          -- some devices share host memory, but we still copy
--}
