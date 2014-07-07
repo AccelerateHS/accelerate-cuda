@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeFamilies #-} 
+{-# LANGUAGE DeriveDataTypeable #-} 
 
 module Data.Array.Accelerate.SimpleCUDA where
 
@@ -18,6 +19,7 @@ import Data.Array.Accelerate.CUDA.State  -- holds evalCUDA, defaultContext
 
 import Data.Array.Accelerate.CUDA.CompileSimpleCUDA
 import Data.Array.Accelerate.CUDA.ExecuteSimpleCUDA
+import Data.Typeable (Typeable)
 
 import Control.Monad 
 import System.IO.Unsafe (unsafePerformIO) 
@@ -28,7 +30,7 @@ import System.IO.Unsafe (unsafePerformIO)
 -- Backend and Blob 
 
 data SimpleCUDABackend = SimpleCUDABackend
-                         deriving Show 
+                         deriving (Show, Typeable) 
 
 data SimpleCUDABlob = SimpleCUDABlob ExecAcc  -- not sure what to put here! 
                 
