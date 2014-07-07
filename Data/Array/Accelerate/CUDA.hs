@@ -238,6 +238,11 @@ import Data.Array.Accelerate.BackendClass
 -- RRN: In the future hopefully this will come from somewhere in the "accelerate" package,
 -- and thus remove this dependency on "accelerate-backend-kit".
 
+-- Temporary:
+import Control.Concurrent.MVar (newMVar, withMVar, MVar)
+import Foreign.CUDA.Driver (initialise)
+
+
 
 -- Accelerate: CUDA
 -- ----------------
@@ -441,6 +446,10 @@ instance Show CUDABkend where
   show (CUDA Context{deviceProperties,deviceContext}) = 
     "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
 
+-- TEMP: running into initialization bugs [2014.07.07] -RRN
+{-# NOINLINE cudaInitialized #-}
+cudaInitialized :: MVar Bool
+cudaInitialized = unsafePerformIO (newMVar False)
 
 instance Backend CUDABkend where
   data Remote CUDABkend a = CUR { remoteContext :: !Context
@@ -455,8 +464,11 @@ instance Backend CUDABkend where
   -- the internal caches as well as producing an annotated AST to facilitate
   -- later execution.
   --
-  compile c _ acc =
-     do let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
+  compile c _ acc =    
+     do withMVar cudaInitialized $ \ bl -> 
+           do unless bl (initialise [])
+              return True        
+        let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
         x <- evalCUDA (withContext c) (compileAcc ast)
         return $ CUBlobAcc x
   -- FIXME: we need to handle DelayedAcc... and perhaps even change
