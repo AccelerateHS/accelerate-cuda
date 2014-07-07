@@ -197,7 +197,7 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy, defaultBackend, defaultTrafoConfig, allBackends
+  Context, create, destroy, defaultBackend, CUDABkend, defaultTrafoConfig, allBackends
 
 ) where
 
@@ -418,17 +418,17 @@ dumpStats next = return next
 -- Backend class
 -- -------------
 
-data CUDA = CUDA { withContext  :: !Context } deriving (Typeable)
+data CUDABkend = CUDA { withContext  :: !Context } deriving (Typeable)
 -- BJS: Context is an Accelerate type from Data.Array.Accelerate.CUDA.Context
 --      look at it.
 
-defaultBackend :: CUDA
+defaultBackend :: CUDABkend
 defaultBackend = CUDA defaultContext
 -- BJS: defaultContext defined elsewhere (I guess D.A.CUDA.Context)
 
 
 -- | All CUDA cards on the system:
-allBackends :: [CUDA]
+allBackends :: [CUDABkend]
 allBackends = unsafePerformIO $ do
   prs <- allDevices
   forM prs $ \ (dev,_) -> do
@@ -437,16 +437,16 @@ allBackends = unsafePerformIO $ do
     ctxt <- create dev [Driver.SchedAuto]
     return $ CUDA ctxt
 
-instance Show CUDA where
+instance Show CUDABkend where
   show (CUDA Context{deviceProperties,deviceContext}) = 
     "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
 
 
-instance Backend CUDA where
-  data Remote CUDA a = CUR { remoteContext :: !Context
-                           , remoteArray   :: {-# UNPACK #-} !(Async a) }
-  data Blob CUDA a   = CUBlobAcc  { blobAcc  :: ExecAcc a }
-                     | CUBlobAfun { blobAfun :: ExecAfun a } 
+instance Backend CUDABkend where
+  data Remote CUDABkend a = CUR { remoteContext :: !Context
+                                , remoteArray   :: {-# UNPACK #-} !(Async a) }
+  data Blob CUDABkend a   = CUBlobAcc  { blobAcc  :: ExecAcc a }
+                          | CUBlobAfun { blobAfun :: ExecAfun a } 
 
   -- Accelerate expressions
   -- ----------------------
