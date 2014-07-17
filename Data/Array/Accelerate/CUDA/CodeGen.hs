@@ -468,7 +468,7 @@ codegenOpenExp dev aenv = cvtE
                                   $items:(acc .=. tmp)
                                   $items:(ok  .=. p')
                               } |]
-                    : (ok .=. p')
+                    : reverse (ok .=. p')
                    ++ map     (\(t,n)   -> [citem| $ty:t $id:n ; |])      tn_ok
                    ++ zipWith (\(t,n) v -> [citem| $ty:t $id:n = $v ; |]) tn_acc x'
 
