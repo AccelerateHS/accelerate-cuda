@@ -375,6 +375,7 @@ config :: Phase
 config =  Phase
   { recoverAccSharing      = True
   , recoverExpSharing      = True
+  , recoverSeqSharing      = True
   , floatOutAccFromExp     = True
   , enableAccFusion        = True
   , convertOffsetOfSegment = True

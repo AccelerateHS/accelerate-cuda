@@ -18,7 +18,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc, codegenToStream, codegenFromStream
+  CUTranslSkel, codegenAcc, codegenToSeq, codegenFromSeq
 
 ) where
 
@@ -115,7 +115,7 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
       -- Loops
-      Loop _                    -> unexpectedError
+      Sequence _                -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -176,7 +176,7 @@ codegenAcc dev (Manifest pacc) aenv
     unexpectedError     = $internalError "codegenAcc" $ "unexpected array primitive: " ++ prim
     fusionError         = $internalError "codegenAcc" $ "unexpected fusible material: " ++ prim
 
-codegenToStream :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
+codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
                 => SliceIndex slix
                               (EltRepr sl)
                               co
@@ -185,7 +185,7 @@ codegenToStream :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
                 -> DelayedOpenAcc aenv (Array sh e)
                 -> Gamma aenv
                 -> CUTranslSkel aenv (Array sl e)
-codegenToStream slix dev acc aenv = codegen $ (mkToStream slix dev aenv <$> travD acc)
+codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
   where
     codegen :: CUDA (CUTranslSkel aenv (Array sl e)) -> CUTranslSkel aenv (Array sl e)
     codegen cuda =
@@ -208,8 +208,8 @@ codegenToStream slix dev acc aenv = codegen $ (mkToStream slix dev aenv <$> trav
     travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
     travF1 = codegenFun1 dev aenv
 
-codegenFromStream :: forall aenv sh a. (Shape sh, Elt a) => sh -> DeviceProperties -> CUTranslSkel aenv (Vector a)
-codegenFromStream _ dev = codegen $ return (mkFromStream (undefined :: sh) dev)
+codegenFromSeq :: forall aenv sh a. (Shape sh, Elt a) => sh -> DeviceProperties -> CUTranslSkel aenv (Vector a)
+codegenFromSeq _ dev = codegen $ return (mkFromSeq (undefined :: sh) dev)
   where
     codegen :: CUDA (CUTranslSkel aenv (Vector a)) -> CUTranslSkel aenv (Vector a)
     codegen cuda =

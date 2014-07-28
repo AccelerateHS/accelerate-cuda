@@ -211,7 +211,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
 
-      Loop _                    -> $internalError "executeOpenAcc" "uncompiled loop"
+      Sequence _                -> $internalError "executeOpenAcc" "uncompiled loop"
 
   where
     fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
@@ -238,7 +238,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecLoop{}    = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSequence{}    = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
@@ -420,33 +420,29 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       | otherwise
       = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
-executeOpenAcc (ExecLoop l) aenv stream = executeLoop l aenv stream
+executeOpenAcc (ExecSequence l) aenv stream = executeSequence l aenv stream
 
-executeLoop :: forall aenv arrs . ExecLoop aenv () arrs -> Aval aenv -> Stream -> CIO arrs
-executeLoop topLoop aenv stream
-  | degenerate topLoop = initLoop topLoop >>         returnOut topLoop
-  | otherwise          = initLoop topLoop >> loop >> returnOut topLoop
+executeSequence :: forall aenv arrs . ExecSequence aenv () arrs -> Aval aenv -> Stream -> CIO arrs
+executeSequence topSequence aenv stream
+  | degenerate topSequence = initSequence topSequence >>         returnOut topSequence
+  | otherwise          = initSequence topSequence >> loop >> returnOut topSequence
 
   where
-    degenerate :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> Bool
+    degenerate :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> Bool
     degenerate l =
       case l of
-        ExecEmpty -> True
         ExecP _ _ -> False
-        ExecT _ l' -> degenerate l'
-        ExecC _ l' -> degenerate l'
+        ExecC _   -> True
 
-    initLoop :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> CIO ()
-    initLoop l =
+    initSequence :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO ()
+    initSequence l =
       case l of
-        ExecEmpty  -> return ()
-        ExecP p l' -> initP p >> initLoop l'
-        ExecT t l' -> initT t >> initLoop l'
-        ExecC c l' -> initC c >> initLoop l'
+        ExecP p l' -> initP p >> initSequence l'
+        ExecC c    -> initC c
 
       where
-        initP :: forall a. ExecP aenv a -> CIO ()
-        initP (ExecToStream slix exp acc _ _ v) =
+        initP :: forall a. ExecP aenv lenv a -> CIO ()
+        initP (ExecToSeq slix exp acc _ _ v) =
           do sl <- executeExp exp aenv stream
              sh <- extent acc
              let sl' = restrictSlice slix sh sl
@@ -458,52 +454,50 @@ executeLoop topLoop aenv stream
                  sl' = restrictSlice slix sh sl
                  sl0 = listToMaybe (enumSlices slix sl')
              liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
-
-        initT :: forall a. ExecT aenv lenv a -> CIO ()
-        initT t =
-          case t of
-            ExecMap{} -> return ()
-            ExecZipWith{} -> return ()
-            ExecScanStream _ acc _ v ->
+        initP ExecMap{} = return ()
+        initP ExecZipWith{} = return ()
+        initP (ExecScanSeq _ acc _ v) =
               do a <- executeOpenAcc acc aenv stream
                  liftIO $ writeIORef v a
-            ExecScanStreamAct _ _ acc _ v ->
-              do a <- executeOpenAcc acc aenv stream
+        initP (ExecScanSeqAct _ _ a0 _ _ v) =
+              do a <- executeOpenAcc a0 aenv stream
                  liftIO $ writeIORef v a
 
         initC :: forall a. ExecC aenv lenv a -> CIO ()
         initC c =
           case c of
-            ExecFoldStream _ acc _ v ->
+            ExecFoldSeq _ acc _ v ->
               do a <- executeOpenAcc acc aenv stream
                  liftIO $ writeIORef v a
-            ExecFoldStreamAct _ _ acc _ v ->
+            ExecFoldSeqAct _ _ a0 _ _ v ->
+              do a <- executeOpenAcc a0 aenv stream
+                 liftIO $ writeIORef v a
+            ExecFoldSeqFlatten _ acc _ v ->
               do a <- executeOpenAcc acc aenv stream
                  liftIO $ writeIORef v a
-            ExecFoldStreamFlatten _ acc _ v ->
-              do a <- executeOpenAcc acc aenv stream
-                 liftIO $ writeIORef v a
-            ExecFromStream{} -> return ()
-            ExecCollectStream{} -> return ()
+            ExecFromSeq{} -> return ()
+            ExecStuple t  -> initCT t
+
+        initCT :: forall t. Atuple (ExecC aenv lenv) t -> CIO ()
+        initCT NilAtup        = return ()
+        initCT (SnocAtup t c) = initCT t >> initC c
 
     loop :: CIO ()
     loop =
-      do ml <- runMaybeT (go topLoop Empty)
+      do ml <- runMaybeT (go topSequence Empty)
          case ml of
            Nothing -> return ()
            Just () -> loop
 
-    go :: forall lenv arrs'. ExecLoop aenv lenv arrs' -> Val lenv -> MaybeT CIO ()
+    go :: forall lenv arrs'. ExecSequence aenv lenv arrs' -> Val lenv -> MaybeT CIO ()
     go !l !lenv =
       case l of
-        ExecEmpty -> return ()
         ExecP p l' ->       produce   p  >>= \ a -> go l' (lenv `Push` a)
-        ExecT t l' -> lift (transduce t) >>= \ a -> go l' (lenv `Push` a)
-        ExecC c l' -> lift (consume   c) >>         go l'  lenv
+        ExecC c    -> lift (consume   c)
 
       where
-        produce :: forall a . ExecP aenv a -> MaybeT CIO a
-        produce (ExecToStream slix _ _ kernel gamma v) =
+        produce :: forall a . ExecP aenv lenv a -> MaybeT CIO a
+        produce (ExecToSeq slix _ _ kernel gamma v) =
           do (msl', sl, sh) <- liftIO $ readIORef v
              sl' <- MaybeT (return msl')
              lift $ do
@@ -520,35 +514,31 @@ executeLoop topLoop aenv stream
                useArraySlice slix sl' arr out
                liftIO $ writeIORef v (nextSlice slix sl sl', sl, sh)
                return out
-
-        transduce :: forall a . ExecT aenv lenv a -> CIO a
-        transduce t =
-          case t of
-            ExecMap afun x -> travAfun1 afun (prj x lenv)
-            ExecZipWith afun x y -> travAfun2 afun (prj x lenv) (prj y lenv)
-            ExecScanStream afun _ x v ->
+        produce (ExecMap afun x) = lift $ travAfun1 afun (prj x lenv)
+        produce (ExecZipWith afun x y) = lift $ travAfun2 afun (prj x lenv) (prj y lenv)
+        produce (ExecScanSeq afun _ x v) =
               do acc <- liftIO $ readIORef v
-                 acc' <- travAfun2 afun acc (prj x lenv)
+                 acc' <- lift $ travAfun2 afun acc (prj x lenv)
                  liftIO $ writeIORef v acc'
                  return acc
-            ExecScanStreamAct afun _ _ x v ->
+        produce (ExecScanSeqAct afun _ _ _ x v) =
               do acc <- liftIO $ readIORef v
-                 acc' <- travAfun2 afun acc (prj x lenv)
+                 acc' <- lift $ travAfun2 afun acc (prj x lenv)
                  liftIO $ writeIORef v acc'
                  return acc
 
         consume :: forall a . ExecC aenv lenv a -> CIO ()
         consume c =
           case c of
-            ExecFoldStream afun _ x v ->
+            ExecFoldSeq afun _ x v ->
               do acc <- liftIO $ readIORef v
                  acc' <- travAfun2 afun acc (prj x lenv)
                  liftIO $ writeIORef v acc'
-            ExecFoldStreamAct afun _ _ x v ->
+            ExecFoldSeqAct afun _ _ _ x v ->
               do acc <- liftIO $ readIORef v
                  acc' <- travAfun2 afun acc (prj x lenv)
                  liftIO $ writeIORef v acc'
-            ExecFoldStreamFlatten afun _ x v ->
+            ExecFoldSeqFlatten afun _ x v ->
               do acc <- liftIO $ readIORef v
                  useArray shapes
                  acc' <- travAfun3 afun acc shapes elems
@@ -557,32 +547,32 @@ executeLoop topLoop aenv stream
                    Array sh adata = prj x lenv
                    elems  = Array ((), R.size sh) adata
                    shapes = fromList (Z:.1) [toElt sh]
-            ExecFromStream _ x v ->
+            ExecFromSeq _ x v ->
               do liftIO $ modifyIORef v (prj x lenv:)
-            ExecCollectStream f x ->
-              do peekArray (prj x lenv)
-                 liftIO $ f (prj x lenv)
+            ExecStuple t -> consumeT t
 
-    returnOut :: forall lenv arrs' . ExecLoop aenv lenv arrs' -> CIO arrs'
+        consumeT :: forall t. Atuple (ExecC aenv lenv) t -> CIO ()
+        consumeT NilAtup        = return ()
+        consumeT (SnocAtup t c) = consumeT t >> consume c
+
+    returnOut :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO arrs'
     returnOut !l =
       case l of
-        ExecEmpty  -> return ()
         ExecP _ l' -> returnOut l'
-        ExecT _ l' -> returnOut l'
-        ExecC c l' -> returnOut l' >>= \ arrs -> readConsumer c >>= \ a -> return $ (arrs, a)
+        ExecC c    -> readConsumer c
 
       where
         readConsumer :: forall a . ExecC aenv lenv a -> CIO a
         readConsumer c =
           case c of
-            ExecFoldStream _ _ _ v -> liftIO $ readIORef v
-            ExecFoldStreamAct _ _ _ _ v -> liftIO $ readIORef v
-            ExecFoldStreamFlatten _ _ _ v -> liftIO $ readIORef v
-            ExecFromStream kernel _ v ->
+            ExecFoldSeq _ _ _ v -> liftIO $ readIORef v
+            ExecFoldSeqAct _ _ _ _ _ v -> liftIO $ readIORef v
+            ExecFoldSeqFlatten _ _ _ v -> liftIO $ readIORef v
+            ExecFromSeq kernel _ v ->
               do as <- liftIO $ readIORef v
-                 fromStreamOp (reverse as)
+                 fromSeqOp (reverse as)
               where
-                fromStreamOp as =
+                fromSeqOp as =
                   let shs = map shape as
                       ns  = map size shs
                       is' = scanl (+) 0 ns
@@ -595,12 +585,16 @@ executeLoop topLoop aenv stream
                       out_els <- allocateArray (Z :. n)
                       _ <- mapM (k out_els) (zip as is)
                       return (out_shs, out_els)
-            ExecCollectStream _ _ -> return ()
+            ExecStuple t -> toTuple ArraysProxy <$> rdT t
+              where
+                rdT :: forall t. Atuple (ExecC aenv lenv) t -> CIO t
+                rdT NilAtup          = return ()
+                rdT (SnocAtup t' c') = (,) <$> rdT t' <*> readConsumer c'
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecLoop{}    = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSequence{}    = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = executeExp sh aenv stream
 
     travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b

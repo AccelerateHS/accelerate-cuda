@@ -15,7 +15,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Streaming (
 
-  mkToStream, mkFromStream
+  mkToSeq, mkFromSeq
 
 ) where
 
@@ -34,7 +34,7 @@ import Data.Monoid                                      ( mempty )
 streamIdParam :: C.Param
 streamIdParam = [cparam| $ty:cint $id:sid |] where sid = "_sid"
 
-mkToStream
+mkToSeq
     :: forall slix aenv sh co sl a. (Shape sl, Shape sh, Elt a)
     => SliceIndex slix
                   (EltRepr sl)
@@ -44,7 +44,7 @@ mkToStream
     -> Gamma aenv
     -> CUDelayedAcc aenv sh a
     -> CUTranslSkel aenv (Array sl a)
-mkToStream slix dev aenv arr
+mkToSeq slix dev aenv arr
   | CUDelayed (CUExp shIn) _ (CUFun1 _ get) <- arr
   = CUTranslSkel "tostream" [cunit|
 
@@ -88,14 +88,14 @@ combine :: SliceIndex slix sl co dim -> [a] -> [a] -> [a]
 combine SliceNil [] [] = []
 combine (SliceAll   sl) (x:xs) ys = x:(combine sl xs ys)
 combine (SliceFixed sl) xs (y:ys) = y:(combine sl xs ys)
-combine _ _ _ = $internalError "mkToStream" "Something went wrong with the slice index."
+combine _ _ _ = $internalError "mkToSeq" "Something went wrong with the slice index."
 
-mkFromStream
+mkFromSeq
     :: forall aenv sh a. (Shape sh, Elt a)
     => sh
     -> DeviceProperties
     -> CUTranslSkel aenv (Vector a)
-mkFromStream _ dev
+mkFromSeq _ dev
   | CUDelayed _ _ (CUFun1 _ get) <- arr
   = CUTranslSkel "fromstream" [cunit|
 

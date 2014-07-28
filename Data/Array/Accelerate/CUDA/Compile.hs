@@ -163,7 +163,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Loop l                  -> ExecLoop <$> compileLoop l
+        Sequence l              -> ExecSequence <$> compileSeq l
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -221,77 +221,76 @@ compileOpenAcc = traverseAcc
             where
               err = $internalError "compile" "Executing pure version of a CUDA foreign function"
 
-        compileLoop :: forall lenv arrs' . PreOpenLoop DelayedOpenAcc aenv lenv arrs' -> CIO (ExecLoop aenv lenv arrs')
-        compileLoop l =
+        compileSeq :: forall lenv arrs' . PreOpenSequence DelayedOpenAcc aenv lenv arrs' -> CIO (ExecSequence aenv lenv arrs')
+        compileSeq l =
           case l of
-            EmptyLoop -> return ExecEmpty
-            Producer   p l' -> ExecP <$> compileP p <*> compileLoop l'
-            Transducer t l' -> ExecT <$> compileT t <*> compileLoop l'
-            Consumer   c l' -> ExecC <$> compileC c <*> compileLoop l'
+            Producer   p l' -> ExecP <$> compileP p <*> compileSeq l'
+            Consumer   c    -> ExecC <$> compileC c
           where
-            compileP :: forall a. Producer DelayedOpenAcc aenv a -> CIO (ExecP aenv a)
+            compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
             compileP p =
               case p of
-                ToStream slix sl acc -> do
+                ToSeq slix sl acc -> do
                   (free1, acc') <- travA acc
                   (free2, sl' ) <- travE sl
                   let gamma = makeEnvMap (free1 <> free2)
                   dev   <- asks deviceProperties
-                  kernel <- build1Simple (codegenToStream slix dev acc gamma)
+                  kernel <- build1Simple (codegenToSeq slix dev acc gamma)
                   v <- liftIO $ newIORef undefined
-                  return $ ExecToStream slix sl' acc' kernel gamma v
+                  return $ ExecToSeq slix sl' acc' kernel gamma v
                 UseLazy slix sl arr -> do
                   (_, sl') <- travE sl
                   v <- liftIO $ newIORef undefined
                   return $ ExecUseLazy slix sl' arr v
-
-            compileT :: forall a. Transducer DelayedOpenAcc aenv lenv a -> CIO (ExecT aenv lenv a)
-            compileT t =
-              case t of
-                MapStream f x -> do
+                MapSeq f x -> do
                   f' <- compileOpenAfun f
                   return $ ExecMap f' x
-                ZipWithStream f x y -> do
+                ZipWithSeq f x y -> do
                   f' <- compileOpenAfun f
                   return $ ExecZipWith f' x y
-                ScanStream f acc x ->  do
+                ScanSeq f acc x ->  do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
                   v <- liftIO $ newIORef undefined
-                  return $ ExecScanStream f' acc' x v
-                ScanStreamAct f g acc x ->  do
-                  acc' <- traverseAcc acc
+                  return $ ExecScanSeq f' acc' x v
+                ScanSeqAct f g a0 b0 x ->  do
+                  a0' <- traverseAcc a0
+                  b0' <- traverseAcc b0
                   f' <- compileOpenAfun f
                   g' <- compileOpenAfun g
                   v <- liftIO $ newIORef undefined
-                  return $ ExecScanStreamAct f' g' acc' x v
+                  return $ ExecScanSeqAct f' g' a0' b0' x v
 
             compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
             compileC c =
               case c of
-                FoldStream f acc x -> do
+                FoldSeq f acc x -> do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
                   v <- liftIO $ newIORef undefined
-                  return $ ExecFoldStream f' acc' x v
-                FoldStreamAct f g acc x -> do
-                  acc' <- traverseAcc acc
+                  return $ ExecFoldSeq f' acc' x v
+                FoldSeqAct f g a0 b0 x -> do
+                  a0' <- traverseAcc a0
+                  b0' <- traverseAcc b0
                   f' <- compileOpenAfun f
                   g' <- compileOpenAfun g
                   v <- liftIO $ newIORef undefined
-                  return $ ExecFoldStreamAct f' g' acc' x v
-                FoldStreamFlatten f acc x -> do
+                  return $ ExecFoldSeqAct f' g' a0' b0' x v
+                FoldSeqFlatten f acc x -> do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
                   v <- liftIO $ newIORef undefined
-                  return $ ExecFoldStreamFlatten f' acc' x v
-                FromStream (x :: Idx lenv' (Array sh a')) -> do
+                  return $ ExecFoldSeqFlatten f' acc' x v
+                FromSeq (x :: Idx lenv' (Array sh a')) -> do
                   dev <- asks deviceProperties
-                  kernel <- build1Simple (codegenFromStream (undefined :: sh) dev)
+                  kernel <- build1Simple (codegenFromSeq (undefined :: sh) dev)
                   v <- liftIO $ newIORef []
-                  return $ ExecFromStream kernel x v
-                CollectStream f x ->
-                  return $ ExecCollectStream f x
+                  return $ ExecFromSeq kernel x v
+                Stuple t -> ExecStuple <$> compileCT t
+
+            compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
+            compileCT NilAtup        = return NilAtup
+            compileCT (SnocAtup t c) = SnocAtup <$> compileCT t <*> compileC c
 
     -- Traverse a scalar expression
     --
