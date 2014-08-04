@@ -387,6 +387,27 @@ locals base _
 class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem
 
+-- Note: [Mutable l-values]
+--
+-- Be careful when using mutable l-values that the same variable does not appear
+-- on both the left and right hand side. For example, the following will lead to
+-- problems (#114, #168):
+--
+--   $items:(x .=. f x)
+--
+--   $items:(y .=. combine x y)
+--
+-- If 'x' and 'y' represent values with tuple types, they will have multiple
+-- components. Since the LHS is updated as the new values are calculated, it is
+-- possible to get into a situation where computing the new value for some of
+-- the components will be using the updated values, not the original values.
+--
+-- Instead, store the result to some (temporary) variable that does not appear
+-- on the RHS, and then update old value using the fully computed result, e.g.:
+--
+--   $items:(x' .=. f x)
+--   $items:(x  .=. x')
+--
 instance Lvalue C.Exp where
   lvalue x y = [citem| $exp:x = $exp:y; |]
 
