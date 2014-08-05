@@ -22,7 +22,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   mallocArray, indexArray,
   useArray,  useArrayAsync,
   useDevicePtrs,
-  copyArray, copyArrayPeer, copyArrayPeerAsync,
+  copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
@@ -260,6 +260,23 @@ copyArray (Array !sh1 !adata1) (Array !sh2 !adata2)
         --
         copyPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> IO ()
         mkPrimDispatch(copyPrim,Prim.copyArray)
+
+copyArrayAsync :: (Shape dim, Elt e) => Array dim e -> Array dim e -> Maybe CUDA.Stream -> CIO ()
+copyArrayAsync (Array !sh1 !adata1) (Array !sh2 !adata2) ms
+  = $boundsCheck "copyArrayAsync" "shape mismatch" (sh1 == sh2)
+  $ run doCopy
+  where
+    !n              = size sh1
+    doCopy !ctx !mt = copyR arrayElt adata1 adata2
+      where
+        copyR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        copyR ArrayEltRunit             _   _   = return ()
+        copyR (ArrayEltRpair aeR1 aeR2) ad1 ad2 = copyR aeR1 (fst ad1) (fst ad2) >>
+                                                  copyR aeR2 (snd ad1) (snd ad2)
+        copyR aer                       ad1 ad2 = copyPrim aer ctx mt ad1 ad2 n ms
+        --
+        copyPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> Maybe CUDA.Stream -> IO ()
+        mkPrimDispatch(copyPrim,Prim.copyArrayAsync)
 
 
 -- |Copy data between two device arrays which reside in different contexts. This

@@ -21,9 +21,8 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   DevicePtrs, HostPtrs,
 
   mallocArray, indexArray,
-  useArray,  useArrayAsync,
-  useDevicePtrs,
-  copyArray, copyArrayPeer, copyArrayPeerAsync,
+  useArray,  useArrayAsync, useDevicePtrs,
+  copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
@@ -260,9 +259,23 @@ copyArray
 copyArray !ctx !mt !from !to !n = do
   src <- devicePtrsOfArrayData ctx mt from
   dst <- devicePtrsOfArrayData ctx mt to
-  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
-    CUDA.copyArrayAsync n src dst
+  transfer "copyArray" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArray n src dst
 
+copyArrayAsync
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => Context
+    -> MemoryTable
+    -> ArrayData e              -- source array
+    -> ArrayData e              -- destination array
+    -> Int                      -- number of array elements
+    -> Maybe CUDA.Stream
+    -> IO ()
+copyArrayAsync !ctx !mt !from !to !n !mst = do
+  src <- devicePtrsOfArrayData ctx mt from
+  dst <- devicePtrsOfArrayData ctx mt to
+  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArrayAsync n src dst mst
 
 -- Copy data between two device arrays that exist in different contexts and/or
 -- devices.

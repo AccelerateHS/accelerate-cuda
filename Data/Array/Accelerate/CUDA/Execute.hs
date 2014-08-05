@@ -368,7 +368,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     permuteOp :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
     permuteOp !sh !dfs = do
       out <- allocateArray (shape dfs)
-      copyArray dfs out
+      copyArrayAsync dfs out (Just stream)
       execute kernel gamma aenv (size sh) out stream
       return out
 

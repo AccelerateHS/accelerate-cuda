@@ -45,10 +45,11 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   -- * Manipulating arrays
   DevicePtrs,
   devicePtrsOfArray,
-  indexArray, copyArray,
+  indexArray,
   useArray,  useArrayAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
+  copyArray, copyArrayAsync,
   allocateArray, newArray,
 
   -- * Running IO actions in an Accelerate context
