@@ -120,9 +120,7 @@
 --    'Data.Word.Word32'.
 --
 --  * If the permutation function to 'Data.Array.Accelerate.permute' resolves to
---    non-unique indices, the combination function requires compute-1.1 to
---    combine 32-bit types, or compute-1.2 for 64-bit types. Tuple components
---    are resolved separately.
+--    non-unique indices, the combination function requires compute-1.1.
 --
 --
 -- [/Debugging options:/]
