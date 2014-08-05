@@ -365,11 +365,18 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- Forward permutation
     --
-    permuteOp :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
+    permuteOp :: forall sh sh' e. (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
     permuteOp !sh !dfs = do
-      out <- allocateArray (shape dfs)
+      let sh'   = shape dfs
+          n'    = size sh'
+
+      out               <- allocateArray sh'
+      Array _ locks     <- allocateArray sh'            :: CIO (Array sh' Int32)
+      ((), d_locks)     <- devicePtrsOfArrayData locks  :: CIO ((), CUDA.DevicePtr Int32)
+
+      liftIO $ CUDA.memsetAsync d_locks n' 0 (Just stream)      -- TLM: overlap these two operations?
       copyArrayAsync dfs out (Just stream)
-      execute kernel gamma aenv (size sh) out stream
+      execute kernel gamma aenv (size sh) (out, d_locks) stream
       return out
 
     -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the

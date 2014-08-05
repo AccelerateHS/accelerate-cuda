@@ -4,6 +4,7 @@
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE ViewPatterns        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 -- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
@@ -25,7 +26,6 @@ module Data.Array.Accelerate.CUDA.CodeGen.IndexSpace (
 
 ) where
 
-import Data.List
 import Language.C.Quote.CUDA
 import Foreign.CUDA.Analysis.Device
 import qualified Language.C.Syntax                      as C
@@ -33,7 +33,6 @@ import qualified Language.C.Syntax                      as C
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, ignore, shapeToList )
 import Data.Array.Accelerate.Error                      ( internalError )
 import Data.Array.Accelerate.CUDA.AST                   ( Gamma )
-import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 
 
@@ -178,7 +177,8 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
     permute
     (
         $params:argIn,
-        $params:argOut
+        $params:argOut,
+        typename Int32 * __restrict__ lock
     )
     {
         /*
@@ -199,25 +199,22 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
 
             if ( ! $exp:(cignore dst) )
             {
-                $decls:decly
-                $decls:decly'
+                $items:(jx        .=. ctoIndex shOut dst)
+                $items:(dce_x x   .=. get ix)
 
-                $items:(jx      .=. ctoIndex shOut dst)
-                $items:(dce_x x .=. get ix)
-                $items:(dce_y y .=. arrOut jx)
-
-                $items:write
+                $items:(atomically jx
+                    [ dce_y y   .=. setOut jx
+                    , setOut jx .=. combine x y ]
+                )
             }
         }
     }
   |]
   where
-    sizeof                      = eltSizeOf (undefined::e)
     (texIn, argIn)              = environment dev aenv
-    (argOut, shOut, arrOut)     = writeArray "Out" (undefined :: Array sh' e)
+    (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh' e)
     (x, _, _)                   = locals "x" (undefined :: e)
-    (_, y,  decly)              = locals "y" (undefined :: e)
-    (_, y', decly')             = locals "_y" (undefined :: e)
+    (y, _, _)                   = locals "y" (undefined :: e)
     (sh, _, _)                  = locals "shIn" (undefined :: sh)
     (src, _, _)                 = locals "sh" (undefined :: sh)
     (dst, _, _)                 = locals "sh_" (undefined :: sh')
@@ -227,43 +224,79 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
 
     -- If the destination index resolves to the magic index "ignore", the result
     -- is dropped from the output array.
+    --
     cignore :: Rvalue x => [x] -> C.Exp
     cignore []  = $internalError "permute" "singleton arrays not supported"
     cignore xs  = foldl1 (\a b -> [cexp| $exp:a && $exp:b |])
                 $ zipWith (\a b -> [cexp| $exp:(rvalue a) == $int:b |]) xs
                 $ shapeToList (ignore :: sh')
 
-    -- Apply the combining function between old and new values. If multiple
-    -- threads attempt to write to the same location, the hardware
-    -- write-combining mechanism will accept one transaction and all other
-    -- updates will be lost.
+    -- If we can determine that the old values are not used in the combination
+    -- function (e.g. filter) then the lock and unlock fragments can be replaced
+    -- with a NOP.
     --
-    -- If the hardware supports it, we can use atomicCAS (compare-and-swap) to
-    -- work around this. This requires at least compute 1.1 for 32-bit values,
-    -- and compute 1.2 for 64-bit values. If hardware support is not available,
-    -- write the result as normal and hope for the best.
+    -- If locking is required but the hardware does not support it (compute 1.0)
+    -- then we issue a runtime error immediately instead of silently failing.
     --
-    -- Each element of a tuple is necessarily written individually, so the tuple
-    -- as a whole is not stored atomically.
+    mustLock    = or . fst . unzip $ dce_y y
+
+    -- The atomic section is acquired using a spin lock. This requires a
+    -- temporary array to represent the lock state for each element of the
+    -- output. We use 1 to represent the locked state, and 0 to represent
+    -- unlocked elements.
     --
-    write       = env ++ zipWith6 apply sizeof (arrOut jx) fun x (dce_y y) y'
-    (env, fun)  = combine x y
-
-    apply size out f x1 (used,y1) y1'
-      | used
-      , Just atomicCAS <- reinterpret size
-      = [citem| do {
-                       $exp:y1' = $exp:y1;
-                       $exp:y1  = $exp:atomicCAS ( & $exp:out, $exp:y1', $exp:f );
-
-                   } while ( $exp:y1 != $exp:y1' ); |]
-
-      | otherwise
-      = [citem| $exp:out = $exp:(rvalue x1); |]
-
+    --   do {
+    --     old = atomicExch(&lock[i], 1);       // atomic exchange
+    --   } while (old == 1);
     --
-    reinterpret :: Int -> Maybe C.Exp
-    reinterpret 4 | sm >= Compute 1 1   = Just [cexp| $id:("atomicCAS32") |]
-    reinterpret 8 | sm >= Compute 1 2   = Just [cexp| $id:("atomicCAS64") |]
-    reinterpret _                       = Nothing
+    --   /* critical section */
+    --
+    --   atomicExch(&lock[i], 0);
+    --
+    -- The initial loop repeatedly attempts to take the lock by writing a 1 into
+    -- the slot. Once the 'old' state of the lock returns 0 (unlocked), we have
+    -- just acquired the lock, and the atomic section can be computed. Finally,
+    -- atomically write a 0 back into the slot to unlock the element.
+    --
+    -- However, there is a complication with CUDA devices because all threads in
+    -- the warp must execute in lockstep (with predicated execution). Once a
+    -- thread acquires a lock, then it will be disabled and stop participating
+    -- in the first loop, waiting until all other threads in the warp acquire
+    -- their locks. If two threads in a warp are attempting to acquire the same
+    -- lock, once the lock is acquired by the first thread, it sits idle while
+    -- the second thread spins attempting to grab a lock that will never be
+    -- released, because the first thread can not progress. DEADLOCK.
+    --
+    -- So, we need to invert the algorithm so that threads can always make
+    -- progress, until each thread in the warp has committed their result.
+    --
+    --   done = 0;
+    --   do {
+    --       if (atomicExch(&lock[i], 1) == 0) {
+    --
+    --           /* critical section */
+    --
+    --           done = 1;
+    --           atomicExch(&lock[i], 0);
+    --       }
+    --   } while (done == 0)
+    --
+    atomically :: (C.Type, Name) -> [[C.BlockItem]] -> [C.BlockItem]
+    atomically (_,i) (concat -> body)
+      | not mustLock            = body
+      | sm < Compute 1 1        = $internalError "permute" "Requires at least compute compatibility 1.1"
+      | otherwise               =
+        [ [citem| typename Int32 done = 0; |]
+        , [citem| do {
+                      __threadfence();
+
+                      if ( atomicExch(&lock[ $exp:(cvar i) ], 1) == 0 ) {
+                          $items:body
+
+                          done = 1;
+                          atomicExch(&lock[ $exp:(cvar i) ], 0);
+                      }
+                  } while (done == 0);
+                |]
+        ]
 
