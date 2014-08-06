@@ -39,7 +39,6 @@ import qualified Foreign.CUDA.Analysis                  as CUDA
 -- system
 import Text.PrettyPrint
 import Data.Hashable
-import Data.IORef                                       ( IORef )
 import Data.Monoid                                      ( Monoid(..) )
 import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
@@ -199,7 +198,7 @@ data ExecP aenv lenv a where
                -> ExecOpenAcc aenv (Array sh e)
                -> AccKernel (Array sl e)
                -> !(Gamma aenv)
-               -> IORef (Maybe slix, slix, sl)
+               -> Maybe (Maybe slix, slix, sl)
                -> ExecP aenv lenv (Array sl e)
 
   ExecUseLazy :: (Elt slix, Shape sl, Shape sh, Elt e)
@@ -209,7 +208,7 @@ data ExecP aenv lenv a where
                             (EltRepr sh)
               -> ExecExp aenv slix
               -> Array sh e
-              -> IORef (Maybe slix, slix, sl)
+              -> Maybe (Maybe slix, slix, sl)
               -> ExecP aenv lenv (Array sl e)
 
   ExecMap :: (Shape sh, Elt e, Shape sh', Elt e')
@@ -227,7 +226,7 @@ data ExecP aenv lenv a where
                  => ExecOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
                  -> ExecOpenAcc aenv (Array sh e)
                  -> Idx lenv (Array sh e)
-                 -> IORef (Array sh e)
+                 -> Maybe (Array sh e)
                  -> ExecP aenv lenv (Array sh e)
 
   ExecScanSeqAct :: (Shape sh, Elt e, Shape sh', Elt e')
@@ -236,7 +235,7 @@ data ExecP aenv lenv a where
                     -> ExecOpenAcc aenv (Array sh e)
                     -> ExecOpenAcc aenv (Array sh' e')
                     -> Idx lenv (Array sh' e')
-                    -> IORef (Array sh e)
+                    -> Maybe (Array sh e)
                     -> ExecP aenv lenv (Array sh e)
 
 data ExecC aenv lenv a where
@@ -244,13 +243,13 @@ data ExecC aenv lenv a where
                  => ExecOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
                  -> ExecOpenAcc aenv (Array sh e)
                  -> Idx lenv (Array sh e)
-                 -> IORef (Array sh e)
+                 -> Maybe (Array sh e)
                  -> ExecC aenv lenv (Array sh e)
 
   ExecFromSeq :: (Shape sh, Elt e)
                  => AccKernel (Vector e)
                  -> Idx lenv (Array sh e)
-                 -> IORef ([Array sh e])
+                 -> [Array sh e]
                  -> ExecC aenv lenv (Vector sh, Vector e)
 
   ExecFoldSeqAct :: (Shape sh, Elt e, Shape sh', Elt e')
@@ -259,14 +258,14 @@ data ExecC aenv lenv a where
                     -> ExecOpenAcc aenv (Array sh e)
                     -> ExecOpenAcc aenv (Array sh' e')
                     -> Idx lenv (Array sh' e')
-                    -> IORef (Array sh e)
+                    -> Maybe (Array sh e)
                     -> ExecC aenv lenv (Array sh e)
 
   ExecFoldSeqFlatten :: (Shape sh, Elt e, Shape sh', Elt e')
                         => ExecOpenAfun aenv (Array sh e -> Vector sh' -> Vector e' -> Array sh e)
                         -> ExecOpenAcc aenv (Array sh e)
                         -> Idx lenv (Array sh' e')
-                        -> IORef (Array sh e)
+                        -> Maybe (Array sh e)
                         -> ExecC aenv lenv (Array sh e)
 
   ExecStuple :: (Arrays a, IsAtuple a)

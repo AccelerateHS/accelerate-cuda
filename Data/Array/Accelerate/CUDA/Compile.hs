@@ -48,7 +48,6 @@ import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( liftIO, MonadIO )
 import Control.Concurrent
 import Crypto.Hash.MD5                                          ( hashlazy )
-import Data.IORef                                               ( newIORef )
 import Data.List                                                ( intercalate )
 import Data.Bits
 import Data.Maybe
@@ -236,12 +235,10 @@ compileOpenAcc = traverseAcc
                   let gamma = makeEnvMap (free1 <> free2)
                   dev   <- asks deviceProperties
                   kernel <- build1Simple (codegenToSeq slix dev acc gamma)
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecToSeq slix sl' acc' kernel gamma v
+                  return $ ExecToSeq slix sl' acc' kernel gamma Nothing
                 UseLazy slix sl arr -> do
                   (_, sl') <- travE sl
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecUseLazy slix sl' arr v
+                  return $ ExecUseLazy slix sl' arr Nothing
                 MapSeq f x -> do
                   f' <- compileOpenAfun f
                   return $ ExecMap f' x
@@ -251,15 +248,13 @@ compileOpenAcc = traverseAcc
                 ScanSeq f acc x ->  do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecScanSeq f' acc' x v
+                  return $ ExecScanSeq f' acc' x Nothing
                 ScanSeqAct f g a0 b0 x ->  do
                   a0' <- traverseAcc a0
                   b0' <- traverseAcc b0
                   f' <- compileOpenAfun f
                   g' <- compileOpenAfun g
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecScanSeqAct f' g' a0' b0' x v
+                  return $ ExecScanSeqAct f' g' a0' b0' x Nothing
 
             compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
             compileC c =
@@ -267,25 +262,21 @@ compileOpenAcc = traverseAcc
                 FoldSeq f acc x -> do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecFoldSeq f' acc' x v
+                  return $ ExecFoldSeq f' acc' x Nothing
                 FoldSeqAct f g a0 b0 x -> do
                   a0' <- traverseAcc a0
                   b0' <- traverseAcc b0
                   f' <- compileOpenAfun f
                   g' <- compileOpenAfun g
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecFoldSeqAct f' g' a0' b0' x v
+                  return $ ExecFoldSeqAct f' g' a0' b0' x Nothing
                 FoldSeqFlatten f acc x -> do
                   acc' <- traverseAcc acc
                   f' <- compileOpenAfun f
-                  v <- liftIO $ newIORef undefined
-                  return $ ExecFoldSeqFlatten f' acc' x v
+                  return $ ExecFoldSeqFlatten f' acc' x Nothing
                 FromSeq (x :: Idx lenv' (Array sh a')) -> do
                   dev <- asks deviceProperties
                   kernel <- build1Simple (codegenFromSeq (undefined :: sh) dev)
-                  v <- liftIO $ newIORef []
-                  return $ ExecFromSeq kernel x v
+                  return $ ExecFromSeq kernel x []
                 Stuple t -> ExecStuple <$> compileCT t
 
             compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)

@@ -7,6 +7,7 @@
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
@@ -62,7 +63,6 @@ import Control.Monad.Trans                                      ( MonadIO, liftI
 import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
-import Data.IORef                                               ( readIORef, modifyIORef, writeIORef )
 import Data.Word
 import Data.Maybe
 import Data.Monoid                                              ( mempty )
@@ -424,7 +424,7 @@ executeOpenAcc (ExecSequence l) aenv stream = executeSequence l aenv stream
 
 executeSequence :: forall aenv arrs . ExecSequence aenv () arrs -> Aval aenv -> Stream -> CIO arrs
 executeSequence topSequence aenv stream
-  | degenerate topSequence = initSequence topSequence >>         returnOut topSequence
+  | degenerate topSequence = initSequence topSequence >>=         returnOut
   | otherwise          = initSequence topSequence >> loop >> returnOut topSequence
 
   where
@@ -434,126 +434,127 @@ executeSequence topSequence aenv stream
         ExecP _ _ -> False
         ExecC _   -> True
 
-    initSequence :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO ()
+    initSequence :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO (ExecSequence aenv lenv arrs')
     initSequence l =
       case l of
-        ExecP p l' -> initP p >> initSequence l'
-        ExecC c    -> initC c
+        ExecP p l' -> ExecP <$> initP p <*> initSequence l'
+        ExecC c    -> ExecC <$> initC c
 
       where
-        initP :: forall a. ExecP aenv lenv a -> CIO ()
-        initP (ExecToSeq slix exp acc _ _ v) =
+        initP :: forall lenv a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
+        initP (ExecToSeq slix exp acc k g _) =
           do sl <- executeExp exp aenv stream
              sh <- extent acc
              let sl' = restrictSlice slix sh sl
                  sl0 = listToMaybe (enumSlices slix sl')
-             liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
-        initP (ExecUseLazy slix exp arr v) =
+             return $ ExecToSeq slix exp acc k g (Just (sl0, sl', sliceShape slix sh))
+        initP (ExecUseLazy slix exp arr _) =
           do sl <- executeExp exp aenv stream
              let sh = shape arr
                  sl' = restrictSlice slix sh sl
                  sl0 = listToMaybe (enumSlices slix sl')
-             liftIO $ writeIORef v (sl0, sl', sliceShape slix sh)
-        initP ExecMap{} = return ()
-        initP ExecZipWith{} = return ()
-        initP (ExecScanSeq _ acc _ v) =
+             return $ ExecUseLazy slix exp arr (Just (sl0, sl', sliceShape slix sh))
+        initP s@ExecMap{} = return s
+        initP s@ExecZipWith{} = return s
+        initP (ExecScanSeq afun acc ix _) =
               do a <- executeOpenAcc acc aenv stream
-                 liftIO $ writeIORef v a
-        initP (ExecScanSeqAct _ _ a0 _ _ v) =
+                 return $ ExecScanSeq afun acc ix (Just a)
+        initP (ExecScanSeqAct afun1 afun2 a0 b0 ix _) =
               do a <- executeOpenAcc a0 aenv stream
-                 liftIO $ writeIORef v a
+                 return $ ExecScanSeqAct afun1 afun2 a0 b0 ix (Just a)
 
-        initC :: forall a. ExecC aenv lenv a -> CIO ()
+        initC :: forall a. ExecC aenv lenv a -> CIO (ExecC aenv lenv a)
         initC c =
           case c of
-            ExecFoldSeq _ acc _ v ->
+            ExecFoldSeq afun acc ix _ ->
               do a <- executeOpenAcc acc aenv stream
-                 liftIO $ writeIORef v a
-            ExecFoldSeqAct _ _ a0 _ _ v ->
+                 return $ ExecFoldSeq afun acc ix (Just a)
+            ExecFoldSeqAct afun1 afun2 a0 b0 ix _ ->
               do a <- executeOpenAcc a0 aenv stream
-                 liftIO $ writeIORef v a
-            ExecFoldSeqFlatten _ acc _ v ->
+                 return $ ExecFoldSeqAct afun1 afun2 a0 b0 ix (Just a)
+            ExecFoldSeqFlatten afun acc ix _ ->
               do a <- executeOpenAcc acc aenv stream
-                 liftIO $ writeIORef v a
-            ExecFromSeq{} -> return ()
-            ExecStuple t  -> initCT t
+                 return $ ExecFoldSeqFlatten afun acc ix (Just a)
+            s@ExecFromSeq{} -> return s
+            ExecStuple t  -> ExecStuple <$> initCT t
 
-        initCT :: forall t. Atuple (ExecC aenv lenv) t -> CIO ()
-        initCT NilAtup        = return ()
-        initCT (SnocAtup t c) = initCT t >> initC c
+        initCT :: forall t. Atuple (ExecC aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
+        initCT NilAtup        = return NilAtup
+        initCT (SnocAtup t c) = SnocAtup <$> initCT t <*> initC c
 
-    loop :: CIO ()
-    loop =
-      do ml <- runMaybeT (go topSequence Empty)
-         case ml of
-           Nothing -> return ()
-           Just () -> loop
+    loop :: CIO (ExecSequence aenv () arrs)
+    loop = loop' topSequence
+      where
+        loop' :: ExecSequence aenv () arrs -> CIO (ExecSequence aenv () arrs)
+        loop' s = do
+           ms <- runMaybeT (go s Empty)
+           case ms of
+             Nothing -> return s
+             Just s' -> loop' s'
 
-    go :: forall lenv arrs'. ExecSequence aenv lenv arrs' -> Val lenv -> MaybeT CIO ()
+    go :: forall lenv arrs'. ExecSequence aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecSequence aenv lenv arrs')
     go !l !lenv =
       case l of
-        ExecP p l' ->       produce   p  >>= \ a -> go l' (lenv `Push` a)
-        ExecC c    -> lift (consume   c)
+        ExecP p l' -> do
+          (p', a) <- produce p
+          l'' <- go l' (lenv `Push` a)
+          return $ ExecP p' l''
+        ExecC c    -> ExecC <$> lift (consume c)
 
       where
-        produce :: forall a . ExecP aenv lenv a -> MaybeT CIO a
-        produce (ExecToSeq slix _ _ kernel gamma v) =
-          do (msl', sl, sh) <- liftIO $ readIORef v
+        produce :: forall a . ExecP aenv lenv a -> MaybeT CIO (ExecP aenv lenv a, a)
+        produce (ExecToSeq slix exp acc kernel gamma sls) =
+          do
+             (msl', sl, sh) <- MaybeT (return sls)
              sl' <- MaybeT (return msl')
              lift $ do
                out <- allocateArray sh
                m <- marshalSlice slix sl'
                execute kernel gamma aenv (size sh) (m, out) stream
-               liftIO $ writeIORef v (nextSlice slix sl sl', sl, sh)
-               return out
-        produce (ExecUseLazy slix _ arr v) =
-          do (msl', sl, sh) <- liftIO $ readIORef v
+               return (ExecToSeq slix exp acc kernel gamma (Just (nextSlice slix sl sl', sl, sh)), out)
+        produce (ExecUseLazy slix exp arr sls) =
+          do (msl', sl, sh) <- MaybeT (return sls)
              sl' <- MaybeT (return msl')
              lift $ do
                out <- allocateArray sh
                useArraySlice slix sl' arr out
-               liftIO $ writeIORef v (nextSlice slix sl sl', sl, sh)
-               return out
-        produce (ExecMap afun x) = lift $ travAfun1 afun (prj x lenv)
-        produce (ExecZipWith afun x y) = lift $ travAfun2 afun (prj x lenv) (prj y lenv)
-        produce (ExecScanSeq afun _ x v) =
-              do acc <- liftIO $ readIORef v
-                 acc' <- lift $ travAfun2 afun acc (prj x lenv)
-                 liftIO $ writeIORef v acc'
-                 return acc
-        produce (ExecScanSeqAct afun _ _ _ x v) =
-              do acc <- liftIO $ readIORef v
-                 acc' <- lift $ travAfun2 afun acc (prj x lenv)
-                 liftIO $ writeIORef v acc'
-                 return acc
+               return (ExecUseLazy slix exp arr (Just (nextSlice slix sl sl', sl, sh)), out)
+        produce (ExecMap afun x) = (ExecMap afun x ,) <$> lift (travAfun1 afun (prj x lenv))
+        produce (ExecZipWith afun x y) = (ExecZipWith afun x y,) <$> lift (travAfun2 afun (prj x lenv) (prj y lenv))
+        produce (ExecScanSeq afun a0 x ma) =
+              do
+                 a <- MaybeT (return ma)
+                 a' <- lift $ travAfun2 afun a (prj x lenv)
+                 return (ExecScanSeq afun a0 x (Just a'), a')
+        produce (ExecScanSeqAct afun1 afun2 a0 b0 x ma) =
+              do a <- MaybeT (return ma)
+                 a' <- lift $ travAfun2 afun1 a (prj x lenv)
+                 return (ExecScanSeqAct afun1 afun2 a0 b0 x (Just a'), a')
 
-        consume :: forall a . ExecC aenv lenv a -> CIO ()
+        consume :: forall a . ExecC aenv lenv a -> CIO (ExecC aenv lenv a)
         consume c =
           case c of
-            ExecFoldSeq afun _ x v ->
-              do acc <- liftIO $ readIORef v
-                 acc' <- travAfun2 afun acc (prj x lenv)
-                 liftIO $ writeIORef v acc'
-            ExecFoldSeqAct afun _ _ _ x v ->
-              do acc <- liftIO $ readIORef v
-                 acc' <- travAfun2 afun acc (prj x lenv)
-                 liftIO $ writeIORef v acc'
-            ExecFoldSeqFlatten afun _ x v ->
-              do acc <- liftIO $ readIORef v
-                 useArray shapes
-                 acc' <- travAfun3 afun acc shapes elems
-                 liftIO $ writeIORef v acc'
+            ExecFoldSeq afun a0 x (Just a) ->
+              do a' <- travAfun2 afun a (prj x lenv)
+                 return $ ExecFoldSeq afun a0 x (Just a')
+            ExecFoldSeqAct afun1 afun2 a0 b0 x (Just a) ->
+              do a' <- travAfun2 afun1 a (prj x lenv)
+                 return $ ExecFoldSeqAct afun1 afun2 a0 b0 x (Just a')
+            ExecFoldSeqFlatten afun a0 x (Just a) ->
+              do useArray shapes
+                 a' <- travAfun3 afun a shapes elems
+                 return $ ExecFoldSeqFlatten afun a0 x (Just a')
                  where
                    Array sh adata = prj x lenv
                    elems  = Array ((), R.size sh) adata
                    shapes = fromList (Z:.1) [toElt sh]
-            ExecFromSeq _ x v ->
-              do liftIO $ modifyIORef v (prj x lenv:)
-            ExecStuple t -> consumeT t
+            ExecFromSeq slix x a -> return $ ExecFromSeq slix x (prj x lenv : a)
+            ExecStuple t -> ExecStuple <$> consumeT t
+            _            -> $internalError "executeSequence" "Expected already executed consumer"
 
-        consumeT :: forall t. Atuple (ExecC aenv lenv) t -> CIO ()
-        consumeT NilAtup        = return ()
-        consumeT (SnocAtup t c) = consumeT t >> consume c
+        consumeT :: forall t. Atuple (ExecC aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
+        consumeT NilAtup        = return NilAtup
+        consumeT (SnocAtup t c) = SnocAtup <$> consumeT t <*> consume c
 
     returnOut :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO arrs'
     returnOut !l =
@@ -565,12 +566,10 @@ executeSequence topSequence aenv stream
         readConsumer :: forall a . ExecC aenv lenv a -> CIO a
         readConsumer c =
           case c of
-            ExecFoldSeq _ _ _ v -> liftIO $ readIORef v
-            ExecFoldSeqAct _ _ _ _ _ v -> liftIO $ readIORef v
-            ExecFoldSeqFlatten _ _ _ v -> liftIO $ readIORef v
-            ExecFromSeq kernel _ v ->
-              do as <- liftIO $ readIORef v
-                 fromSeqOp (reverse as)
+            ExecFoldSeq _ _ _ (Just a) -> return a
+            ExecFoldSeqAct _ _ _ _ _ (Just a) -> return a
+            ExecFoldSeqFlatten _ _ _ (Just a) -> return a
+            ExecFromSeq kernel _ as -> fromSeqOp (reverse as)
               where
                 fromSeqOp as =
                   let shs = map shape as
@@ -590,6 +589,8 @@ executeSequence topSequence aenv stream
                 rdT :: forall t. Atuple (ExecC aenv lenv) t -> CIO t
                 rdT NilAtup          = return ()
                 rdT (SnocAtup t' c') = (,) <$> rdT t' <*> readConsumer c'
+            _ -> $internalError "executeSequence" "Expected already executed consumer"
+
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
