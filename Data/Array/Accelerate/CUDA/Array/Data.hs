@@ -6,9 +6,9 @@
 {-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Data
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
---               [2013]       Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2009..2014] Trevor L. McDonell
+--               [2013..2014] Robert Clifton-Everest
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
