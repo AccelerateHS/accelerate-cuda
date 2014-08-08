@@ -98,7 +98,7 @@ primArrayEltAs(CFloat,  Float)
 primArrayEltAs(CDouble, Double)
 
 primArrayElt(Char)
-primArrayEltAs(CChar,  Int8)
+primArrayEltAs(CChar,  HTYPE_CCHAR)
 primArrayEltAs(CSChar, Int8)
 primArrayEltAs(CUChar, Word8)
 
