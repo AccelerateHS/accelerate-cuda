@@ -315,7 +315,7 @@ codegenOpenExp dev aenv = cvtE
         Var ix                  -> return $ prj ix env
         PrimConst c             -> return $ [codegenPrimConst c]
         Const c                 -> return $ codegenConst (Sugar.eltType (undefined::t)) c
-        PrimApp f x             -> primApp f x env
+        PrimApp f x             -> return <$> primApp f x env
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
@@ -360,21 +360,17 @@ codegenOpenExp dev aenv = cvtE
       body'     <- cvtE body (env `Push` bnd')
       return body'
 
-    -- Primitive function application. For logical operations, we evaluate each
-    -- argument to the operation as a statement expression, which is necessary
-    -- to ensure proper short-circuit behaviour for the term as well as all of
-    -- its dependencies.
+    -- When evaluating primitive functions, we evaluate each argument to the
+    -- operation as a statement expression. This is necessary to ensure proper
+    -- short-circuit behaviour for logical operations.
     --
-    primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
+    primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
     primApp f x env
       | Tuple (NilTup `SnocTup` a `SnocTup` b) <- x
-      = do a' <- cvtE' a env
-           b' <- cvtE' b env
-           return [codegenPrim f [a', b']]
+      = codegenPrim2 f <$> cvtE' a env <*> cvtE' b env
 
       | otherwise
-      = do x' <- cvtE' x env
-           return [codegenPrim f [x']]
+      = codegenPrim1 f <$> cvtE' x env
       where
         cvtE' :: DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
         cvtE' e env = do
@@ -671,65 +667,67 @@ codegenPrimConst (PrimMaxBound ty) = codegenMaxBound ty
 codegenPrimConst (PrimPi       ty) = codegenPi ty
 
 
-codegenPrim :: PrimFun p -> [C.Exp] -> C.Exp
-codegenPrim (PrimAdd              _) [a,b] = [cexp|$exp:a + $exp:b|]
-codegenPrim (PrimSub              _) [a,b] = [cexp|$exp:a - $exp:b|]
-codegenPrim (PrimMul              _) [a,b] = [cexp|$exp:a * $exp:b|]
-codegenPrim (PrimNeg              _) [a]   = [cexp| - $exp:a|]
-codegenPrim (PrimAbs             ty) [a]   = codegenAbs ty a
-codegenPrim (PrimSig             ty) [a]   = codegenSig ty a
-codegenPrim (PrimQuot             _) [a,b] = [cexp|$exp:a / $exp:b|]
-codegenPrim (PrimRem              _) [a,b] = [cexp|$exp:a % $exp:b|]
-codegenPrim (PrimIDiv             _) [a,b] = ccall "idiv" [a,b]
-codegenPrim (PrimMod              _) [a,b] = ccall "mod"  [a,b]
-codegenPrim (PrimBAnd             _) [a,b] = [cexp|$exp:a & $exp:b|]
-codegenPrim (PrimBOr              _) [a,b] = [cexp|$exp:a | $exp:b|]
-codegenPrim (PrimBXor             _) [a,b] = [cexp|$exp:a ^ $exp:b|]
-codegenPrim (PrimBNot             _) [a]   = [cexp|~ $exp:a|]
-codegenPrim (PrimBShiftL          _) [a,b] = [cexp|$exp:a << $exp:b|]
-codegenPrim (PrimBShiftR          _) [a,b] = [cexp|$exp:a >> $exp:b|]
-codegenPrim (PrimBRotateL         _) [a,b] = ccall "rotateL" [a,b]
-codegenPrim (PrimBRotateR         _) [a,b] = ccall "rotateR" [a,b]
-codegenPrim (PrimFDiv             _) [a,b] = [cexp|$exp:a / $exp:b|]
-codegenPrim (PrimRecip           ty) [a]   = codegenRecip ty a
-codegenPrim (PrimSin             ty) [a]   = ccall (FloatingNumType ty `postfix` "sin")   [a]
-codegenPrim (PrimCos             ty) [a]   = ccall (FloatingNumType ty `postfix` "cos")   [a]
-codegenPrim (PrimTan             ty) [a]   = ccall (FloatingNumType ty `postfix` "tan")   [a]
-codegenPrim (PrimAsin            ty) [a]   = ccall (FloatingNumType ty `postfix` "asin")  [a]
-codegenPrim (PrimAcos            ty) [a]   = ccall (FloatingNumType ty `postfix` "acos")  [a]
-codegenPrim (PrimAtan            ty) [a]   = ccall (FloatingNumType ty `postfix` "atan")  [a]
-codegenPrim (PrimAsinh           ty) [a]   = ccall (FloatingNumType ty `postfix` "asinh") [a]
-codegenPrim (PrimAcosh           ty) [a]   = ccall (FloatingNumType ty `postfix` "acosh") [a]
-codegenPrim (PrimAtanh           ty) [a]   = ccall (FloatingNumType ty `postfix` "atanh") [a]
-codegenPrim (PrimExpFloating     ty) [a]   = ccall (FloatingNumType ty `postfix` "exp")   [a]
-codegenPrim (PrimSqrt            ty) [a]   = ccall (FloatingNumType ty `postfix` "sqrt")  [a]
-codegenPrim (PrimLog             ty) [a]   = ccall (FloatingNumType ty `postfix` "log")   [a]
-codegenPrim (PrimFPow            ty) [a,b] = ccall (FloatingNumType ty `postfix` "pow")   [a,b]
-codegenPrim (PrimLogBase         ty) [a,b] = codegenLogBase ty a b
-codegenPrim (PrimTruncate     ta tb) [a]   = codegenTruncate ta tb a
-codegenPrim (PrimRound        ta tb) [a]   = codegenRound ta tb a
-codegenPrim (PrimFloor        ta tb) [a]   = codegenFloor ta tb a
-codegenPrim (PrimCeiling      ta tb) [a]   = codegenCeiling ta tb a
-codegenPrim (PrimAtan2           ty) [a,b] = ccall (FloatingNumType ty `postfix` "atan2") [a,b]
-codegenPrim (PrimLt               _) [a,b] = [cexp|$exp:a < $exp:b|]
-codegenPrim (PrimGt               _) [a,b] = [cexp|$exp:a > $exp:b|]
-codegenPrim (PrimLtEq             _) [a,b] = [cexp|$exp:a <= $exp:b|]
-codegenPrim (PrimGtEq             _) [a,b] = [cexp|$exp:a >= $exp:b|]
-codegenPrim (PrimEq               _) [a,b] = [cexp|$exp:a == $exp:b|]
-codegenPrim (PrimNEq              _) [a,b] = [cexp|$exp:a != $exp:b|]
-codegenPrim (PrimMax             ty) [a,b] = codegenMax ty a b
-codegenPrim (PrimMin             ty) [a,b] = codegenMin ty a b
-codegenPrim PrimLAnd                 [a,b] = [cexp|$exp:a && $exp:b|]
-codegenPrim PrimLOr                  [a,b] = [cexp|$exp:a || $exp:b|]
-codegenPrim PrimLNot                 [a]   = [cexp| ! $exp:a|]
-codegenPrim PrimOrd                  [a]   = codegenOrd a
-codegenPrim PrimChr                  [a]   = codegenChr a
-codegenPrim PrimBoolToInt            [a]   = codegenBoolToInt a
-codegenPrim (PrimFromIntegral ta tb) [a]   = codegenFromIntegral ta tb a
+codegenPrim1 :: PrimFun f -> C.Exp -> C.Exp
+codegenPrim1 (PrimNeg              _) a   = [cexp| - $exp:a|]
+codegenPrim1 (PrimAbs             ty) a   = codegenAbs ty a
+codegenPrim1 (PrimSig             ty) a   = codegenSig ty a
+codegenPrim1 (PrimBNot             _) a   = [cexp|~ $exp:a|]
+codegenPrim1 (PrimRecip           ty) a   = codegenRecip ty a
+codegenPrim1 (PrimSin             ty) a   = ccall (FloatingNumType ty `postfix` "sin")   [a]
+codegenPrim1 (PrimCos             ty) a   = ccall (FloatingNumType ty `postfix` "cos")   [a]
+codegenPrim1 (PrimTan             ty) a   = ccall (FloatingNumType ty `postfix` "tan")   [a]
+codegenPrim1 (PrimAsin            ty) a   = ccall (FloatingNumType ty `postfix` "asin")  [a]
+codegenPrim1 (PrimAcos            ty) a   = ccall (FloatingNumType ty `postfix` "acos")  [a]
+codegenPrim1 (PrimAtan            ty) a   = ccall (FloatingNumType ty `postfix` "atan")  [a]
+codegenPrim1 (PrimAsinh           ty) a   = ccall (FloatingNumType ty `postfix` "asinh") [a]
+codegenPrim1 (PrimAcosh           ty) a   = ccall (FloatingNumType ty `postfix` "acosh") [a]
+codegenPrim1 (PrimAtanh           ty) a   = ccall (FloatingNumType ty `postfix` "atanh") [a]
+codegenPrim1 (PrimExpFloating     ty) a   = ccall (FloatingNumType ty `postfix` "exp")   [a]
+codegenPrim1 (PrimSqrt            ty) a   = ccall (FloatingNumType ty `postfix` "sqrt")  [a]
+codegenPrim1 (PrimLog             ty) a   = ccall (FloatingNumType ty `postfix` "log")   [a]
+codegenPrim1 (PrimTruncate     ta tb) a   = codegenTruncate ta tb a
+codegenPrim1 (PrimRound        ta tb) a   = codegenRound ta tb a
+codegenPrim1 (PrimFloor        ta tb) a   = codegenFloor ta tb a
+codegenPrim1 (PrimCeiling      ta tb) a   = codegenCeiling ta tb a
+codegenPrim1 PrimLNot                 a   = [cexp| ! $exp:a|]
+codegenPrim1 PrimOrd                  a   = codegenOrd a
+codegenPrim1 PrimChr                  a   = codegenChr a
+codegenPrim1 PrimBoolToInt            a   = codegenBoolToInt a
+codegenPrim1 (PrimFromIntegral ta tb) a   = codegenFromIntegral ta tb a
+codegenPrim1 _ _ =
+  $internalError "codegenPrim1" "unknown primitive function"
 
--- If the argument lists are not the correct length
-codegenPrim _ _ =
-  $internalError "codegenPrim" "inconsistent valuation"
+codegenPrim2 :: PrimFun f -> C.Exp -> C.Exp -> C.Exp
+codegenPrim2 (PrimAdd              _) a b = [cexp|$exp:a + $exp:b|]
+codegenPrim2 (PrimSub              _) a b = [cexp|$exp:a - $exp:b|]
+codegenPrim2 (PrimMul              _) a b = [cexp|$exp:a * $exp:b|]
+codegenPrim2 (PrimQuot             _) a b = [cexp|$exp:a / $exp:b|]
+codegenPrim2 (PrimRem              _) a b = [cexp|$exp:a % $exp:b|]
+codegenPrim2 (PrimIDiv             _) a b = ccall "idiv" [a,b]
+codegenPrim2 (PrimMod              _) a b = ccall "mod"  [a,b]
+codegenPrim2 (PrimBAnd             _) a b = [cexp|$exp:a & $exp:b|]
+codegenPrim2 (PrimBOr              _) a b = [cexp|$exp:a | $exp:b|]
+codegenPrim2 (PrimBXor             _) a b = [cexp|$exp:a ^ $exp:b|]
+codegenPrim2 (PrimBShiftL          _) a b = [cexp|$exp:a << $exp:b|]
+codegenPrim2 (PrimBShiftR          _) a b = [cexp|$exp:a >> $exp:b|]
+codegenPrim2 (PrimBRotateL         _) a b = ccall "rotateL" [a,b]
+codegenPrim2 (PrimBRotateR         _) a b = ccall "rotateR" [a,b]
+codegenPrim2 (PrimFDiv             _) a b = [cexp|$exp:a / $exp:b|]
+codegenPrim2 (PrimFPow            ty) a b = ccall (FloatingNumType ty `postfix` "pow")   [a,b]
+codegenPrim2 (PrimLogBase         ty) a b = codegenLogBase ty a b
+codegenPrim2 (PrimAtan2           ty) a b = ccall (FloatingNumType ty `postfix` "atan2") [a,b]
+codegenPrim2 (PrimLt               _) a b = [cexp|$exp:a < $exp:b|]
+codegenPrim2 (PrimGt               _) a b = [cexp|$exp:a > $exp:b|]
+codegenPrim2 (PrimLtEq             _) a b = [cexp|$exp:a <= $exp:b|]
+codegenPrim2 (PrimGtEq             _) a b = [cexp|$exp:a >= $exp:b|]
+codegenPrim2 (PrimEq               _) a b = [cexp|$exp:a == $exp:b|]
+codegenPrim2 (PrimNEq              _) a b = [cexp|$exp:a != $exp:b|]
+codegenPrim2 (PrimMax             ty) a b = codegenMax ty a b
+codegenPrim2 (PrimMin             ty) a b = codegenMin ty a b
+codegenPrim2 PrimLAnd                 a b = [cexp|$exp:a && $exp:b|]
+codegenPrim2 PrimLOr                  a b = [cexp|$exp:a || $exp:b|]
+codegenPrim2 _ _ _ =
+  $internalError "codegenPrim2" "unknown primitive function"
 
 -- Implementation of scalar primitives
 --
