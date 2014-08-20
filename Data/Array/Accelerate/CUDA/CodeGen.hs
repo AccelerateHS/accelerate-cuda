@@ -315,7 +315,7 @@ codegenOpenExp dev aenv = cvtE
         Var ix                  -> return $ prj ix env
         PrimConst c             -> return $ [codegenPrimConst c]
         Const c                 -> return $ codegenConst (Sugar.eltType (undefined::t)) c
-        PrimApp f arg           -> return . codegenPrim f <$> cvtE arg env
+        PrimApp f x             -> primApp f x env
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
@@ -359,6 +359,29 @@ codegenOpenExp dev aenv = cvtE
       bnd'      <- cvtE bnd env >>= pushEnv bnd
       body'     <- cvtE body (env `Push` bnd')
       return body'
+
+    -- Primitive function application. For logical operations, we evaluate each
+    -- argument to the operation as a statement expression, which is necessary
+    -- to ensure proper short-circuit behaviour for the term as well as all of
+    -- its dependencies.
+    --
+    primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
+    primApp f x env
+      | Tuple (NilTup `SnocTup` a `SnocTup` b) <- x
+      = do a' <- cvtE' a env
+           b' <- cvtE' b env
+           return [codegenPrim f [a', b']]
+
+      | otherwise
+      = do x' <- cvtE' x env
+           return [codegenPrim f [x']]
+      where
+        cvtE' :: DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
+        cvtE' e env = do
+          (b,r) <- clean $ single "primApp" <$> cvtE e env
+          if null b
+             then return r
+             else return [cexp| ({ $items:b; $exp:r; }) |]
 
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
@@ -447,15 +470,8 @@ codegenOpenExp dev aenv = cvtE
            -- However, we do need to generate the function with a clean set of
            -- local bindings, and extract and new declarations afterwards.
            --
-           let cvtF :: forall env t. Elt t => DelayedOpenExp env aenv t -> Val env -> Gen ([C.BlockItem], [C.Exp])
-               cvtF e env = do
-                 old  <- state (\s -> ( localBindings s, s { localBindings = []  } ))
-                 e'   <- cvtE e env
-                 env' <- state (\s -> ( localBindings s, s { localBindings = old } ))
-                 return (reverse env', e')
-
-           p'   <- cvtF p (env `Push` acc)
-           f'   <- cvtF f (env `Push` acc)
+           p'   <- clean $ cvtE p (env `Push` acc)
+           f'   <- clean $ cvtE f (env `Push` acc)
 
            -- Piece it all together. Note that declarations are added to the
            -- localBindings in reverse order. Also, we have to be careful not
@@ -628,6 +644,16 @@ codegenOpenExp dev aenv = cvtE
         args    <- cvtE x env
         mapM_ use args
         return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
+
+    -- Execute a command in a new environment. The old environment is replaced
+    -- on exit, and the result and any new bindings generated are returned.
+    --
+    clean :: Gen a -> Gen ([C.BlockItem], a)
+    clean this = do
+      env  <- state (\s -> ( localBindings s, s { localBindings = []  } ))
+      r    <- this
+      env' <- state (\s -> ( localBindings s, s { localBindings = env } ))
+      return (reverse env', r)
 
     -- Some terms demand we extract only singly typed expressions
     --
