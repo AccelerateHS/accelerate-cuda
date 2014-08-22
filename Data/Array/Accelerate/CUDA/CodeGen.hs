@@ -473,9 +473,9 @@ codegenOpenExp dev aenv = cvtE
            var_ok       <- lift fresh
            var_tmp      <- lift fresh
 
-           let (tn_acc, acc, _)         = locals ('l':var_acc) (undefined :: a)
-               (tn_ok,  ok,  _)         = locals ('l':var_ok)  (undefined :: Bool)
-               (_    ,  tmp, decltemp)  = locals ('l':var_tmp) (undefined :: a)
+           let (_, acc, decl_acc) = locals ('l':var_acc) (undefined :: a)
+               (_, ok,  decl_ok)  = locals ('l':var_ok)  (undefined :: Bool)
+               (tmp, _, _)        = locals ('l':var_tmp) (undefined :: a)
 
            -- Generate code for the predicate and body expressions, with the new
            -- names baked in directly. We can't use 'codegenFun1', because
@@ -488,19 +488,20 @@ codegenOpenExp dev aenv = cvtE
            f'   <- clean $ cvtE f (env `Push` acc)
 
            -- Piece it all together. Note that declarations are added to the
-           -- localBindings in reverse order. Also, we have to be careful not
-           -- to assign the results of f' direction into acc. Why? Some of the
-           -- variables in acc are referenced in f'. We risk overwriting values
-           -- that are still needed to computer f'.
+           -- localBindings in reverse order. Also, we have to be careful not to
+           -- assign the results of f' direction into acc. Why? If some of the
+           -- variables in acc are referenced in f', then we risk overwriting
+           -- values that are still needed to computer f'.
+           --
            let loop = [citem| while ( $exp:(single "while" ok) ) {
-                                  $decls:decltemp
                                   $items:(tmp .=. f')
                                   $items:(acc .=. tmp)
                                   $items:(ok  .=. p')
                               } |]
-                    : reverse (ok .=. p')
-                   ++ map     (\(t,n)   -> [citem| $ty:t $id:n ; |])      tn_ok
-                   ++ zipWith (\(t,n) v -> [citem| $ty:t $id:n = $v ; |]) tn_acc x'
+                    : reverse (ok  .=. p')
+                   ++ reverse (acc .=. x')
+                   ++ map C.BlockDecl decl_ok
+                   ++ map C.BlockDecl decl_acc
 
            modify (\s -> s { localBindings = loop ++ localBindings s })
            return acc
