@@ -420,19 +420,37 @@ codegenOpenExp dev aenv = cvtE
     sizeTupleType (SingleTuple _) = 1
     sizeTupleType (PairTuple a b) = sizeTupleType a + sizeTupleType b
 
-    -- Scalar conditionals. To keep the return type as an expression list we use
-    -- the ternery C condition operator (?:). For tuples this is not
-    -- particularly good, so the least we can do is make sure the predicate
-    -- result is evaluated only once and bound to a local variable.
+    -- Scalar conditionals insert a standard if/else statement block. We don't
+    -- use the ternary expression operator (?:) because this forces all
+    -- auxiliary bindings for both the true and false branches to always be
+    -- evaluated before the correct result is chosen.
     --
-    cond :: DelayedOpenExp env aenv Bool
+    cond :: forall env t. Elt t
+         => DelayedOpenExp env aenv Bool
          -> DelayedOpenExp env aenv t
          -> DelayedOpenExp env aenv t
          -> Val env -> Gen [C.Exp]
-    cond p t e env = do
+    cond p t f env = do
       p'        <- cvtE p env
       ok        <- single "Cond" <$> pushEnv p p'
-      zipWith (\a b -> [cexp| $exp:ok ? $exp:a : $exp:b |]) <$> cvtE t env <*> cvtE e env
+      ifTrue    <- clean $ cvtE t env
+      ifFalse   <- clean $ cvtE f env
+
+      -- Generate names for the result variables, which will be initialised
+      -- within each branch of the conditional. Twiddle the names a bit to
+      -- avoid clobbering.
+      var_r     <- lift fresh
+      let (_, r, declr) = locals ('l':var_r) (undefined :: t)
+          branch        = [citem| if ( $exp:ok ) {
+                                      $items:(r .=. ifTrue)
+                                  }
+                                  else {
+                                      $items:(r .=. ifFalse)
+                                  } |]
+                        : map C.BlockDecl declr
+
+      modify (\s -> s { localBindings = branch ++ localBindings s })
+      return r
 
     -- Value recursion
     --
