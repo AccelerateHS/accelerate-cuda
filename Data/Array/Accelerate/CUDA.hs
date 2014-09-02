@@ -4,8 +4,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2008..2009] Sean Lee
+--               [2009..2014] Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -120,9 +121,7 @@
 --    'Data.Word.Word32'.
 --
 --  * If the permutation function to 'Data.Array.Accelerate.permute' resolves to
---    non-unique indices, the combination function requires compute-1.1 to
---    combine 32-bit types, or compute-1.2 for 64-bit types. Tuple components
---    are resolved separately.
+--    non-unique indices, the combination function requires compute-1.1.
 --
 --
 -- [/Debugging options:/]

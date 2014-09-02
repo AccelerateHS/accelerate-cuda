@@ -14,8 +14,8 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2009..2014] Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -373,11 +373,18 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- Forward permutation
     --
-    permuteOp :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
+    permuteOp :: forall sh sh' e. (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> CIO (Array sh' e)
     permuteOp !sh !dfs = do
-      out <- allocateArray (shape dfs)
-      copyArray dfs out
-      execute kernel gamma aenv (size sh) out stream
+      let sh'   = shape dfs
+          n'    = size sh'
+
+      out               <- allocateArray sh'
+      Array _ locks     <- allocateArray sh'            :: CIO (Array sh' Int32)
+      ((), d_locks)     <- devicePtrsOfArrayData locks  :: CIO ((), CUDA.DevicePtr Int32)
+
+      liftIO $ CUDA.memsetAsync d_locks n' 0 (Just stream)      -- TLM: overlap these two operations?
+      copyArrayAsync dfs out (Just stream)
+      execute kernel gamma aenv (size sh) (out, d_locks) stream
       return out
 
     -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the

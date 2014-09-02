@@ -6,8 +6,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2009..2014] Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -184,6 +184,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
     )
     {
         $decls:smem
+        $decls:declt
         $decls:declx
         $decls:decly
         $decls:declz
@@ -223,7 +224,8 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
              * Carry in the result from the privous segment
              */
             if ( $exp:carryIn ) {
-                $items:(x .=. combine z x)
+                $items:(t .=. combine z x)
+                $items:(x .=. t)
             }
 
             /*
@@ -233,7 +235,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $items:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y t sdata Nothing)
 
             /*
              * Exclusive scans write the result of the previous thread to global
@@ -274,6 +276,7 @@ mkScan dir dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CU
     (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
     (argSum, _, totalSum)       = writeArray "Sum" (undefined :: Vector e)
     (argBlk, _, blkSum)         = writeArray "Blk" (undefined :: Vector e)
+    (_, t, declt)               = locals "t" (undefined :: e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
     (_, z, declz)               = locals "z" (undefined :: e)
@@ -352,6 +355,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
     )
     {
         $decls:smem
+        $decls:declt
         $decls:declx
         $decls:decly
         $items:(sh .=. shIn)
@@ -377,7 +381,8 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             $items:(x .=. get ix)
 
             if ( threadIdx.x == 0 && carryIn ) {
-                $items:(x .=. combine y x)
+                $items:(t .=. combine y x)
+                $items:(x .=. t)
             }
 
             /*
@@ -386,7 +391,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
             $items:(sdata "threadIdx.x" .=. x)
             __syncthreads();
 
-            $items:(scanBlock dev fun x y sdata Nothing)
+            $items:(scanBlock dev fun x y t sdata Nothing)
 
             /*
              * Store the final result of the block to be carried in
@@ -412,6 +417,7 @@ mkScanUp1 dir dev aenv fun@(CUFun2 _ _ combine) (CUDelayed (CUExp shIn) _ (CUFun
     (argOut, _, setOut)         = writeArray "Out" (undefined :: Vector e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
+    (_, t, declt)               = locals "t" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: DIM1)
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
     ix                          = [cvar "ix"]
@@ -444,13 +450,13 @@ scanBlock
     :: forall aenv e. Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]
     -> (Name -> [C.Exp])
     -> Maybe C.Exp
     -> [C.BlockItem]
-scanBlock dev f x0 x1 sdata mlim
+scanBlock dev f x0 x1 x2 sdata mlim
   | shflOK dev (undefined :: e) = error "shfl-scan"
-  | otherwise                   = scanBlockTree dev f x0 x1 sdata mlim
+  | otherwise                   = scanBlockTree dev f x0 x1 x2 sdata mlim
 
 
 -- Use a thread block to scan values in shared memory. Each thread must have
@@ -462,11 +468,11 @@ scanBlockTree
     :: forall aenv e. Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]    -- input variables x0 and x1, plus a temporary to store the intermediate value
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> Maybe C.Exp                      -- partially full block bounds check?
     -> [C.BlockItem]
-scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
+scanBlockTree dev (CUFun2 _ _ f) x0 x1 x2 sdata mlim = map (scan . pow2) [ 0 .. maxThreads ]
   where
     pow2 :: Int -> Int
     pow2 x      = 2 ^ x
@@ -480,7 +486,8 @@ scanBlockTree dev (CUFun2 _ _ f) x0 x1 sdata mlim = map (scan . pow2) [ 0 .. max
       if ( blockDim.x > $int:n ) {
           if ( $exp:(inrange n) ) {
               $items:(x1 .=. sdata ("threadIdx.x - " ++ show n))
-              $items:(x0 .=. f x1 x0)
+              $items:(x2 .=. f x1 x0)
+              $items:(x0 .=. x2)
           }
           __syncthreads();
           $items:(sdata "threadIdx.x" .=. x0)

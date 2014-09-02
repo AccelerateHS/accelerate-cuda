@@ -7,8 +7,8 @@
 {-# LANGUAGE TypeFamilies        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Prim
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2009..2014] Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -21,9 +21,8 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   DevicePtrs, HostPtrs,
 
   mallocArray, indexArray,
-  useArray,  useArrayAsync, useArraySlice,
-  useDevicePtrs,
-  copyArray, copyArrayPeer, copyArrayPeerAsync,
+  useArray,  useArrayAsync, useArraySlice, useDevicePtrs,
+  copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
@@ -101,7 +100,7 @@ primArrayEltAs(CFloat,  Float)
 primArrayEltAs(CDouble, Double)
 
 primArrayElt(Char)
-primArrayEltAs(CChar,  Int8)
+primArrayEltAs(CChar,  HTYPE_CCHAR)
 primArrayEltAs(CSChar, Int8)
 primArrayEltAs(CUChar, Word8)
 
@@ -290,9 +289,23 @@ copyArray
 copyArray !ctx !mt !from !to !n = do
   src <- devicePtrsOfArrayData ctx mt from
   dst <- devicePtrsOfArrayData ctx mt to
-  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
-    CUDA.copyArrayAsync n src dst
+  transfer "copyArray" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArray n src dst
 
+copyArrayAsync
+    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    => Context
+    -> MemoryTable
+    -> ArrayData e              -- source array
+    -> ArrayData e              -- destination array
+    -> Int                      -- number of array elements
+    -> Maybe CUDA.Stream
+    -> IO ()
+copyArrayAsync !ctx !mt !from !to !n !mst = do
+  src <- devicePtrsOfArrayData ctx mt from
+  dst <- devicePtrsOfArrayData ctx mt to
+  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
+    CUDA.copyArrayAsync n src dst mst
 
 -- Copy data between two device arrays that exist in different contexts and/or
 -- devices.
@@ -472,4 +485,3 @@ transfer name bytes action
                                      ++ D.elapsed gpuTime cpuTime
     in
     D.timed D.dump_gc msg Nothing action
-

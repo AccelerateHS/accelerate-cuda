@@ -2,7 +2,7 @@
 {-# LANGUAGE CPP          #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
--- Copyright   : [2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2013..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>

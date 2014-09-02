@@ -6,8 +6,8 @@
 {-# LANGUAGE TypeOperators       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Reduction
--- Copyright   : [2008..2010] Manuel M T Chakravarty, Gabriele Keller, Sean Lee
---               [2009..2012] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
+--               [2009..2014] Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
@@ -125,6 +125,7 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
         $decls:smem
         $decls:declx
         $decls:decly
+        $decls:declz
 
         $items:(sh .=. shIn)
 
@@ -159,7 +160,8 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
             for ( ix += gridSize; ix < shapeSize; ix += gridSize )
             {
                 $items:(x .=. get ix)
-                $items:(y .=. combine x y)
+                $items:(z .=. combine y x)
+                $items:(y .=. z)
             }
         }
 
@@ -170,7 +172,7 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
         $items:(sdata "threadIdx.x" .=. y)
 
         ix = min(shapeSize - blockIdx.x * blockDim.x, blockDim.x);
-        $items:(reduceBlock dev fun x y sdata (cvar "ix"))
+        $items:(reduceBlock dev fun x y z sdata (cvar "ix"))
 
         /*
          * Write the results of this block back to global memory. If we are the last
@@ -192,6 +194,7 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
 
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
+    (_, z, declz)               = locals "z" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: sh :. Int)
     ix                          = [cvar "ix"]
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
@@ -201,7 +204,8 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
       if ( shapeSize > 0 ) {
           if ( gridDim.x == 1 ) {
               $items:(x .=. seed)
-              $items:(y .=. combine x y)
+              $items:(z .=. combine y x)
+              $items:(y .=. z)
           }
           $items:(setOut "blockIdx.x" .=. y)
       }
@@ -239,6 +243,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
         $decls:smem
         $decls:declx
         $decls:decly
+        $decls:declz
 
         $items:(sh .=. shIn)
 
@@ -291,7 +296,8 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
                     $items:(x .=. get [cvar "ix + blockDim.x"])
 
                     if ( ix >= start ) {
-                        $items:(y .=. combine x y)
+                        $items:(z .=. combine y x)
+                        $items:(y .=. z)
                     }
                     else {
                         $items:(y .=. x)
@@ -304,7 +310,8 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
                 for ( ix += 2 * blockDim.x; ix < end; ix += blockDim.x )
                 {
                     $items:(x .=. get ix)
-                    $items:(y .=. combine x y)
+                    $items:(z .=. combine y x)
+                    $items:(y .=. z)
                 }
             }
             else
@@ -317,7 +324,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
              * cooperatively reduces this to a single value.
              */
             $items:(sdata "threadIdx.x" .=. y)
-            $items:(reduceBlock dev fun x y sdata (cvar "n"))
+            $items:(reduceBlock dev fun x y z sdata (cvar "n"))
 
             /*
              * Finally, the first thread writes the result for this segment. For
@@ -336,6 +343,7 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
     (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sh e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
+    (_, z, declz)               = locals "z" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: sh :. Int)
     ix                          = [cvar "ix"]
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] Nothing
@@ -355,7 +363,8 @@ mkFoldDim dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp shIn) _ (CUF
     --
     exclusive_finish (CUExp seed)
       = concat [ x .=. seed
-               , y .=. combine x y ]
+               , z .=. combine y x
+               , y .=. z ]
 
 
 -- Segmented reduction along the innermost dimension of an array. Performs one
@@ -451,6 +460,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
         $decls:smem
         $decls:declx
         $decls:decly
+        $decls:declz
         $items:(sh .=. shIn)
 
         /*
@@ -499,7 +509,8 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
                     $items:(x .=. get [cvar "ix + warpSize"])
 
                     if ( ix >= start ) {
-                        $items:(y .=. combine x y)
+                        $items:(z .=. combine y x)
+                        $items:(y .=. z)
                     }
                     else {
                         $items:(y .=. x)
@@ -512,7 +523,8 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
                 for ( ix += 2 * warpSize; ix < end; ix += warpSize )
                 {
                     $items:(x .=. get ix)
-                    $items:(y .=. combine x y)
+                    $items:(z .=. combine y x)
+                    $items:(y .=. z)
                 }
             }
             else if ( start + thread_lane < end )
@@ -525,7 +537,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
              */
             ix = min(num_elements, warpSize);
             $items:(sdata "threadIdx.x" .=. y)
-            $items:(reduceWarp dev fun x y sdata (cvar "ix") (cvar "thread_lane"))
+            $items:(reduceWarp dev fun x y z sdata (cvar "ix") (cvar "thread_lane"))
 
             /*
              * Finally, the first thread writes the result for this segment
@@ -544,6 +556,7 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
     (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array (sh :. Int) e)
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)
+    (_, z, declz)               = locals "z" (undefined :: e)
     (sh, _, _)                  = locals "sh" (undefined :: sh :. Int)
     (smem, sdata)               = shared (undefined :: e) "sdata" [cexp| blockDim.x |] (Just $ [cexp| &s_ptrs[vectors_per_block][2] |])
     --
@@ -554,7 +567,8 @@ mkFoldSeg' dev aenv fun@(CUFun2 _ _ combine) mseed
     exclusive_finish (CUExp seed)
       = [[citem| if ( num_elements > 0 ) {
                      $items:(x .=. seed)
-                     $items:(y .=. combine x y)
+                     $items:(z .=. combine y x)
+                     $items:(y .=. z)
                  } else {
                      $items:(y .=. seed)
                  } |]]
@@ -572,28 +586,28 @@ reduceWarp
     :: forall aenv e. Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]    -- input variables x0 and x1, plus a temporary to store the intermediate result
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> C.Exp                            -- number of elements
     -> C.Exp                            -- thread identifier: usually lane or thread ID
     -> [C.BlockItem]
-reduceWarp dev fun x0 x1 sdata n tid
+reduceWarp dev fun x0 x1 x2 sdata n tid
   | shflOK dev (undefined :: e) = return
-                                $ reduceWarpShfl dev fun x0 x1       n tid
-  | otherwise                   = reduceWarpTree dev fun x0 x1 sdata n tid
+                                $ reduceWarpShfl dev fun x0 x1          n tid
+  | otherwise                   = reduceWarpTree dev fun x0 x1 x2 sdata n tid
 
 
 reduceBlock
     :: forall aenv e. Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]    -- input variables x0 and x1, plus a temporary to store the intermediate result
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> C.Exp                            -- number of elements
     -> [C.BlockItem]
-reduceBlock dev fun x0 x1 sdata n
-  | shflOK dev (undefined :: e) = reduceBlockShfl dev fun x0 x1 sdata n
-  | otherwise                   = reduceBlockTree dev fun x0 x1 sdata n
+reduceBlock dev fun x0 x1 x2 sdata n
+  | shflOK dev (undefined :: e) = reduceBlockShfl dev fun x0 x1    sdata n
+  | otherwise                   = reduceBlockTree dev fun x0 x1 x2 sdata n
 
 
 -- Tree reduction
@@ -603,12 +617,12 @@ reduceWarpTree
     :: Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]    -- input variables x0 and x1, plus a temporary to store the intermediate result
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> C.Exp                            -- number of elements
     -> C.Exp                            -- thread identifier: usually lane or thread ID
     -> [C.BlockItem]
-reduceWarpTree dev (CUFun2 _ _ f) x0 x1 sdata n tid
+reduceWarpTree dev (CUFun2 _ _ f) x0 x1 x2 sdata n tid
   = map (reduce . pow2) [v, v-1 .. 0]
   where
     v = floor (logBase 2 (fromIntegral $ warpSize dev :: Double))
@@ -620,12 +634,14 @@ reduceWarpTree dev (CUFun2 _ _ f) x0 x1 sdata n tid
     reduce 0
       = [citem| if ( $exp:tid < $exp:n ) {
                     $items:(x0 .=. sdata "threadIdx.x + 1")
-                    $items:(x1 .=. f x1 x0)
+                    $items:(x2 .=. f x1 x0)
+                    $items:(x1 .=. x2)
                 } |]
     reduce i
       = [citem| if ( $exp:tid + $int:i < $exp:n ) {
                     $items:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-                    $items:(x1 .=. f x1 x0)
+                    $items:(x2 .=. f x1 x0)
+                    $items:(x1 .=. x2)
                     $items:(sdata "threadIdx.x" .=. x1)
                 } |]
 
@@ -633,11 +649,11 @@ reduceBlockTree
     :: Elt e
     => DeviceProperties
     -> CUFun2 aenv (e -> e -> e)
-    -> [C.Exp] -> [C.Exp]               -- temporary variables x0 and x1
+    -> [C.Exp] -> [C.Exp] -> [C.Exp]    -- input variables x0 and x1, plus a temporary to store the intermediate result
     -> (Name -> [C.Exp])                -- index elements from shared memory
     -> C.Exp                            -- number of elements
     -> [C.BlockItem]
-reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
+reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 x2 sdata n
   = flip (foldr1 (.)) []
   $ map (reduce . pow2) [u-1, u-2 .. v]
 
@@ -664,7 +680,8 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
       = [citem| __syncthreads(); |]
       : [citem| if ( threadIdx.x + $int:i < $exp:n ) {
                     $items:(x0 .=. sdata ("threadIdx.x + " ++ show i))
-                    $items:(x1 .=. f x1 x0)
+                    $items:(x2 .=. f x1 x0)
+                    $items:(x1 .=. x2)
                 } |]
       : [citem| __syncthreads(); |]
       : (sdata "threadIdx.x" .=. x1)
@@ -677,7 +694,7 @@ reduceBlockTree dev fun@(CUFun2 _ _ f) x0 x1 sdata n
       | otherwise
       = [citem| __syncthreads(); |]
       : [citem| if ( threadIdx.x < $int:(warpSize dev) ) {
-                    $items:(reduceWarpTree dev fun x0 x1 sdata n (cvar "threadIdx.x"))
+                    $items:(reduceWarpTree dev fun x0 x1 x2 sdata n (cvar "threadIdx.x"))
                 } |]
       : rest
 

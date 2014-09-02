@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Async
--- Copyright   : [2009..2013] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
+-- Copyright   : [2009..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
 -- License     : BSD3
 --
 -- Maintainer  : Trevor L. McDonell <tmcdonell@cse.unsw.edu.au>
