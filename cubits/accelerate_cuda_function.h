@@ -49,25 +49,25 @@ static __inline__ __device__ T idiv(const T x, const T y)
 }
 
 template <>
-static __inline__ __device__ Word8 idiv(const Word8 x, const Word8 y)
+__inline__ __device__ Word8 idiv(const Word8 x, const Word8 y)
 {
     return x / y;
 }
 
 template <>
-static __inline__ __device__ Word16 idiv(const Word16 x, const Word16 y)
+__inline__ __device__ Word16 idiv(const Word16 x, const Word16 y)
 {
     return x / y;
 }
 
 template <>
-static __inline__ __device__ Word32 idiv(const Word32 x, const Word32 y)
+__inline__ __device__ Word32 idiv(const Word32 x, const Word32 y)
 {
     return x / y;
 }
 
 template <>
-static __inline__ __device__ Word64 idiv(const Word64 x, const Word64 y)
+__inline__ __device__ Word64 idiv(const Word64 x, const Word64 y)
 {
     return x / y;
 }
@@ -84,25 +84,25 @@ static __inline__ __device__ T mod(const T x, const T y)
 }
 
 template <>
-static __inline__ __device__ Word8 mod(const Word8 x, const Word8 y)
+__inline__ __device__ Word8 mod(const Word8 x, const Word8 y)
 {
     return x % y;
 }
 
 template <>
-static __inline__ __device__ Word16 mod(const Word16 x, const Word16 y)
+__inline__ __device__ Word16 mod(const Word16 x, const Word16 y)
 {
     return x % y;
 }
 
 template <>
-static __inline__ __device__ Word32 mod(const Word32 x, const Word32 y)
+__inline__ __device__ Word32 mod(const Word32 x, const Word32 y)
 {
     return x % y;
 }
 
 template <>
-static __inline__ __device__ Word64 mod(const Word64 x, const Word64 y)
+__inline__ __device__ Word64 mod(const Word64 x, const Word64 y)
 {
     return x % y;
 }
@@ -122,13 +122,13 @@ static __inline__ __device__ Word32 reinterpret32(const T x)
 }
 
 template <>
-static __inline__ __device__ Word32 reinterpret32(const Word32 x)
+__inline__ __device__ Word32 reinterpret32(const Word32 x)
 {
     return x;
 }
 
 template <>
-static __inline__ __device__ Word32 reinterpret32(const float x)
+__inline__ __device__ Word32 reinterpret32(const float x)
 {
     return __float_as_int(x);
 }
@@ -143,14 +143,14 @@ static __inline__ __device__ Word64 reinterpret64(const T x)
 }
 
 template <>
-static __inline__ __device__ Word64 reinterpret64(const Word64 x)
+__inline__ __device__ Word64 reinterpret64(const Word64 x)
 {
     return x;
 }
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 130
 template <>
-static __inline__ __device__ Word64 reinterpret64(const double x)
+__inline__ __device__ Word64 reinterpret64(const double x)
 {
     return __double_as_longlong(x);
 }
@@ -171,13 +171,13 @@ static __inline__ __device__ T atomicCAS32(T* address, T compare, T val)
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 110
 template <>
-static __inline__ __device__ Int32 atomicCAS32(Int32* address, Int32 compare, Int32 val)
+__inline__ __device__ Int32 atomicCAS32(Int32* address, Int32 compare, Int32 val)
 {
     return atomicCAS(address, compare, val);
 }
 
 template <>
-static __inline__ __device__ Word32 atomicCAS32(Word32* address, Word32 compare, Word32 val)
+__inline__ __device__ Word32 atomicCAS32(Word32* address, Word32 compare, Word32 val)
 {
     return atomicCAS(address, compare, val);
 }
@@ -194,7 +194,7 @@ static __inline__ __device__ T atomicCAS64(T* address, T compare, T val)
 }
 
 template <>
-static __inline__ __device__ Word64 atomicCAS64(Word64* address, Word64 compare, Word64 val)
+__inline__ __device__ Word64 atomicCAS64(Word64* address, Word64 compare, Word64 val)
 {
     return atomicCAS(address, compare, val);
 }
@@ -217,13 +217,13 @@ static __inline__ __device__ T shfl_up32(T var, unsigned int delta, int width=wa
 }
 
 template <>
-static __inline__ __device__ int shfl_up32(int var, unsigned int delta, int width)
+__inline__ __device__ int shfl_up32(int var, unsigned int delta, int width)
 {
     return __shfl_up(var, delta, width);
 }
 
 template <>
-static __inline__ __device__ float shfl_up32(float var, unsigned int delta, int width)
+__inline__ __device__ float shfl_up32(float var, unsigned int delta, int width)
 {
     return __shfl_up(var, delta, width);
 }
@@ -254,13 +254,13 @@ static __inline__ __device__ T shfl_xor32(T var, int laneMask, int width=warpSiz
 }
 
 template <>
-static __inline__ __device__ int shfl_xor32(int var, int laneMask, int width)
+__inline__ __device__ int shfl_xor32(int var, int laneMask, int width)
 {
     return __shfl_xor(var, laneMask, width);
 }
 
 template <>
-static __inline__ __device__ float shfl_xor32(float var, int laneMask, int width)
+__inline__ __device__ float shfl_xor32(float var, int laneMask, int width)
 {
     return __shfl_xor(var, laneMask, width);
 }
