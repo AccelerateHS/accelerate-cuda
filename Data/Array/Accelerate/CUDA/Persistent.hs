@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Persistent
@@ -22,6 +23,7 @@ module Data.Array.Accelerate.CUDA.Persistent (
 ) where
 
 -- friends
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
@@ -46,8 +48,9 @@ import Data.Hashable
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
 import Data.ByteString.Internal                         ( w2c )
-import qualified Data.ByteString                        as B
-import qualified Data.ByteString.Lazy                   as L
+import qualified Data.ByteString                        as BS
+import qualified Data.ByteString.Lazy                   as BL
+import qualified Data.ByteString.Lazy.Internal          as BL
 import qualified Data.HashTable.IO                      as HT
 
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -111,7 +114,7 @@ lookup context (KT !kt_ref !pt_ref) !key = withMVar kt_ref $ \kt -> do
       Just ()   -> do
         message "found/persistent"
         cubin   <- (</>) <$> cacheDirectory <*> pure (cacheFilePath key)
-        bin     <- B.readFile cubin
+        bin     <- BS.readFile cubin
         !mdl    <- CUDA.loadData bin
         let obj  = KernelObject bin (FL.singleton (deviceContext context) mdl)
         addFinalizer mdl (module_finalizer (weakContext context) key mdl)
@@ -217,7 +220,7 @@ cacheDirectory = do
 --
 cacheFilePath :: KernelKey -> FilePath
 cacheFilePath (cap, key) =
-  show cap </> zEncodeString (B.foldl (flip (showLitChar . w2c)) [] key)
+  show cap </> zEncodeString (BS.foldl (flip (showLitChar . w2c)) [] key)
 
 -- stolen from compiler/utils/Encoding.hs
 --
@@ -306,13 +309,28 @@ restore !db = do
   pt     <- case exists of
     False       -> encodeFile db (0::Int) >> HT.new
     True        -> do
-      store         <- L.readFile db
-      let (n,rest,_) = runGetState get store 0
+      store         <- BL.readFile db
+
+      -- Just read the start of the input to extract the number of entries
+      -- in the persistent kernel table.
+      let (n, rest) = setup (runGetIncremental get) store
+
+          setup (Done s _ r)   lbs = (r, BL.Chunk s lbs)
+          setup (Partial k)    lbs = setup (k (takeHeadChunk lbs)) (dropHeadChunk lbs)
+          setup (Fail _ p msg) _   = $internalError "restore" $ show p ++ ": " ++ msg
+
+          takeHeadChunk (BL.Chunk h _) = Just h
+          takeHeadChunk _              = Nothing
+
+          dropHeadChunk (BL.Chunk _ t) = t
+          dropHeadChunk _              = BL.empty
+
+      -- Allocate the persistent hash table and populate it with entries decoded
+      -- from the index file
       pt            <- HT.newSized n
-      --
       let go []      = return ()
           go (!k:xs) = HT.insert pt k () >> go xs
-      --
+
       message $ "persist/restore: " ++ shows n " entries"
       go (runGet (getMany n) rest)
       evaluate pt
@@ -344,14 +362,14 @@ persist (KT !_ !pt_ref) !cubin !key = withMVar pt_ref $ \_ -> do
   withBinaryFile db ReadWriteMode $ \h -> do
     -- The file opens with the cursor at the beginning of the file
     --
-    n <- runGet (get :: Get Int) `fmap` L.hGet h 8
+    n <- runGet (get :: Get Int) `fmap` BL.hGet h 8
     hSeek h AbsoluteSeek 0
-    L.hPut h (encode (n+1))
+    BL.hPut h (encode (n+1))
 
     -- Append the new entry to the end of file
     --
     hSeek h SeekFromEnd 0
-    L.hPut h (encode key)
+    BL.hPut h (encode key)
 
 
 -- Debug
