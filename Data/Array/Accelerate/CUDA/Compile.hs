@@ -58,7 +58,6 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Time
 import System.Process
 import System.Mem.Weak
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
@@ -72,6 +71,9 @@ import qualified Foreign.CUDA.Analysis                          as CUDA
 
 import GHC.Conc                                                 ( getNumProcessors )
 
+#ifdef ACCELERATE_DEBUG
+import System.Time
+#endif
 #ifdef VERSION_unix
 import System.Posix.Process
 #else
