@@ -211,7 +211,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Slice _ _ _               -> fusionError
       ZipWith _ _ _             -> fusionError
 
-      Sequence _                -> $internalError "executeOpenAcc" "uncompiled loop"
+      Collect  _                -> $internalError "executeOpenAcc" "uncompiled sequence computation"
 
   where
     fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
@@ -238,7 +238,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecSequence{}    = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSeq{}     = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
@@ -427,21 +427,21 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       | otherwise
       = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
-executeOpenAcc (ExecSequence l) aenv stream = executeSequence l aenv stream
+executeOpenAcc (ExecSeq l) aenv stream = executeSequence l aenv stream
 
-executeSequence :: forall aenv arrs . ExecSequence aenv () arrs -> Aval aenv -> Stream -> CIO arrs
+executeSequence :: forall aenv arrs . ExecSeq aenv () arrs -> Aval aenv -> Stream -> CIO arrs
 executeSequence topSequence aenv stream
   | degenerate topSequence = initSequence topSequence >>=         returnOut
   | otherwise          = initSequence topSequence >> loop >> returnOut topSequence
 
   where
-    degenerate :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> Bool
+    degenerate :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> Bool
     degenerate l =
       case l of
         ExecP _ _ -> False
         ExecC _   -> True
 
-    initSequence :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO (ExecSequence aenv lenv arrs')
+    initSequence :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> CIO (ExecSeq aenv lenv arrs')
     initSequence l =
       case l of
         ExecP p l' -> ExecP <$> initP p <*> initSequence l'
@@ -489,17 +489,17 @@ executeSequence topSequence aenv stream
         initCT NilAtup        = return NilAtup
         initCT (SnocAtup t c) = SnocAtup <$> initCT t <*> initC c
 
-    loop :: CIO (ExecSequence aenv () arrs)
+    loop :: CIO (ExecSeq aenv () arrs)
     loop = loop' topSequence
       where
-        loop' :: ExecSequence aenv () arrs -> CIO (ExecSequence aenv () arrs)
+        loop' :: ExecSeq aenv () arrs -> CIO (ExecSeq aenv () arrs)
         loop' s = do
            ms <- runMaybeT (go s Empty)
            case ms of
              Nothing -> return s
              Just s' -> loop' s'
 
-    go :: forall lenv arrs'. ExecSequence aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecSequence aenv lenv arrs')
+    go :: forall lenv arrs'. ExecSeq aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecSeq aenv lenv arrs')
     go !l !lenv =
       case l of
         ExecP p l' -> do
@@ -563,7 +563,7 @@ executeSequence topSequence aenv stream
         consumeT NilAtup        = return NilAtup
         consumeT (SnocAtup t c) = SnocAtup <$> consumeT t <*> consume c
 
-    returnOut :: forall lenv arrs' . ExecSequence aenv lenv arrs' -> CIO arrs'
+    returnOut :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> CIO arrs'
     returnOut !l =
       case l of
         ExecP _ l' -> returnOut l'
@@ -602,7 +602,7 @@ executeSequence topSequence aenv stream
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecSequence{}    = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSeq{}    = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = executeExp sh aenv stream
 
     travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b

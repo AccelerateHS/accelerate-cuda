@@ -164,7 +164,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Sequence l              -> ExecSequence <$> compileSeq l
+        Collect l               -> ExecSeq <$> compileSeq l
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -222,7 +222,7 @@ compileOpenAcc = traverseAcc
             where
               err = $internalError "compile" "Executing pure version of a CUDA foreign function"
 
-        compileSeq :: forall lenv arrs' . PreOpenSequence DelayedOpenAcc aenv lenv arrs' -> CIO (ExecSequence aenv lenv arrs')
+        compileSeq :: forall lenv arrs' . PreOpenSeq DelayedOpenAcc aenv lenv arrs' -> CIO (ExecSeq aenv lenv arrs')
         compileSeq l =
           case l of
             Producer   p l' -> ExecP <$> compileP p <*> compileSeq l'
