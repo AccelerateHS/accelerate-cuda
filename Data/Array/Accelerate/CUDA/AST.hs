@@ -21,7 +21,7 @@ module Data.Array.Accelerate.CUDA.AST (
   AccKernel(..), Free, Gamma(..), Idx_(..),
   ExecAcc, ExecAfun, ExecOpenAfun, ExecOpenAcc(..),
   ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
-  ExecSeq(..), ExecP(..), ExecC(..),
+  ExecSeq(..), ExecOpenSeq(..), ExecP(..), ExecC(..),
   freevar, makeEnvMap,
 
 ) where
@@ -30,8 +30,9 @@ module Data.Array.Accelerate.CUDA.AST (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Tuple
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, IsAtuple )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, IsAtuple, Scalar )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
+import Data.Array.Accelerate.Trafo                      ( Extend )
 import qualified Data.Array.Accelerate.CUDA.FullList    as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -126,7 +127,7 @@ data ExecOpenAcc aenv a where
             -> ExecOpenAcc aenv (Array sh e)
 
   ExecSeq :: Arrays arrs
-           => ExecSeq aenv () arrs
+           => ExecOpenSeq aenv () arrs
            -> ExecOpenAcc aenv arrs
 
 
@@ -151,10 +152,6 @@ instance Show (ExecOpenAcc aenv a) where
 
 instance Show (ExecAfun a) where
   show = render . prettyExecAfun 0
-
-
-prettyExecSeq :: Int -> ExecSeq aenv lenv arrs -> Doc
-prettyExecSeq alvl l = text "loop" -- TODO
 
 prettyExecAfun :: Int -> ExecAfun a -> Doc
 prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
@@ -181,11 +178,15 @@ prettyExecAcc alvl wrap exec =
         Aprj{}          -> base
         _               -> ann <+> base
 
-    ExecSeq l -> prettyExecSeq alvl l
+    ExecSeq _ -> text "<SequenceComputation>"
 
-data ExecSeq aenv lenv arrs where
-  ExecP :: Arrays a   => ExecP aenv lenv a -> ExecSeq aenv (lenv, a) arrs -> ExecSeq aenv lenv  arrs
-  ExecC :: (Arrays a) =>              ExecC aenv lenv a ->                                     ExecSeq aenv lenv a
+data ExecSeq a where
+  ExecS :: Extend ExecOpenAcc () aenv -> ExecOpenSeq aenv () a -> ExecSeq a
+
+data ExecOpenSeq aenv lenv arrs where
+  ExecP :: Arrays a   => ExecP aenv lenv a -> ExecOpenSeq aenv (lenv, a) arrs -> ExecOpenSeq aenv lenv  arrs
+  ExecC :: (Arrays a) => ExecC aenv lenv a ->                                ExecOpenSeq aenv lenv a
+  ExecR ::                      Idx lenv a -> Maybe a ->                     ExecOpenSeq aenv lenv [a]
 
 data ExecP aenv lenv a where
 
@@ -211,62 +212,42 @@ data ExecP aenv lenv a where
               -> Maybe (Maybe slix, slix, sl)
               -> ExecP aenv lenv (Array sl e)
 
+  ExecStreamIn :: Arrays a
+               => [a]
+               -> ExecP aenv lenv a
+
   ExecMap :: (Arrays a, Arrays b)
           => ExecOpenAfun aenv (a -> b)
           -> Idx lenv a
           -> ExecP aenv lenv b
 
   ExecZipWith :: (Arrays a, Arrays b, Arrays c)
-          => ExecOpenAfun aenv (a -> b -> c)
-          -> Idx lenv a
-          -> Idx lenv b
-          -> ExecP aenv lenv c
+              => ExecOpenAfun aenv (a -> b -> c)
+              -> Idx lenv a
+              -> Idx lenv b
+              -> ExecP aenv lenv c
 
-  ExecScanSeq :: Arrays a
-                 => ExecOpenAfun aenv (a -> a -> a)
-                 -> ExecOpenAcc aenv a
-                 -> Idx lenv a
-                 -> Maybe a
-                 -> ExecP aenv lenv a
-
-  ExecScanSeqAct :: (Arrays a, Arrays b)
-                    => ExecOpenAfun aenv (a -> b -> a)
-                    -> ExecOpenAfun aenv (b -> b -> b)
-                    -> ExecOpenAcc aenv a
-                    -> ExecOpenAcc aenv b
-                    -> Idx lenv b
-                    -> Maybe a
-                    -> ExecP aenv lenv a
+  ExecScanSeq :: Elt a
+              => ExecFun aenv (a -> a -> a)
+              -> ExecExp aenv a
+              -> Idx lenv (Scalar a)
+              -> Maybe a
+              -> ExecP aenv lenv (Scalar a)
 
 data ExecC aenv lenv a where
-  ExecFoldSeq :: Arrays a
-                 => ExecOpenAfun aenv (a -> a -> a)
-                 -> ExecOpenAcc aenv a
-                 -> Idx lenv a
-                 -> Maybe a
-                 -> ExecC aenv lenv a
-
-  ExecFromSeq :: (Shape sh, Elt e)
-                 => AccKernel (Vector e)
-                 -> Idx lenv (Array sh e)
-                 -> [Array sh e]
-                 -> ExecC aenv lenv (Vector sh, Vector e)
-
-  ExecFoldSeqAct :: (Arrays a, Arrays b)
-                    => ExecOpenAfun aenv (a -> b -> a)
-                    -> ExecOpenAfun aenv (b -> b -> b)
-                    -> ExecOpenAcc aenv a
-                    -> ExecOpenAcc aenv b
-                    -> Idx lenv b
-                    -> Maybe a
-                    -> ExecC aenv lenv a
+  ExecFoldSeq :: Elt a
+              => ExecFun aenv (a -> a -> a)
+              -> ExecExp aenv a
+              -> Idx lenv (Scalar a)
+              -> Maybe a
+              -> ExecC aenv lenv (Scalar a)
 
   ExecFoldSeqFlatten :: (Arrays a, Shape sh, Elt e)
-                        => ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a)
-                        -> ExecOpenAcc aenv a
-                        -> Idx lenv (Array sh e)
-                        -> Maybe a
-                        -> ExecC aenv lenv a
+                     => ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a)
+                     -> ExecOpenAcc aenv a
+                     -> Idx lenv (Array sh e)
+                     -> Maybe a
+                     -> ExecC aenv lenv a
 
   ExecStuple :: (Arrays a, IsAtuple a)
              => Atuple (ExecC aenv senv) (TupleRepr a)

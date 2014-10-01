@@ -15,24 +15,18 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen.Streaming (
 
-  mkToSeq, mkFromSeq
+  mkToSeq
 
 ) where
 
 import Language.C.Quote.CUDA
-import qualified Language.C.Syntax                      as C
 import Foreign.CUDA.Analysis.Device
 
 import Data.Array.Accelerate.Error                      ( internalError )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Vector, EltRepr )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, EltRepr )
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.CodeGen.Base
-
-import Data.Monoid                                      ( mempty )
-
-streamIdParam :: C.Param
-streamIdParam = [cparam| $ty:cint $id:sid |] where sid = "_sid"
 
 mkToSeq
     :: forall slix aenv sh co sl a. (Shape sl, Shape sh, Elt a)
@@ -45,7 +39,7 @@ mkToSeq
     -> CUDelayedAcc aenv sh a
     -> CUTranslSkel aenv (Array sl a)
 mkToSeq slix dev aenv arr
-  | CUDelayed (CUExp shIn) _ (CUFun1 _ get) <- arr
+  | CUDelayed (CUExp shIn) (CUFun1 _ get) _ <- arr
   = CUTranslSkel "tostream" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
@@ -70,8 +64,7 @@ mkToSeq slix dev aenv arr
             ; ix += gridSize )
         {
             $items:(src  .=. cfromIndex shOut "ix" "tmp")
-            $items:(isrc .=. ctoIndex sh fullsrc)
-            $items:(setOut "ix" .=. get [isrc])
+            $items:(setOut "ix" .=. get fullsrc)
         }
     }
   |]
@@ -79,53 +72,13 @@ mkToSeq slix dev aenv arr
       (slIn, _, cosrc)            = cslice slix "cosrc"
       (sh, _, _)                  = locals "shIn" (undefined :: sh)
       (src, _, _)                 = locals "src" (undefined :: sl)
-      fullsrc                     = combine slix src cosrc
+      fullsrc                     = reverse (combine slix (reverse src) (reverse cosrc))
       (texIn, argIn)              = environment dev aenv
       (argOut, shOut, setOut)     = writeArray "Out" (undefined :: Array sl a)
-      ([isrc], _, _)              = locals "isrc" (undefined :: Int)
 
 combine :: SliceIndex slix sl co dim -> [a] -> [a] -> [a]
 combine SliceNil [] [] = []
 combine (SliceAll   sl) (x:xs) ys = x:(combine sl xs ys)
 combine (SliceFixed sl) xs (y:ys) = y:(combine sl xs ys)
 combine _ _ _ = $internalError "mkToSeq" "Something went wrong with the slice index."
-
-mkFromSeq
-    :: forall aenv sh a. (Shape sh, Elt a)
-    => sh
-    -> DeviceProperties
-    -> CUTranslSkel aenv (Vector a)
-mkFromSeq _ dev
-  | CUDelayed _ _ (CUFun1 _ get) <- arr
-  = CUTranslSkel "fromstream" [cunit|
-
-    $esc:("#include <accelerate_cuda.h>")
-    $edecls:texIn
-
-    extern "C" __global__ void
-    fromstream
-    (
-        $params:argIn,
-        $params:([streamIdParam]),
-        $params:argOut,
-        $params:argArr
-    )
-    {
-        const int shapeSize     = $exp:(csize shIn);
-        const int gridSize      = $exp:(gridSize dev);
-              int ix, jx;
-
-        for ( ix =  $exp:(threadIdx dev)
-            ; ix <  shapeSize
-            ; ix += gridSize )
-        {
-            jx = ix + _sid;
-            $items:(setOut "jx" .=. get [cvar "ix"])
-        }
-    }
-  |]
-  where
-    (texIn, argIn)        = environment dev mempty
-    (argOut, _, setOut)   = writeArray "Out" (undefined :: Vector a)
-    (argArr, shIn, arr)   = readArray "In" (undefined :: Array sh a)
 

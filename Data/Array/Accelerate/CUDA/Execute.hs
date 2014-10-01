@@ -26,7 +26,10 @@
 module Data.Array.Accelerate.CUDA.Execute (
 
   -- * Execute a computation under a CUDA environment
-  executeAcc, executeAfun1
+  executeAcc, executeAfun1,
+
+  -- * Executing a sequence computation and streaming its output.
+  StreamSeq(..), streamSeq,
 
 ) where
 
@@ -50,6 +53,7 @@ import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
+import Data.Array.Accelerate.Trafo                              ( Extend(..) )
 import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
@@ -65,7 +69,6 @@ import System.IO.Unsafe                                         ( unsafeInterlea
 import Data.Int
 import Data.Word
 import Data.Maybe
-import Data.Monoid                                              ( mempty )
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
@@ -86,6 +89,8 @@ data Aval env where
   Aempty :: Aval ()
   Apush  :: Aval env -> Async t -> Aval (env, t)
 
+-- A suspended sequence computation.
+newtype StreamSeq a = StreamSeq (CIO (Maybe (a, StreamSeq a)))
 
 -- Projection of a value from a valuation using a de Bruijn index.
 --
@@ -429,85 +434,136 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
 executeOpenAcc (ExecSeq l) aenv stream = executeSequence l aenv stream
 
-executeSequence :: forall aenv arrs . ExecSeq aenv () arrs -> Aval aenv -> Stream -> CIO arrs
+executeSequence :: forall aenv arrs . Arrays arrs => ExecOpenSeq aenv () arrs -> Aval aenv -> Stream -> CIO arrs
 executeSequence topSequence aenv stream
-  | degenerate topSequence = initSequence topSequence >>=         returnOut
-  | otherwise          = initSequence topSequence >> loop >> returnOut topSequence
-
+  = initializeOpenSeq topSequence aenv stream >>= loop >>= returnOut
   where
-    degenerate :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> Bool
-    degenerate l =
-      case l of
-        ExecP _ _ -> False
-        ExecC _   -> True
-
-    initSequence :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> CIO (ExecSeq aenv lenv arrs')
-    initSequence l =
-      case l of
-        ExecP p l' -> ExecP <$> initP p <*> initSequence l'
-        ExecC c    -> ExecC <$> initC c
-
+    loop :: ExecOpenSeq aenv () arrs -> CIO (ExecOpenSeq aenv () arrs)
+    loop = loop'
       where
-        initP :: forall lenv a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
-        initP (ExecToSeq slix exp acc k g _) =
-          do sl <- executeExp exp aenv stream
-             sh <- extent acc
-             let sl' = restrictSlice slix sh sl
-                 sl0 = listToMaybe (enumSlices slix sl')
-             return $ ExecToSeq slix exp acc k g (Just (sl0, sl', sliceShape slix sh))
-        initP (ExecUseLazy slix exp arr _) =
-          do sl <- executeExp exp aenv stream
-             let sh = shape arr
-                 sl' = restrictSlice slix sh sl
-                 sl0 = listToMaybe (enumSlices slix sl')
-             return $ ExecUseLazy slix exp arr (Just (sl0, sl', sliceShape slix sh))
-        initP s@ExecMap{} = return s
-        initP s@ExecZipWith{} = return s
-        initP (ExecScanSeq afun acc ix _) =
-              do a <- executeOpenAcc acc aenv stream
-                 return $ ExecScanSeq afun acc ix (Just a)
-        initP (ExecScanSeqAct afun1 afun2 a0 b0 ix _) =
-              do a <- executeOpenAcc a0 aenv stream
-                 return $ ExecScanSeqAct afun1 afun2 a0 b0 ix (Just a)
-
-        initC :: forall a. ExecC aenv lenv a -> CIO (ExecC aenv lenv a)
-        initC c =
-          case c of
-            ExecFoldSeq afun acc ix _ ->
-              do a <- executeOpenAcc acc aenv stream
-                 return $ ExecFoldSeq afun acc ix (Just a)
-            ExecFoldSeqAct afun1 afun2 a0 b0 ix _ ->
-              do a <- executeOpenAcc a0 aenv stream
-                 return $ ExecFoldSeqAct afun1 afun2 a0 b0 ix (Just a)
-            ExecFoldSeqFlatten afun acc ix _ ->
-              do a <- executeOpenAcc acc aenv stream
-                 return $ ExecFoldSeqFlatten afun acc ix (Just a)
-            s@ExecFromSeq{} -> return s
-            ExecStuple t  -> ExecStuple <$> initCT t
-
-        initCT :: forall t. Atuple (ExecC aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
-        initCT NilAtup        = return NilAtup
-        initCT (SnocAtup t c) = SnocAtup <$> initCT t <*> initC c
-
-    loop :: CIO (ExecSeq aenv () arrs)
-    loop = loop' topSequence
-      where
-        loop' :: ExecSeq aenv () arrs -> CIO (ExecSeq aenv () arrs)
+        loop' :: ExecOpenSeq aenv () arrs -> CIO (ExecOpenSeq aenv () arrs)
         loop' s = do
-           ms <- runMaybeT (go s Empty)
+           ms <- runMaybeT (stepOpenSeq aenv s stream)
            case ms of
              Nothing -> return s
              Just s' -> loop' s'
 
-    go :: forall lenv arrs'. ExecSeq aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecSeq aenv lenv arrs')
-    go !l !lenv =
+    returnOut :: forall lenv arrs' . ExecOpenSeq aenv lenv arrs' -> CIO arrs'
+    returnOut !l =
+      case l of
+        ExecP _ l' -> returnOut l'
+        ExecC c    -> readConsumer c
+        ExecR _ ma -> case ma of
+                         Just a -> return [a]
+                         Nothing -> $internalError "executeSequence" "Expected already executed Sequence"
+
+      where
+        readConsumer :: forall a . ExecC aenv lenv a -> CIO a
+        readConsumer c =
+          case c of
+            ExecFoldSeq _ _ _ (Just a) -> let a' = fromList Z [a] in useArray a' >> return a'
+            ExecFoldSeqFlatten _ _ _ (Just a) -> return a
+            ExecStuple t -> toTuple ArraysProxy <$> rdT t
+              where
+                rdT :: forall t. Atuple (ExecC aenv lenv) t -> CIO t
+                rdT NilAtup          = return ()
+                rdT (SnocAtup t' c') = (,) <$> rdT t' <*> readConsumer c'
+            _ -> $internalError "executeSequence" "Expected already executed consumer"
+
+initializeSeq :: Aval aenv -> ExecOpenSeq aenv () arrs' -> CIO (ExecOpenSeq aenv () arrs')
+initializeSeq aenv s = streaming (initializeOpenSeq s aenv) wait
+
+initializeOpenSeq :: forall lenv aenv arrs' . ExecOpenSeq aenv lenv arrs' -> Aval aenv -> Stream -> CIO (ExecOpenSeq aenv lenv arrs')
+initializeOpenSeq l aenv stream =
+  case l of
+    ExecP p l' -> ExecP <$> initP p <*> initializeOpenSeq l' aenv stream
+    ExecC c    -> ExecC <$> initC c
+    ExecR ix a -> return (ExecR ix a)
+
+  where
+    initP :: forall lenv a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
+    initP (ExecToSeq slix exp acc k g _) =
+      do sl <- executeExp exp aenv stream
+         sh <- extent acc
+         let sl' = restrictSlice slix sh sl
+             sl0 = listToMaybe (enumSlices slix sl')
+         return $ ExecToSeq slix exp acc k g (Just (sl0, sl', sliceShape slix sh))
+    initP (ExecUseLazy slix exp arr _) =
+      do sl <- executeExp exp aenv stream
+         let sh = shape arr
+             sl' = restrictSlice slix sh sl
+             sl0 = listToMaybe (enumSlices slix sl')
+         return $ ExecUseLazy slix exp arr (Just (sl0, sl', sliceShape slix sh))
+    initP s@ExecStreamIn{} = return s
+    initP s@ExecMap{} = return s
+    initP s@ExecZipWith{} = return s
+    initP (ExecScanSeq f a0 ix _) =
+          do a <- executeExp a0 aenv stream
+             return $ ExecScanSeq f a0 ix (Just a)
+
+    initC :: forall a. ExecC aenv lenv a -> CIO (ExecC aenv lenv a)
+    initC c =
+      case c of
+        ExecFoldSeq f a0 ix _ ->
+          do a <- executeExp a0 aenv stream
+             return $ ExecFoldSeq f a0 ix (Just a)
+        ExecFoldSeqFlatten afun acc ix _ ->
+          do a <- executeOpenAcc acc aenv stream
+             return $ ExecFoldSeqFlatten afun acc ix (Just a)
+        ExecStuple t  -> ExecStuple <$> initCT t
+
+    initCT :: forall t. Atuple (ExecC aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
+    initCT NilAtup        = return NilAtup
+    initCT (SnocAtup t c) = SnocAtup <$> initCT t <*> initC c
+
+    -- get the extent of an embedded array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent ExecAcc{}      = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSeq{}      = $internalError "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh)  = executeExp sh aenv stream
+
+-- Turn a sequence computation into a suspended computation that can be forced
+-- an element at a time.
+--
+streamSeq :: ExecSeq [a] -> StreamSeq a
+streamSeq (ExecS binds seq) = StreamSeq $ do
+  aenv <- executeExtend binds Aempty
+  iseq <- initializeSeq aenv seq
+  let go s = do
+        ms <- stepSeq aenv s
+        case ms of
+          Nothing -> return Nothing
+          Just (s', a) -> return (Just (a, StreamSeq (go s')))
+  go iseq
+
+
+stepSeq :: forall a aenv. Aval aenv -> ExecOpenSeq aenv () [a] -> CIO (Maybe (ExecOpenSeq aenv () [a], a))
+stepSeq aenv s = streaming step wait
+  where
+    step :: Stream -> CIO (Maybe (ExecOpenSeq aenv () [a], a))
+    step stream = do
+      ms <- runMaybeT (stepOpenSeq aenv s stream)
+      return $ (,) <$> ms <*> (coll <$> ms)
+
+    coll :: ExecOpenSeq aenv lenv [a] -> a
+    coll (ExecP _ s') = coll s'
+    coll (ExecC _)    = $internalError "stepSeq" "Unreachable"
+    coll (ExecR _ ma) = case ma of
+                          Nothing -> $internalError "stepSeq" "Trying to collect the value of an unexecuted sequence"
+                          Just a  -> a
+
+stepOpenSeq :: forall aenv arrs'. Aval aenv -> ExecOpenSeq aenv () arrs' -> Stream -> MaybeT CIO (ExecOpenSeq aenv () arrs')
+stepOpenSeq aenv !l stream = go l Empty
+  where
+    go :: forall lenv. ExecOpenSeq aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecOpenSeq aenv lenv arrs')
+    go l lenv =
       case l of
         ExecP p l' -> do
           (p', a) <- produce p
           l'' <- go l' (lenv `Push` a)
           return $ ExecP p' l''
         ExecC c    -> ExecC <$> lift (consume c)
-
+        ExecR ix _ -> return $ ExecR ix (Just (prj ix lenv))
       where
         produce :: forall a . ExecP aenv lenv a -> MaybeT CIO (ExecP aenv lenv a, a)
         produce (ExecToSeq slix exp acc kernel gamma sls) =
@@ -526,27 +582,29 @@ executeSequence topSequence aenv stream
                out <- allocateArray sh
                useArraySlice slix sl' arr out
                return (ExecUseLazy slix exp arr (Just (nextSlice slix sl sl', sl, sh)), out)
+        produce (ExecStreamIn xs) =
+          let use :: ArraysR arrs -> arrs -> CIO ()
+              use ArraysRunit         ()       = return ()
+              use ArraysRarray        arr      = useArrayAsync arr Nothing
+              use (ArraysRpair r1 r2) (a1, a2) = use r1 a1 >> use r2 a2
+          in case xs of
+              []    -> MaybeT (return Nothing)
+              x:xs' -> lift (use (arrays x) (fromArr x)) >> return (ExecStreamIn xs', x)
         produce (ExecMap afun x) = (ExecMap afun x ,) <$> lift (travAfun1 afun (prj x lenv))
         produce (ExecZipWith afun x y) = (ExecZipWith afun x y,) <$> lift (travAfun2 afun (prj x lenv) (prj y lenv))
         produce (ExecScanSeq afun a0 x ma) =
               do
                  a <- MaybeT (return ma)
-                 a' <- lift $ travAfun2 afun a (prj x lenv)
-                 return (ExecScanSeq afun a0 x (Just a'), a')
-        produce (ExecScanSeqAct afun1 afun2 a0 b0 x ma) =
-              do a <- MaybeT (return ma)
-                 a' <- lift $ travAfun2 afun1 a (prj x lenv)
-                 return (ExecScanSeqAct afun1 afun2 a0 b0 x (Just a'), a')
+                 a' <- lift $ travFun2 afun a (prj x lenv ! Z)
+                 return (ExecScanSeq afun a0 x (Just a'), fromList Z [a'])
 
         consume :: forall a . ExecC aenv lenv a -> CIO (ExecC aenv lenv a)
         consume c =
           case c of
             ExecFoldSeq afun a0 x (Just a) ->
-              do a' <- travAfun2 afun a (prj x lenv)
+              do b <- indexArray (prj x lenv) 0
+                 a' <- travFun2 afun a b
                  return $ ExecFoldSeq afun a0 x (Just a')
-            ExecFoldSeqAct afun1 afun2 a0 b0 x (Just a) ->
-              do a' <- travAfun2 afun1 a (prj x lenv)
-                 return $ ExecFoldSeqAct afun1 afun2 a0 b0 x (Just a')
             ExecFoldSeqFlatten afun a0 x (Just a) ->
               do useArray shapes
                  a' <- travAfun3 afun a shapes elems
@@ -555,55 +613,12 @@ executeSequence topSequence aenv stream
                    Array sh adata = prj x lenv
                    elems  = Array ((), R.size sh) adata
                    shapes = fromList (Z:.1) [toElt sh]
-            ExecFromSeq slix x a -> return $ ExecFromSeq slix x (prj x lenv : a)
             ExecStuple t -> ExecStuple <$> consumeT t
             _            -> $internalError "executeSequence" "Expected already executed consumer"
 
         consumeT :: forall t. Atuple (ExecC aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
         consumeT NilAtup        = return NilAtup
         consumeT (SnocAtup t c) = SnocAtup <$> consumeT t <*> consume c
-
-    returnOut :: forall lenv arrs' . ExecSeq aenv lenv arrs' -> CIO arrs'
-    returnOut !l =
-      case l of
-        ExecP _ l' -> returnOut l'
-        ExecC c    -> readConsumer c
-
-      where
-        readConsumer :: forall a . ExecC aenv lenv a -> CIO a
-        readConsumer c =
-          case c of
-            ExecFoldSeq _ _ _ (Just a) -> return a
-            ExecFoldSeqAct _ _ _ _ _ (Just a) -> return a
-            ExecFoldSeqFlatten _ _ _ (Just a) -> return a
-            ExecFromSeq kernel _ as -> fromSeqOp (reverse as)
-              where
-                fromSeqOp as =
-                  let shs = map shape as
-                      ns  = map size shs
-                      is' = scanl (+) 0 ns
-                      is  = init is'
-                      n   = last is'
-                      out_shs = fromList (Z :. length shs) shs
-                      k !out (!arr, i) = execute kernel mempty aenv (size (shape arr)) (i, out, arr) stream
-                  in
-                   do useArray out_shs
-                      out_els <- allocateArray (Z :. n)
-                      _ <- mapM (k out_els) (zip as is)
-                      return (out_shs, out_els)
-            ExecStuple t -> toTuple ArraysProxy <$> rdT t
-              where
-                rdT :: forall t. Atuple (ExecC aenv lenv) t -> CIO t
-                rdT NilAtup          = return ()
-                rdT (SnocAtup t' c') = (,) <$> rdT t' <*> readConsumer c'
-            _ -> $internalError "executeSequence" "Expected already executed consumer"
-
-
-    -- get the extent of an embedded array
-    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
-    extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecSeq{}    = $internalError "executeOpenAcc" "expected delayed array"
-    extent (EmbedAcc sh) = executeExp sh aenv stream
 
     travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b
     travAfun1 (Alam (Abody afun)) a =
@@ -622,6 +637,19 @@ executeSequence topSequence aenv stream
       do nop <- liftIO Event.create
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b) `Apush` (Async nop c)) stream
     travAfun3 _ _ _ _ = error "travAfun3"
+
+    travFun2 :: forall a b c. PreFun ExecOpenAcc aenv (a -> b -> c) -> a -> b -> CIO c
+    travFun2 (Lam (Lam (Body c))) a b = executeOpenExp c (Empty `Push` a `Push` b) aenv stream
+    travFun2 _ _ _ = error "travFun2"
+
+-- Evaluating bindings
+-- -------------------
+
+executeExtend :: Extend ExecOpenAcc aenv aenv' -> Aval aenv -> CIO (Aval aenv')
+executeExtend BaseEnv       aenv = return aenv
+executeExtend (PushEnv e a) aenv = do
+  aenv' <- executeExtend e aenv
+  streaming (executeOpenAcc a aenv') $ \a' -> return $ Apush aenv' a'
 
 -- Scalar expression evaluation
 -- ----------------------------

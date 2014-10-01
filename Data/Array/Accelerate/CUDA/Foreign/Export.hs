@@ -55,7 +55,7 @@ import Language.Haskell.TH                              hiding ( ppr )
 import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.CUDA                       ( run1In )
+import Data.Array.Accelerate.CUDA                       ( run1With )
 import Data.Array.Accelerate.CUDA.Array.Sugar           hiding ( shape, size )
 import Data.Array.Accelerate.CUDA.Array.Data            hiding ( pokeArray, peekArray, mallocArray )
 import Data.Array.Accelerate.CUDA.State
@@ -254,7 +254,7 @@ buildExported hndl f = ef
     ef :: IO (StablePtr Afun)
     ef = do
       ctx <- deRefStablePtr hndl
-      newStablePtr (Afun (run1In ctx f) (undefined :: a) (undefined :: b))
+      newStablePtr (Afun (run1With ctx f) (undefined :: a) (undefined :: b))
 
 -- Utility functions
 -- ------------------

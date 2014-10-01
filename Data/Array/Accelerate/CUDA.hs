@@ -186,7 +186,8 @@ module Data.Array.Accelerate.CUDA (
   Arrays,
 
   -- * Synchronous execution
-  run, run1, stream, runIn, run1In, streamIn,
+  run, run1, streamOut, stream, runWith, run1With,
+  streamOutWith, streamWith,
 
   -- * Asynchronous execution
   Async, wait, poll, cancel,
@@ -205,7 +206,8 @@ import System.IO.Unsafe
 
 -- friends
 import Data.Array.Accelerate.Trafo
-import Data.Array.Accelerate.Smart                      ( Acc )
+import Data.Array.Accelerate.Smart                      ( Acc, Seq )
+import Data.Array.Accelerate                            ( mapSeq, streamIn )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Async
@@ -231,7 +233,7 @@ import Data.Array.Accelerate.Debug
 run :: Arrays a => Acc a -> a
 run a
   = unsafePerformIO
-  $ evaluate (runIn defaultContext a)
+  $ evaluate (runWith defaultContext a)
 
 -- | As 'run', but allow the computation to continue running in a thread and
 -- return immediately without waiting for the result. The status of the
@@ -255,16 +257,16 @@ runAsync a
 -- 'Foreign.CUDA.Driver.Context.create' pushes the new context on top of the
 -- stack and makes it current with the calling thread. You should call
 -- 'Foreign.CUDA.Driver.Context.pop' to make the context floating before passing
--- it to 'runIn', which will make it current for the duration of evaluating the
+-- it to 'runWith', which will make it current for the duration of evaluating the
 -- expression. See the CUDA C Programming Guide (G.1) for more information.
 --
-runIn :: Arrays a => Context -> Acc a -> a
-runIn ctx a
+runWith :: Arrays a => Context -> Acc a -> a
+runWith ctx a
   = unsafePerformIO
   $ evaluate (runAsyncIn ctx a) >>= wait
 
 
--- | As 'runIn', but execute asynchronously. Be sure not to destroy the context,
+-- | As 'runWith', but execute asynchronously. Be sure not to destroy the context,
 -- or attempt to attach it to a different host thread, before all outstanding
 -- operations have completed.
 --
@@ -310,7 +312,7 @@ runAsyncIn ctx a = unsafePerformIO $ async execute
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 run1 f
   = unsafePerformIO
-  $ evaluate (run1In defaultContext f)
+  $ evaluate (run1With defaultContext f)
 
 
 -- | As 'run1', but the computation is executed asynchronously.
@@ -322,11 +324,11 @@ run1Async f
 
 -- | As 'run1', but execute in the specified context.
 --
-run1In :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
-run1In ctx f = let go = run1AsyncIn ctx f
+run1With :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
+run1With ctx f = let go = run1AsyncIn ctx f
                in \a -> unsafePerformIO $ wait (go a)
 
--- | As 'run1In', but execute asynchronously.
+-- | As 'run1With', but execute asynchronously.
 --
 run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
 run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
@@ -345,15 +347,41 @@ run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
 stream f arrs
   = unsafePerformIO
-  $ evaluate (streamIn defaultContext f arrs)
+  $ evaluate (streamWith defaultContext f arrs)
 
 -- | As 'stream', but execute in the specified context.
 --
-streamIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
-streamIn ctx f arrs
-  = let go = run1In ctx f
-    in  map go arrs
+streamWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
+streamWith ctx f
+  = streamOutWith ctx . mapSeq f . streamIn
 
+-- | Generate a lazy list from a sequence computation.
+--
+streamOut :: Arrays a => Seq [a] -> [a]
+streamOut = streamOutWith defaultContext
+
+streamOutWith :: forall a. Arrays a => Context -> Seq [a] -> [a]
+streamOutWith ctx = exec . compile . convertSeq
+  where
+    exec s
+      = go (streamSeq s)
+      where
+        go !s'
+          = case step s' of
+              Nothing      -> []
+              Just (a, s'') -> a : go s''
+        step (StreamSeq ss) = unsafePerformIO . evalCUDA ctx
+               $ do
+                   m <- ss
+                   case m of
+                     Nothing -> return Nothing
+                     Just (a, s') -> collect a >> return (Just (a, s'))
+    compile = unsafePerformIO . evalCUDA ctx . compileSeq
+
+-- RCE: Similar to run1* variants, we need to be ultra careful with streamOut*
+-- in order to make sure that the entire sequence is not reified at once.
+-- The steps of the sequence computation should only be performed as needed
+-- when elements of the list are forced.
 
 -- Copy arrays from device to host.
 --

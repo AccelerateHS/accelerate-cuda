@@ -18,7 +18,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc, codegenToSeq, codegenFromSeq
+  CUTranslSkel, codegenAcc, codegenToSeq
 
 ) where
 
@@ -41,7 +41,7 @@ import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr, Vector
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr
                                                                 , Tuple(..) )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
@@ -207,17 +207,6 @@ codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
 
     travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
     travF1 = codegenFun1 dev aenv
-
-codegenFromSeq :: forall aenv sh a. (Shape sh, Elt a) => sh -> DeviceProperties -> CUTranslSkel aenv (Vector a)
-codegenFromSeq _ dev = codegen $ return (mkFromSeq (undefined :: sh) dev)
-  where
-    codegen :: CUDA (CUTranslSkel aenv (Vector a)) -> CUTranslSkel aenv (Vector a)
-    codegen cuda =
-      let (skeleton, st)                 = runCUDA cuda
-          addTo (CUTranslSkel name code) =
-            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
-      in
-      addTo skeleton
 
 
 -- Scalar function abstraction
