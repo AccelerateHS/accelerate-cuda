@@ -336,13 +336,12 @@ compileOpenSeq l =
     compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
     compileP p =
       case p of
-        ToSeq slix sl acc -> do
+        ToSeq slix (_ :: proxy slix) acc -> do
           (free1, acc') <- travA acc
-          (free2, sl' ) <- travE sl
-          let gamma = makeEnvMap (free1 <> free2)
-          dev   <- asks deviceProperties
+          let gamma = makeEnvMap free1
+          dev <- asks deviceProperties
           kernel <- build1Simple (codegenToSeq slix dev acc gamma)
-          return $ ExecToSeq slix sl' acc' kernel gamma Nothing
+          return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
         StreamIn xs -> return $ ExecStreamIn xs
         MapSeq f x -> do
           f' <- compileOpenAfun f

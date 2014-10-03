@@ -195,11 +195,10 @@ data ExecP aenv lenv a where
                              (EltRepr sl)
                              co
                              (EltRepr sh)
-               -> ExecExp aenv slix
                -> ExecOpenAcc aenv (Array sh e)
                -> AccKernel (Array sl e)
                -> !(Gamma aenv)
-               -> Maybe (Maybe slix, slix, sl)
+               -> [slix]
                -> ExecP aenv lenv (Array sl e)
 
   ExecUseLazy :: (Elt slix, Shape sl, Shape sh, Elt e)
@@ -207,9 +206,8 @@ data ExecP aenv lenv a where
                             (EltRepr sl)
                             co
                             (EltRepr sh)
-              -> ExecExp aenv slix
               -> Array sh e
-              -> Maybe (Maybe slix, slix, sl)
+              -> [slix]
               -> ExecP aenv lenv (Array sl e)
 
   ExecStreamIn :: Arrays a

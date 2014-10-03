@@ -482,18 +482,16 @@ initializeOpenSeq l aenv stream =
 
   where
     initP :: forall lenv a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
-    initP (ExecToSeq slix exp acc k g _) =
-      do sl <- executeExp exp aenv stream
-         sh <- extent acc
-         let sl' = restrictSlice slix sh sl
-             sl0 = listToMaybe (enumSlices slix sl')
-         return $ ExecToSeq slix exp acc k g (Just (sl0, sl', sliceShape slix sh))
-    initP (ExecUseLazy slix exp arr _) =
-      do sl <- executeExp exp aenv stream
-         let sh = shape arr
-             sl' = restrictSlice slix sh sl
-             sl0 = listToMaybe (enumSlices slix sl')
-         return $ ExecUseLazy slix exp arr (Just (sl0, sl', sliceShape slix sh))
+    initP (ExecToSeq slix acc k g (_::[slix])) =
+      do sh <- extent acc
+         --Lazy evaluation will stop this entire list being generated.
+         let slices = enumSlices slix sh :: [slix]
+         return $ ExecToSeq slix acc k g slices
+    initP (ExecUseLazy slix arr (_::[slix])) =
+      let sh = shape arr
+          -- Same as above.
+          slices = enumSlices slix sh :: [slix]
+      in return $ ExecUseLazy slix arr slices
     initP s@ExecStreamIn{} = return s
     initP s@ExecMap{} = return s
     initP s@ExecZipWith{} = return s
@@ -566,22 +564,22 @@ stepOpenSeq aenv !l stream = go l Empty
         ExecR ix _ -> return $ ExecR ix (Just (prj ix lenv))
       where
         produce :: forall a . ExecP aenv lenv a -> MaybeT CIO (ExecP aenv lenv a, a)
-        produce (ExecToSeq slix exp acc kernel gamma sls) =
+        produce (ExecToSeq slix acc kernel gamma sls) =
           do
-             (msl', sl, sh) <- MaybeT (return sls)
-             sl' <- MaybeT (return msl')
+             sl : sls' <- return sls
              lift $ do
-               out <- allocateArray sh
-               m <- marshalSlice slix sl'
+               sh <- extent acc
+               out <- allocateArray (sliceShape slix sh)
+               m <- marshalSlice slix sl
                execute kernel gamma aenv (size sh) (m, out) stream
-               return (ExecToSeq slix exp acc kernel gamma (Just (nextSlice slix sl sl', sl, sh)), out)
-        produce (ExecUseLazy slix exp arr sls) =
-          do (msl', sl, sh) <- MaybeT (return sls)
-             sl' <- MaybeT (return msl')
+               return (ExecToSeq slix acc kernel gamma sls', out)
+        produce (ExecUseLazy slix arr sls) =
+          do let  sh = shape arr
              lift $ do
-               out <- allocateArray sh
-               useArraySlice slix sl' arr out
-               return (ExecUseLazy slix exp arr (Just (nextSlice slix sl sl', sl, sh)), out)
+               sl : sls' <- return sls
+               out <- allocateArray (sliceShape slix sh)
+               useArraySlice slix sl arr out
+               return (ExecUseLazy slix arr sls', out)
         produce (ExecStreamIn xs) =
           let use :: ArraysR arrs -> arrs -> CIO ()
               use ArraysRunit         ()       = return ()
@@ -641,6 +639,12 @@ stepOpenSeq aenv !l stream = go l Empty
     travFun2 :: forall a b c. PreFun ExecOpenAcc aenv (a -> b -> c) -> a -> b -> CIO c
     travFun2 (Lam (Lam (Body c))) a b = executeOpenExp c (Empty `Push` a `Push` b) aenv stream
     travFun2 _ _ _ = error "travFun2"
+
+        -- get the extent of an embedded array
+    extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
+    extent ExecAcc{}      = $internalError "executeOpenAcc" "expected delayed array"
+    extent ExecSeq{}      = $internalError "executeOpenAcc" "expected delayed array"
+    extent (EmbedAcc sh)  = executeExp sh aenv stream
 
 -- Evaluating bindings
 -- -------------------
