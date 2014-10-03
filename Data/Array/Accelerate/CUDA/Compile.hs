@@ -59,7 +59,7 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Process
+import System.Process 										    hiding (ProcessHandle)
 import System.Mem.Weak
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
@@ -481,7 +481,7 @@ compileFlags cufile = do
 --
 openTemporaryFile :: String -> CIO (FilePath, Handle)
 openTemporaryFile template = liftIO $ do
-  pid <- getProcessID
+  pid <- return 9999 -- getProcessID pid <- getProcessID
   dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
   createDirectoryIfMissing True dir
   openTempFile dir template
@@ -517,7 +517,7 @@ enqueueProcess nvcc flags = do
       (_,_,_,pid)       <- createProcess (proc nvcc flags)
 
       -- ... and wait for it to complete
-      waitFor pid
+      waitForProcess pid --waitFor pid
       ccEnd             <- getTime
 
       return (diffTime ccBegin ccEnd)
@@ -536,12 +536,12 @@ enqueueProcess nvcc flags = do
 
 -- Wait for a (compilation) process to finish
 --
-waitFor :: ProcessHandle -> IO ()
-waitFor pid = do
-  status <- waitForProcess pid
-  case status of
-    ExitSuccess   -> return ()
-    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
+--waitFor :: ProcessHandle -> IO ()
+--waitFor pid = do
+--  status <- waitForProcess pid
+--  case status of
+--    ExitSuccess   -> return ()
+--    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
 
 
 -- Debug
