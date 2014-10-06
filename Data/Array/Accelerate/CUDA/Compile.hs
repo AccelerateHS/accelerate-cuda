@@ -59,7 +59,11 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Process 										    hiding (ProcessHandle)
+#if defined(mingw32_HOST_OS)
+import System.Process                                           hiding (ProcessHandle)
+#else
+import System.Process
+#endif
 import System.Mem.Weak
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
@@ -481,7 +485,11 @@ compileFlags cufile = do
 --
 openTemporaryFile :: String -> CIO (FilePath, Handle)
 openTemporaryFile template = liftIO $ do
-  pid <- return 9999 -- getProcessID pid <- getProcessID
+#if defined(mingw32_HOST_OS)
+  pid <- return 9999
+#else
+  pid <- getProcessID
+#endif
   dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
   createDirectoryIfMissing True dir
   openTempFile dir template
@@ -517,7 +525,11 @@ enqueueProcess nvcc flags = do
       (_,_,_,pid)       <- createProcess (proc nvcc flags)
 
       -- ... and wait for it to complete
-      waitForProcess pid --waitFor pid
+#if defined(mingw32_HOST_OS)
+      waitForProcess pid
+#else
+      waitFor pid
+#endif
       ccEnd             <- getTime
 
       return (diffTime ccBegin ccEnd)
@@ -536,12 +548,14 @@ enqueueProcess nvcc flags = do
 
 -- Wait for a (compilation) process to finish
 --
---waitFor :: ProcessHandle -> IO ()
---waitFor pid = do
---  status <- waitForProcess pid
---  case status of
---    ExitSuccess   -> return ()
---    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
+#if !defined(mingw32_HOST_OS)
+waitFor :: ProcessHandle -> IO ()
+waitFor pid = do
+  status <- waitForProcess pid
+  case status of
+    ExitSuccess   -> return ()
+    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
+#endif
 
 
 -- Debug
