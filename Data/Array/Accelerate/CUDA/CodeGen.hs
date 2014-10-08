@@ -42,7 +42,7 @@ import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
 import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr
-                                                                , Tuple(..) )
+                                                                , Tuple(..), TupleRepr )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar

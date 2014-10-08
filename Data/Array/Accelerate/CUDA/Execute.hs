@@ -49,7 +49,6 @@ import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.Execute.Stream      as Stream
 
 import Data.Array.Accelerate.Error
-import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
@@ -181,8 +180,8 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Avar ix                   -> after stream (aprj ix aenv)
       Alet bnd body             -> streaming (executeOpenAcc bnd aenv) (\x -> executeOpenAcc body (aenv `Apush` x) stream)
       Apply f a                 -> streaming (executeOpenAcc a aenv)   (executeOpenAfun1 f aenv)
-      Atuple tup                -> toTuple ArraysProxy <$> travT tup
-      Aprj ix tup               -> evalPrj ix . fromTuple ArraysProxy <$> travA tup
+      Atuple tup                -> toAtuple <$> travT tup
+      Aprj ix tup               -> evalPrj ix . fromAtuple <$> travA tup
       Acond p t e               -> travE p >>= \x -> if x then travA t else travA e
       Awhile p f a              -> awhile p f =<< travA a
 
@@ -463,7 +462,7 @@ executeSequence topSequence aenv stream
           case c of
             ExecFoldSeq _ _ _ (Just a) -> let a' = fromList Z [a] in useArray a' >> return a'
             ExecFoldSeqFlatten _ _ _ (Just a) -> return a
-            ExecStuple t -> toTuple ArraysProxy <$> rdT t
+            ExecStuple t -> toAtuple <$> rdT t
               where
                 rdT :: forall t. Atuple (ExecC aenv lenv) t -> CIO t
                 rdT NilAtup          = return ()
@@ -671,8 +670,8 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       Const c                   -> return (toElt c)
       PrimConst c               -> return (evalPrimConst c)
       PrimApp f x               -> evalPrim f <$> travE x
-      Tuple t                   -> toTuple EltProxy <$> travT t
-      Prj ix e                  -> evalPrj ix . fromTuple EltProxy <$> travE e
+      Tuple t                   -> toTuple <$> travT t
+      Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
       Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
       While p f x               -> while p f =<< travE x
       IndexAny                  -> return Any
