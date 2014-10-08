@@ -337,11 +337,16 @@ compileOpenSeq l =
     compileP p =
       case p of
         ToSeq slix (_ :: proxy slix) acc -> do
-          (free1, acc') <- travA acc
-          let gamma = makeEnvMap free1
-          dev <- asks deviceProperties
-          kernel <- build1Simple (codegenToSeq slix dev acc gamma)
-          return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
+          case acc of
+            -- In the case of converting an array that has not already been copied
+            -- to device memory, we are smart and treat it specially.
+            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix])
+            _                -> do
+              (free1, acc') <- travA acc
+              let gamma = makeEnvMap free1
+              dev <- asks deviceProperties
+              kernel <- build1Simple (codegenToSeq slix dev acc gamma)
+              return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
         StreamIn xs -> return $ ExecStreamIn xs
         MapSeq f x -> do
           f' <- compileOpenAfun f
