@@ -59,12 +59,8 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-#if defined(mingw32_HOST_OS)
-import System.Process                                           hiding (ProcessHandle)
-#else
-import System.Process
-#endif
 import System.Mem.Weak
+import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
 import qualified Data.Text.Lazy                                 as T
@@ -79,10 +75,14 @@ import GHC.Conc                                                 ( getNumProcesso
 #ifdef ACCELERATE_DEBUG
 import System.Time
 #endif
-#ifdef VERSION_unix
+
+-- Multiplatform support for dealing with external process spawning
+#if   defined(UNIX)
 import System.Posix.Process
-#else
+#elif defined(WIN32)
 import System.Win32.Process
+#else
+#error "I don't know what operating system I am"
 #endif
 
 import Paths_accelerate_cuda                                    ( getDataDir )
@@ -485,18 +485,18 @@ compileFlags cufile = do
 --
 openTemporaryFile :: String -> CIO (FilePath, Handle)
 openTemporaryFile template = liftIO $ do
-#if defined(mingw32_HOST_OS)
-  pid <- return 9999
-#else
   pid <- getProcessID
-#endif
   dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
   createDirectoryIfMissing True dir
   openTempFile dir template
 
-#ifndef VERSION_unix
-getProcessID :: ProcessHandle -> IO ProcessId
-getProcessID = getProcessId
+#if defined(WIN32)
+-- TLM: On windows, how do we get either the ProcessID or ProcessHandle of the
+--      current process? For new, just use a dummy value (the sound of
+--      disappearing down a rabbit hole...)
+--
+getProcessID :: IO ProcessId
+getProcessID = return 0xaaaa
 #endif
 
 
@@ -525,11 +525,7 @@ enqueueProcess nvcc flags = do
       (_,_,_,pid)       <- createProcess (proc nvcc flags)
 
       -- ... and wait for it to complete
-#if defined(mingw32_HOST_OS)
-      waitForProcess pid
-#else
       waitFor pid
-#endif
       ccEnd             <- getTime
 
       return (diffTime ccBegin ccEnd)
@@ -548,14 +544,12 @@ enqueueProcess nvcc flags = do
 
 -- Wait for a (compilation) process to finish
 --
-#if !defined(mingw32_HOST_OS)
 waitFor :: ProcessHandle -> IO ()
 waitFor pid = do
   status <- waitForProcess pid
   case status of
     ExitSuccess   -> return ()
     ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
-#endif
 
 
 -- Debug
