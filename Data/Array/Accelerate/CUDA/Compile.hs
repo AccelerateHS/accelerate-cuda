@@ -59,8 +59,8 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Process
 import System.Mem.Weak
+import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
 import qualified Data.Text.Lazy                                 as T
@@ -75,10 +75,14 @@ import GHC.Conc                                                 ( getNumProcesso
 #ifdef ACCELERATE_DEBUG
 import System.Time
 #endif
-#ifdef VERSION_unix
+
+-- Multiplatform support for dealing with external process spawning
+#if   defined(UNIX)
 import System.Posix.Process
-#else
+#elif defined(WIN32)
 import System.Win32.Process
+#else
+#error "I don't know what operating system I am"
 #endif
 
 import Paths_accelerate_cuda                                    ( getDataDir )
@@ -486,9 +490,13 @@ openTemporaryFile template = liftIO $ do
   createDirectoryIfMissing True dir
   openTempFile dir template
 
-#ifndef VERSION_unix
-getProcessID :: ProcessHandle -> IO ProcessId
-getProcessID = getProcessId
+#if defined(WIN32)
+-- TLM: On windows, how do we get either the ProcessID or ProcessHandle of the
+--      current process? For new, just use a dummy value (the sound of
+--      disappearing down a rabbit hole...)
+--
+getProcessID :: IO ProcessId
+getProcessID = return 0xaaaa
 #endif
 
 
