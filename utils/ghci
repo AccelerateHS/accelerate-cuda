@@ -7,10 +7,11 @@ GHC="cabal exec ghc --"
 
 GHC_FLAGS="$GHC_FLAGS
     --interactive
+    -DUNIX
     -DACCELERATE_DEBUG
     -DACCELERATE_BOUNDS_CHECKS
     -DACCELERATE_INTERNAL_CHECKS
-    -iutils -optP -include -optP dist/build/autogen/cabal_macros.h"
+    -iutils"
 
 # If we have specified one command line argument, but that file doesn't exist,
 # search the source files for something with that name prefix.

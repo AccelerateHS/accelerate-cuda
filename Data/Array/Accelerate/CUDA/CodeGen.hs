@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE ViewPatterns        #-}
 {-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
@@ -352,7 +353,7 @@ codegenOpenExp dev aenv = cvtE
         Var ix                  -> return $ prj ix env
         PrimConst c             -> return $ [codegenPrimConst c]
         Const c                 -> return $ codegenConst (Sugar.eltType (undefined::t)) c
-        PrimApp f x             -> return <$> primApp f x env
+        PrimApp f x             -> primApp f x env
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
         Cond p t e              -> cond p t e env
@@ -402,13 +403,19 @@ codegenOpenExp dev aenv = cvtE
     -- operation as a statement expression. This is necessary to ensure proper
     -- short-circuit behaviour for logical operations.
     --
-    primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
+    primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
     primApp f x env
       | Tuple (NilTup `SnocTup` a `SnocTup` b) <- x
-      = codegenPrim2 f <$> cvtE' a env <*> cvtE' b env
+      = do a' <- cvtE' a env
+           b' <- cvtE' b env
+           case f of
+             PrimQuotRem t      -> codegenQuotRem t a' b'
+             PrimDivMod t       -> codegenDivMod  t a' b'
+             _                  -> return [ codegenPrim2 f a' b' ]
 
       | otherwise
-      = codegenPrim1 f <$> cvtE' x env
+      = do a' <- cvtE' x env
+           return [ codegenPrim1 f a' ]
       where
         cvtE' :: DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
         cvtE' e env = do
@@ -467,7 +474,8 @@ codegenOpenExp dev aenv = cvtE
          => DelayedOpenExp env aenv Bool
          -> DelayedOpenExp env aenv t
          -> DelayedOpenExp env aenv t
-         -> Val env -> Gen [C.Exp]
+         -> Val env
+         -> Gen [C.Exp]
     cond p t f env = do
       p'        <- cvtE p env
       ok        <- single "Cond" <$> pushEnv p p'
@@ -947,6 +955,38 @@ codegenCeiling ta tb x
   = ccast (NumScalarType (IntegralNumType tb))
   $ ccall (FloatingNumType ta `postfix` "ceil") [x]
 
+codegenQuotRem :: IntegralType a -> C.Exp -> C.Exp -> Gen [C.Exp]
+codegenQuotRem (codegenIntegralType -> t') n d = do
+  n'    <- bind t' [cexp| $exp:n |]             -- n and d might be statement expressions. See 'primApp'
+  d'    <- bind t' [cexp| $exp:d |]
+  q     <- bind t' [cexp| $exp:n' / $exp:d' |]
+  r     <- bind t' [cexp| $exp:n' - $exp:d' * $exp:q |]
+  return [q,r]
+
+codegenDivMod :: IntegralType a -> C.Exp -> C.Exp -> Gen [C.Exp]
+codegenDivMod t@(codegenIntegralType -> t') n d = do
+  n'    <- bind t' [cexp| $exp:n |]             -- n and d might be statement expressions. See 'primApp'
+  d'    <- bind t' [cexp| $exp:d |]
+  return [ codegenPrim2 (PrimIDiv t) n' d'      -- TODO: unified implementation
+         , codegenPrim2 (PrimMod  t) n' d' ]
+
+{--
+ -- This is the default Integral class implementation taken from GHC/Real.lhs
+ --
+  q     <- bind t' [cexp| $exp:n' / $exp:d' |]
+  r     <- bind t' [cexp| $exp:n' - $exp:d' * $exp:q |]
+  vd    <- lift fresh
+  vm    <- lift fresh
+  modify (\st -> st { localBindings = [citem| $ty:t' $id:vd, $id:vm; |] : localBindings st })
+  modify (\st -> st { localBindings = [citem| if ( $exp:(codegenSig (IntegralNumType t) r) == - $exp:(codegenSig (IntegralNumType t) d') ) {
+                                                  $id:vd = $exp:q - 1;
+                                                  $id:vm = $exp:r + $exp:d' ;
+                                              } else {
+                                                  $id:vd = $exp:q;
+                                                  $id:vm = $exp:r;
+                                              } |] : localBindings st })
+  return [ cvar vd, cvar vm ]
+--}
 
 -- Auxiliary Functions
 -- -------------------
