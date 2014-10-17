@@ -480,7 +480,7 @@ initializeOpenSeq l aenv stream =
     ExecR ix a -> return (ExecR ix a)
 
   where
-    initP :: forall lenv a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
+    initP :: forall a. ExecP aenv lenv a -> CIO (ExecP aenv lenv a)
     initP (ExecToSeq slix acc k g (_::[slix])) =
       do sh <- extent acc
          --Lazy evaluation will stop this entire list being generated.
@@ -523,9 +523,9 @@ initializeOpenSeq l aenv stream =
 -- an element at a time.
 --
 streamSeq :: ExecSeq [a] -> StreamSeq a
-streamSeq (ExecS binds seq) = StreamSeq $ do
+streamSeq (ExecS binds sequ) = StreamSeq $ do
   aenv <- executeExtend binds Aempty
-  iseq <- initializeSeq aenv seq
+  iseq <- initializeSeq aenv sequ
   let go s = do
         ms <- stepSeq aenv s
         case ms of
@@ -553,12 +553,12 @@ stepOpenSeq :: forall aenv arrs'. Aval aenv -> ExecOpenSeq aenv () arrs' -> Stre
 stepOpenSeq aenv !l stream = go l Empty
   where
     go :: forall lenv. ExecOpenSeq aenv lenv arrs' -> Val lenv -> MaybeT CIO (ExecOpenSeq aenv lenv arrs')
-    go l lenv =
-      case l of
-        ExecP p l' -> do
+    go s lenv =
+      case s of
+        ExecP p s' -> do
           (p', a) <- produce p
-          l'' <- go l' (lenv `Push` a)
-          return $ ExecP p' l''
+          s'' <- go s' (lenv `Push` a)
+          return $ ExecP p' s''
         ExecC c    -> ExecC <$> lift (consume c)
         ExecR ix _ -> return $ ExecR ix (Just (prj ix lenv))
       where
