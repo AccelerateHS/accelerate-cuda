@@ -38,7 +38,7 @@ import qualified Data.HashSet                                   as Set
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Tuple
+import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
