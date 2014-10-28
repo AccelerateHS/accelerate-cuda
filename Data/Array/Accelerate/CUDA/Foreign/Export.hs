@@ -9,7 +9,8 @@
 {-# LANGUAGE TypeFamilies             #-}
 {-# LANGUAGE FlexibleInstances        #-}
 {-# LANGUAGE ImpredicativeTypes       #-}
-{-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-orphans #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
+{-# OPTIONS_GHC -fno-warn-orphans        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Foreign.Export
 -- Copyright   : [2013..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell, Robert Clifton-Everest
