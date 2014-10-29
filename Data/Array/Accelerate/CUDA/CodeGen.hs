@@ -19,7 +19,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc,
+  CUTranslSkel, codegenAcc, codegenToSeq
 
 ) where
 
@@ -38,11 +38,12 @@ import qualified Data.HashSet                                   as Set
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Tuple
+import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr )
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr
+                                                                , Tuple(..), TupleRepr )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
@@ -56,6 +57,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
+import Data.Array.Accelerate.CUDA.CodeGen.Streaming
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 
 
@@ -112,6 +114,9 @@ codegenAcc dev (Manifest pacc) aenv
       Permute f _ p a           -> mkPermute dev aenv   <$> travF2 f <*> travF1 p <*> travD a
       Stencil f b a             -> mkStencil dev aenv   <$> travF1 f <*> travB a b
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
+
+      -- Sequence collection
+      Collect _                 -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -171,6 +176,38 @@ codegenAcc dev (Manifest pacc) aenv
     prim                = showPreAccOp pacc
     unexpectedError     = $internalError "codegenAcc" $ "unexpected array primitive: " ++ prim
     fusionError         = $internalError "codegenAcc" $ "unexpected fusible material: " ++ prim
+
+codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
+                => SliceIndex slix
+                              (EltRepr sl)
+                              co
+                              (EltRepr sh)
+                -> DeviceProperties
+                -> DelayedOpenAcc aenv (Array sh e)
+                -> Gamma aenv
+                -> CUTranslSkel aenv (Array sl e)
+codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
+  where
+    codegen :: CUDA (CUTranslSkel aenv (Array sl e)) -> CUTranslSkel aenv (Array sl e)
+    codegen cuda =
+      let (skeleton, st)                 = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      addTo skeleton
+
+    -- code generation for delayed arrays
+    travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e )
+    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
+    travD Delayed{..} = CUDelayed <$> travE extentD
+                                  <*> travF1 indexD
+                                  <*> travF1 linearIndexD
+
+    travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
+    travE = codegenExp dev aenv
+
+    travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
+    travF1 = codegenFun1 dev aenv
 
 
 -- Scalar function abstraction
@@ -339,6 +376,7 @@ codegenOpenExp dev aenv = cvtE
         Shape acc               -> shape acc env
         ShapeSize sh            -> shapeSize sh env
         Intersect sh1 sh2       -> intersect sh1 sh2 env
+        Union sh1 sh2           -> union sh1 sh2 env
 
         --Foreign function
         Foreign ff _ e          -> foreignE ff e env
@@ -648,6 +686,15 @@ codegenOpenExp dev aenv = cvtE
               -> Val env -> Gen [C.Exp]
     intersect sh1 sh2 env =
       zipWith (\a b -> ccall "min" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
+
+    -- Union of two shapes, taken as the maximum in each dimension.
+    --
+    union :: forall env sh. Elt sh
+          => DelayedOpenExp env aenv sh
+          -> DelayedOpenExp env aenv sh
+          -> Val env -> Gen [C.Exp]
+    union sh1 sh2 env =
+      zipWith (\a b -> ccall "max" [a,b]) <$> cvtE sh1 env <*> cvtE sh2 env
 
     -- Foreign scalar functions. We need to extract any header files that might
     -- be required so they can be added to the top level definitions.

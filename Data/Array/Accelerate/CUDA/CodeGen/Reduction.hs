@@ -93,7 +93,7 @@ mkFoldAll
     -> CUDelayedAcc aenv (sh :. Int) e
     -> [ CUTranslSkel aenv (Array sh e) ]
 mkFoldAll dev aenv f z a
-  = let (_, rec) = readArray "Rec" (undefined :: Array (sh:.Int) e)
+  = let (_, _, rec) = readArray "Rec" (undefined :: Array (sh:.Int) e)
     in
     [ mkFoldAll' False dev aenv f z a
     , mkFoldAll' True  dev aenv f z rec ]
@@ -188,9 +188,9 @@ mkFoldAll' recursive dev aenv fun@(CUFun2 _ _ combine) mseed (CUDelayed (CUExp s
     foldAll                     = maybe "fold1All" (const "foldAll") mseed
     (texIn, argIn)              = environment dev aenv
     (argOut, _, setOut)         = writeArray "Out" (undefined :: Array (sh :. Int) e)
-    (argRec, _)
+    (argRec, _, _)
       | recursive               = readArray "Rec" (undefined :: Array (sh :. Int) e)
-      | otherwise               = ([], undefined)
+      | otherwise               = ([], undefined, undefined)
 
     (_, x, declx)               = locals "x" (undefined :: e)
     (_, y, decly)               = locals "y" (undefined :: e)

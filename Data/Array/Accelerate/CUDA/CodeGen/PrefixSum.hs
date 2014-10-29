@@ -439,7 +439,7 @@ mkScanUp2
     -> Maybe (CUExp aenv e)
     -> CUTranslSkel aenv (Vector e)
 mkScanUp2 dir dev aenv f z
-  = let (_, get) = readArray "Blk" (undefined :: Vector e)
+  = let (_, _, get) = readArray "Blk" (undefined :: Vector e)
     in  mkScan dir dev aenv f z get
 
 

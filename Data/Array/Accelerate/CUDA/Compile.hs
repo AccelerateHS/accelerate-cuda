@@ -19,13 +19,12 @@
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
-  compileAcc, compileAfun
+  compileAcc, compileAfun, compileSeq
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.Error
-import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
@@ -168,6 +167,9 @@ compileOpenAcc = traverseAcc
         Stencil2 f b1 a1 b2 a2  -> exec =<< liftA3 stencil2             <$> travF f <*> travA a1 <*> travA a2
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
+        -- Loops
+        Collect l               -> ExecSeq <$> compileOpenSeq l
+
       where
         use :: ArraysR a -> a -> CIO ()
         use ArraysRunit         ()       = return ()
@@ -198,6 +200,10 @@ compileOpenAcc = traverseAcc
         travAtup NilAtup        = return (pure NilAtup)
         travAtup (SnocAtup t a) = liftA2 SnocAtup <$> travAtup t <*> travA a
 
+        travE :: DelayedOpenExp env aenv e
+              -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
+        travE = compileOpenExp
+
         travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
@@ -224,93 +230,168 @@ compileOpenAcc = traverseAcc
             where
               err = $internalError "compile" "Executing pure version of a CUDA foreign function"
 
-    -- Traverse a scalar expression
+-- Traverse a scalar expression
+--
+compileOpenExp :: DelayedOpenExp env aenv e
+      -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
+compileOpenExp exp =
+  case exp of
+    Var ix                  -> return $ pure (Var ix)
+    Const c                 -> return $ pure (Const c)
+    PrimConst c             -> return $ pure (PrimConst c)
+    IndexAny                -> return $ pure IndexAny
+    IndexNil                -> return $ pure IndexNil
+    Foreign ff f x          -> foreignE ff f x
     --
+    Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
+    IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
+    IndexHead h             -> liftA  IndexHead             <$> travE h
+    IndexTail t             -> liftA  IndexTail             <$> travE t
+    IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
+    IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
+    ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
+    FromIndex s i           -> liftA2 FromIndex             <$> travE s <*> travE i
+    Tuple t                 -> liftA  Tuple                 <$> travT t
+    Prj ix e                -> liftA  (Prj ix)              <$> travE e
+    Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
+    While p f x             -> liftA3 While                 <$> travF p <*> travF f <*> travE x
+    PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
+    Index a e               -> liftA2 Index                 <$> travA a <*> travE e
+    LinearIndex a e         -> liftA2 LinearIndex           <$> travA a <*> travE e
+    Shape a                 -> liftA  Shape                 <$> travA a
+    ShapeSize e             -> liftA  ShapeSize             <$> travE e
+    Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
+    Union x y               -> liftA2 Union                 <$> travE x <*> travE y
+
+  where
+    travA :: (Shape sh, Elt e)
+          => DelayedOpenAcc aenv (Array sh e)
+          -> CIO (Free aenv, ExecOpenAcc aenv (Array sh e))
+    travA a = do
+      a'    <- compileOpenAcc a
+      return $ (bind a', a')
+
+    travT :: Tuple (DelayedOpenExp env aenv) t
+          -> CIO (Free aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
+    travT NilTup        = return (pure NilTup)
+    travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
+
     travE :: DelayedOpenExp env aenv e
           -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
-    travE exp =
-      case exp of
-        Var ix                  -> return $ pure (Var ix)
-        Const c                 -> return $ pure (Const c)
-        PrimConst c             -> return $ pure (PrimConst c)
-        IndexAny                -> return $ pure IndexAny
-        IndexNil                -> return $ pure IndexNil
-        Foreign ff f x          -> foreignE ff f x
-        --
-        Let a b                 -> liftA2 Let                   <$> travE a <*> travE b
-        IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
-        IndexHead h             -> liftA  IndexHead             <$> travE h
-        IndexTail t             -> liftA  IndexTail             <$> travE t
-        IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
-        IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
-        ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
-        FromIndex s i           -> liftA2 FromIndex             <$> travE s <*> travE i
-        Tuple t                 -> liftA  Tuple                 <$> travT t
-        Prj ix e                -> liftA  (Prj ix)              <$> travE e
-        Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
-        While p f x             -> liftA3 While                 <$> travF p <*> travF f <*> travE x
-        PrimApp f e             -> liftA  (PrimApp f)           <$> travE e
-        Index a e               -> liftA2 Index                 <$> travA a <*> travE e
-        LinearIndex a e         -> liftA2 LinearIndex           <$> travA a <*> travE e
-        Shape a                 -> liftA  Shape                 <$> travA a
-        ShapeSize e             -> liftA  ShapeSize             <$> travE e
-        Intersect x y           -> liftA2 Intersect             <$> travE x <*> travE y
+    travE = compileOpenExp
 
-      where
-        travA :: (Shape sh, Elt e)
-              => DelayedOpenAcc aenv (Array sh e)
-              -> CIO (Free aenv, ExecOpenAcc aenv (Array sh e))
-        travA a = do
-          a'    <- traverseAcc a
-          return $ (bind a', a')
+    travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
+    travF (Body b)  = liftA Body <$> travE b
+    travF (Lam  f)  = liftA Lam  <$> travF f
 
-        travT :: Tuple (DelayedOpenExp env aenv) t
-              -> CIO (Free aenv, Tuple (PreOpenExp ExecOpenAcc env aenv) t)
-        travT NilTup        = return (pure NilTup)
-        travT (SnocTup t e) = liftA2 SnocTup <$> travT t <*> travE e
+    foreignE :: (Elt a, Elt b, Foreign f)
+             => f a b
+             -> DelayedFun () (a -> b)
+             -> DelayedOpenExp env aenv a
+             -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv b)
+    foreignE ff f x = case canExecuteExp ff of
+      -- If it's a foreign function that we can generate code from, just
+      -- leave it alone. As the pure function is closed, the array
+      -- environment needs to be replaced with one of the right type.
+      --
+      Just _        -> liftA2 (Foreign ff) <$> pure <$> snd <$> travF f <*> travE x
 
-        travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
-        travF (Body b)  = liftA Body <$> travE b
-        travF (Lam  f)  = liftA Lam  <$> travF f
-
-        foreignE :: (Elt a, Elt b, Foreign f)
-                 => f a b
-                 -> DelayedFun () (a -> b)
-                 -> DelayedOpenExp env aenv a
-                 -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv b)
-        foreignE ff f x = case canExecuteExp ff of
-          -- If it's a foreign function that we can generate code from, just
-          -- leave it alone. As the pure function is closed, the array
-          -- environment needs to be replaced with one of the right type.
+      -- If the foreign function is not intended for this backend, this node
+      -- needs to be replaced by a pure accelerate node giving the same
+      -- result. Due to the lack of an 'apply' node in the scalar language,
+      -- this is done by substitution.
+      --
+      Nothing       -> travE (apply f x)
+        where
+          -- Twiddle the environment variables
           --
-          Just _        -> liftA2 (Foreign ff) <$> pure <$> snd <$> travF f <*> travE x
+          apply :: DelayedFun () (a -> b) -> DelayedOpenExp env aenv a -> DelayedOpenExp env aenv b
+          apply (Lam (Body b)) e    = Let e $ weaken wAcc $ weakenE wExp b
+          apply _ _                 = error "This was a triumph."
 
-          -- If the foreign function is not intended for this backend, this node
-          -- needs to be replaced by a pure accelerate node giving the same
-          -- result. Due to the lack of an 'apply' node in the scalar language,
-          -- this is done by substitution.
+          -- As the expression we want to weaken is closed with respect to the array
+          -- environment, the index manipulation function becomes a dummy argument.
           --
-          Nothing       -> travE (apply f x)
-            where
-              -- Twiddle the environment variables
-              --
-              apply :: DelayedFun () (a -> b) -> DelayedOpenExp env aenv a -> DelayedOpenExp env aenv b
-              apply (Lam (Body b)) e    = Let e $ weakenEA rebuildAcc wAcc $ weakenE wExp b
-              apply _ _                 = error "This was a triumph."
+          wAcc :: Idx () t -> Idx aenv t
+          wAcc _                    = error "I'm making a note here:"
 
-              -- As the expression we want to weaken is closed with respect to the array
-              -- environment, the index manipulation function becomes a dummy argument.
-              --
-              wAcc :: Idx () t -> Idx aenv t
-              wAcc _                    = error "I'm making a note here:"
+          wExp :: Idx ((),a) t -> Idx (env,a) t
+          wExp ZeroIdx              = ZeroIdx
+          wExp _                    = error "HUGE SUCCESS"
 
-              wExp :: Idx ((),a) t -> Idx (env,a) t
-              wExp ZeroIdx              = ZeroIdx
-              wExp _                    = error "HUGE SUCCESS"
+    bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
+    bind (ExecAcc _ _ (Avar ix)) = freevar ix
+    bind _                       = $internalError "bind" "expected array variable"
 
-        bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
-        bind (ExecAcc _ _ (Avar ix)) = freevar ix
-        bind _                       = $internalError "bind" "expected array variable"
+compileSeq :: DelayedSeq a -> CIO (ExecSeq a)
+compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> compileOpenSeq s
+  where
+    compileExtend :: Extend DelayedOpenAcc aenv aenv' -> CIO (Extend ExecOpenAcc aenv aenv')
+    compileExtend BaseEnv       = return BaseEnv
+    compileExtend (PushEnv e a) = PushEnv <$> compileExtend e <*> compileOpenAcc a
+
+compileOpenSeq :: forall aenv lenv arrs' . PreOpenSeq DelayedOpenAcc aenv lenv arrs' -> CIO (ExecOpenSeq aenv lenv arrs')
+compileOpenSeq l =
+  case l of
+    Producer   p l' -> ExecP <$> compileP p <*> compileOpenSeq l'
+    Consumer   c    -> ExecC <$> compileC c
+    Reify ix        -> return $ ExecR ix Nothing
+  where
+    compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
+    compileP p =
+      case p of
+        ToSeq slix (_ :: proxy slix) acc -> do
+          case acc of
+            -- In the case of converting an array that has not already been copied
+            -- to device memory, we are smart and treat it specially.
+            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix])
+            _                -> do
+              (free1, acc') <- travA acc
+              let gamma = makeEnvMap free1
+              dev <- asks deviceProperties
+              kernel <- build1Simple (codegenToSeq slix dev acc gamma)
+              return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
+        StreamIn xs -> return $ ExecStreamIn xs
+        MapSeq f x -> do
+          f' <- compileOpenAfun f
+          return $ ExecMap f' x
+        ZipWithSeq f x y -> do
+          f' <- compileOpenAfun f
+          return $ ExecZipWith f' x y
+        ScanSeq f a0 x ->  do
+          (_, a0') <- travE a0
+          (_, f')  <- travF f
+          return $ ExecScanSeq f' a0' x Nothing
+
+    compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
+    compileC c =
+      case c of
+        FoldSeq f a0 x -> do
+          (_, a0') <- travE a0
+          (_, f')  <- travF f
+          return $ ExecFoldSeq f' a0' x Nothing
+        FoldSeqFlatten f acc x -> do
+          acc' <- compileOpenAcc acc
+          f' <- compileOpenAfun f
+          return $ ExecFoldSeqFlatten f' acc' x Nothing
+        Stuple t -> ExecStuple <$> compileCT t
+
+    compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
+    compileCT NilAtup        = return NilAtup
+    compileCT (SnocAtup t c) = SnocAtup <$> compileCT t <*> compileC c
+
+    travA :: DelayedOpenAcc aenv a -> CIO (Free aenv, ExecOpenAcc aenv a)
+    travA acc = case acc of
+      Manifest{}    -> pure                    <$> compileOpenAcc acc
+      Delayed{..}   -> liftA2 (const EmbedAcc) <$> travF indexD <*> travE extentD
+
+    travE :: DelayedOpenExp env aenv e
+          -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
+    travE = compileOpenExp
+
+    travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
+    travF (Body b)  = liftA Body <$> travE b
+    travF (Lam  f)  = liftA Lam  <$> travF f
 
 
 -- Applicative
@@ -345,6 +426,41 @@ build1 acc code = do
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
         o <- determineOccupancy acc dev f l
+        D.when D.dump_cc (stats entry f o)
+        return (m,f,o)
+  --
+  return $ AccKernel entry fun mdl occ cta smem blocks
+  where
+    stats name fn occ = do
+      regs      <- CUDA.requires fn CUDA.NumRegs
+      smem      <- CUDA.requires fn CUDA.SharedSizeBytes
+      cmem      <- CUDA.requires fn CUDA.ConstSizeBytes
+      lmem      <- CUDA.requires fn CUDA.LocalSizeBytes
+      let msg1  = "entry function '" ++ name ++ "' used "
+                  ++ shows regs " registers, "  ++ shows smem " bytes smem, "
+                  ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
+          msg2  = "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
+                  ++ shows (CUDA.activeThreads occ)      " threads over "
+                  ++ shows (CUDA.activeWarps occ)        " warps in "
+                  ++ shows (CUDA.activeThreadBlocks occ) " blocks"
+      --
+      -- make sure kernel/stats are printed together. Use 'intercalate' rather
+      -- than 'unlines' to avoid a trailing newline.
+      --
+      message   $ intercalate "\n     ... " [msg1, msg2]
+
+build1Simple :: CUTranslSkel aenv a -> CIO (AccKernel a)
+build1Simple code = do
+  context       <- asks activeContext
+  let dev       =  deviceProperties context
+  table         <- gets kernelTable
+  (entry,key)   <- compile table dev code
+  let (cta,blocks,smem) = launchConfigSimple dev occ
+      (mdl,fun,occ)     = unsafePerformIO $ do
+        m <- link context table key
+        f <- CUDA.getFun m entry
+        l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
+        o <- determineOccupancySimple dev f l
         D.when D.dump_cc (stats entry f o)
         return (m,f,o)
   --
