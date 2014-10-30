@@ -824,10 +824,23 @@ codegenSig (IntegralNumType ty) = codegenIntegralSig ty
 codegenSig (FloatingNumType ty) = codegenFloatingSig ty
 
 codegenIntegralSig :: IntegralType a -> C.Exp -> C.Exp
-codegenIntegralSig ty x = [cexp|$exp:x == $exp:zero ? $exp:zero : $exp:(ccall "copysign" [one,x]) |]
+codegenIntegralSig ty x =
+  case ty of
+    TypeWord _          -> unsigned
+    TypeWord8 _         -> unsigned
+    TypeWord16 _        -> unsigned
+    TypeWord32 _        -> unsigned
+    TypeWord64 _        -> unsigned
+    TypeCUShort _       -> unsigned
+    TypeCUInt _         -> unsigned
+    TypeCULong _        -> unsigned
+    TypeCULLong _       -> unsigned
+    _                   -> signed
   where
-    zero | IntegralDict <- integralDict ty = codegenIntegralScalar ty 0
-    one  | IntegralDict <- integralDict ty = codegenIntegralScalar ty 1
+    unsigned    = [cexp| $exp:x > $exp:zero |]
+    signed      = [cexp| ($exp:x > 0) - ($exp:x < 0) |]
+    zero        | IntegralDict <- integralDict ty
+                = codegenIntegralScalar ty 0
 
 codegenFloatingSig :: FloatingType a -> C.Exp -> C.Exp
 codegenFloatingSig ty x =
