@@ -838,7 +838,7 @@ codegenIntegralSig ty x =
     _                   -> signed
   where
     unsigned    = [cexp| $exp:x > $exp:zero |]
-    signed      = [cexp| ($exp:x > 0) - ($exp:x < 0) |]
+    signed      = [cexp| ($exp:x > $exp:zero) - ($exp:x < $exp:zero) |]
     zero        | IntegralDict <- integralDict ty
                 = codegenIntegralScalar ty 0
 
