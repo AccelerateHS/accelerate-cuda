@@ -507,8 +507,8 @@ link context table key =
         -- the binary object.
         --
         message "waiting for nvcc..."
-        takeMVar done
         let cubin       =  replaceExtension cufile ".cubin"
+        ()              <- takeMVar done
         bin             <- B.readFile cubin
         mdl             <- CUDA.loadData bin
         addFinalizer mdl (module_finalizer weak_ctx key mdl)
@@ -642,6 +642,10 @@ enqueueProcess nvcc flags = do
 
       -- ... and wait for it to complete
       waitFor pid
+        -- If compilation fails for some reason, fill the MVar by re-throwing
+        -- the exception. This prevents the host thread from waiting
+        -- indefinitely, which then requires the program to be killed manually.
+        `catch` \(e :: SomeException) -> do putMVar mvar (throw e)
       ccEnd             <- getTime
 
       return (diffTime ccBegin ccEnd)
