@@ -82,6 +82,7 @@ Flag internal-checks
 
 Library
   Build-depends:        accelerate              == 0.16.*,
+                        accelerate-backend-kit  >= 0.16,
                         array                   >= 0.3,
                         base                    == 4.7.*,
                         binary                  >= 0.7,

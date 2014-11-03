@@ -2,6 +2,9 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE TypeFamilies        #-} 
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -193,18 +196,21 @@ module Data.Array.Accelerate.CUDA (
   runAsync, run1Async, runAsyncIn, run1AsyncIn,
 
   -- * Execution contexts
-  Context, create, destroy,
+  Context, create, destroy, defaultBackend, CUDABkend, defaultTrafoConfig, allBackends
 
 ) where
 
 -- standard library
 import Control.Exception
 import Control.Applicative
+import Control.Monad
 import Control.Monad.Trans
+import Data.Typeable (Typeable)
 import System.IO.Unsafe
 
 -- friends
 import Data.Array.Accelerate.Trafo
+import qualified Data.Array.Accelerate.Trafo.Fusion as Fusion
 import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
@@ -217,6 +223,22 @@ import Data.Array.Accelerate.CUDA.Execute
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
 #endif
+
+--
+-- hacks for multidev
+--
+
+import Data.Array.Accelerate.CUDA.AST               ( ExecAcc, ExecAfun, OpenAcc(..), PreOpenAcc(..) )
+import Data.Array.Accelerate.CUDA.Analysis.Device   ( allDevices )
+import qualified Foreign.CUDA.Driver as Driver
+import Foreign.CUDA.Driver.Error 
+
+-- backend-kit
+import Data.Array.Accelerate.BackendClass
+
+-- temporary
+import Control.Concurrent.MVar (newMVar, withMVar, MVar)
+import Foreign.CUDA.Driver (initialise)
 
 
 -- Accelerate: CUDA
@@ -390,4 +412,143 @@ dumpStats next = do
 #else
 dumpStats next = return next
 #endif
+
+
+-- Backend class
+-- -------------
+
+defaultTrafoConfig :: Phase  
+defaultTrafoConfig = config
+
+data CUDABkend = CUDA { withContext  :: !Context } deriving (Typeable)
+-- BJS: Context is an Accelerate type from Data.Array.Accelerate.CUDA.Context
+--      look at it.
+
+defaultBackend :: CUDABkend
+defaultBackend = CUDA defaultContext
+-- BJS: defaultContext defined elsewhere (I guess D.A.CUDA.Context)
+
+
+-- | All CUDA cards on the system:
+allBackends :: [CUDABkend]
+allBackends = unsafePerformIO $ do
+  prs <- allDevices
+  forM prs $ \ (dev,_) -> do
+    -- message dump_gc "gc: initialise allBackends"
+    Driver.initialise []
+    ctxt <- create dev [Driver.SchedAuto]
+    return $ CUDA ctxt
+
+instance Show CUDABkend where
+  show (CUDA Context{deviceProperties,deviceContext}) = 
+    "<CUDA-Backend: "++show deviceProperties++", "++ show deviceContext ++">"
+
+-- TEMP: running into initialization bugs [2014.07.07] -RRN
+{-# NOINLINE cudaInitialized #-}
+cudaInitialized :: MVar Bool
+cudaInitialized = unsafePerformIO (newMVar False)
+
+instance Backend CUDABkend where
+  data Remote CUDABkend a = CUR { remoteContext :: !Context
+                                , remoteArray   :: {-# UNPACK #-} !(Async a) }
+  data Blob CUDABkend a   = CUBlobAcc  { blobAcc  :: ExecAcc a }
+                          | CUBlobAfun { blobAfun :: ExecAfun a } 
+
+  -- Accelerate expressions
+  -- ----------------------
+
+  -- Pre-compile an Accelerate computation for the CUDA backend. This populates
+  -- the internal caches as well as producing an annotated AST to facilitate
+  -- later execution.
+  --
+  compile c _ acc =    
+     do withMVar cudaInitialized $ \ bl -> 
+           do unless bl (initialise [])
+              return True        
+        let ast = Fusion.convertAcc True acc  -- HACK, should rationalize this
+        x <- evalCUDA (withContext c) (compileAcc ast)
+        return $ CUBlobAcc x
+  -- FIXME: we need to handle DelayedAcc... and perhaps even change
+  -- the Backend class interface?  -RRN [2014.07.02]
+
+{-
+  compileFun1 c _ afun     = CUAfun <$> evalCUDA (withContext c) (compileAfun afun)
+-}
+  -- Run Accelerate expressions. This is executed asynchronously and does not
+  -- copy the result back to the host.
+  --
+  runRaw c acc cache = do
+    CUBlobAcc{blobAcc} <- maybe (compile c "" acc) return cache 
+    result <- async $ evalCUDA (withContext c) (executeAcc blobAcc)
+    let remt = CUR (withContext c) result
+    waitRemote c remt -- RRN: adding this TEMPORARILY
+    return $! remt
+
+{-
+  runRawFun1 c acc cache r = do
+    result <- async . evalCUDA (withContext c) $ do
+                arr  <- liftIO $ wait . remoteArray =<< copyToPeer c r
+                afun <- maybe (compileAfun acc) (return . blobAfun) cache
+                executeAfun1 afun arr
+    return $! CUR (withContext c) result
+-}
+
+  -- Array management
+  -- ----------------
+
+  -- Copying to host/device
+  --
+  copyToHost _ r        = evalCUDA (remoteContext r) . collect =<< wait (remoteArray r)
+  copyToDevice c arrs   = do
+    result <- async . evalCUDA (withContext c) $ pokeR (arrays arrs) (fromArr arrs) >> return arrs
+    return $! CUR (withContext c) result
+    where
+      pokeR :: ArraysR a -> a -> CIO a
+      pokeR ArraysRunit ()               = return ()
+      pokeR ArraysRarray a               = pokeArrayAsync a Nothing >> return a
+      pokeR (ArraysRpair r1 r2) (a1, a2) = (,) <$> pokeR r1 a1 <*> pokeR r2 a2
+
+  -- If we are attempting to use the remote array on a context different from
+  -- the one the array was evaluated on, then we must copy the array data to the
+  -- new execution context. The actual host side array, for GC purposes, remains
+  -- the same.
+  --
+  copyToPeer c r
+    | srcCtx == dstCtx  = return r
+    | otherwise         = do
+        result  <- async $ do
+          src <- wait (remoteArray r)
+          evalCUDA dstCtx $ do
+            mallocR (arrays src) (fromArr src)
+            copyR (arrays src) (fromArr src) (fromArr src)
+            --
+          return src
+        return $! CUR dstCtx result
+    where
+      srcCtx = remoteContext r
+      dstCtx = withContext c
+
+      copyR :: ArraysR a -> a -> a -> CIO ()
+      copyR ArraysRunit         ()       ()       = return ()
+      copyR ArraysRarray        as       bs       = copyArrayPeer as srcCtx bs dstCtx
+      copyR (ArraysRpair r1 r2) (a1, a2) (b1, b2) = copyR r1 a1 b1 >> copyR r2 a2 b2
+
+      mallocR :: ArraysR a -> a -> CIO ()
+      mallocR ArraysRunit         ()       = return ()
+      mallocR ArraysRarray        a        = mallocArray a
+      mallocR (ArraysRpair r1 r2) (a1, a2) = mallocR r1 a1 >> mallocR r2 a2
+
+  -- Wait for a remote to finish executing
+  --
+  waitRemote _  = void . wait . remoteArray
+
+  -- Inject a remote array into an AST node
+  --
+  useRemote _ a = OpenAcc . Use . fromArr <$> wait (remoteArray a)
+  -- FIXME!  Ideally this would not copy!
+
+  -- Configuration
+  -- -------------
+
+  separateMemorySpace _         = True          -- some devices share host memory, but we still copy
 
