@@ -156,7 +156,7 @@ malloc :: forall a b. (Typeable a, Typeable b, Storable b) => Context -> MemoryT
 malloc !ctx mt@(MemoryTable _ _ !nursery) !ad !n = do
   let -- next highest multiple of f from x
       multiple x f      = floor ((x + (f-1)) / f :: Double)
-      chunk             = 128
+      chunk             = 1024
 
       !n'               = chunk * multiple (fromIntegral n) (fromIntegral chunk)
       !bytes            = n' * sizeOf (undefined :: b)
