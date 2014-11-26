@@ -194,7 +194,7 @@ module Data.Array.Accelerate.CUDA (
 
   -- * Execution contexts
   Context, create, destroy,
-  unsafeFreeArrays, performGC,
+  unsafeFree, unsafeFreeIn, performGC, performGCIn,
 
 ) where
 
@@ -403,9 +403,12 @@ dumpStats next = return next
 -- This is unsafe in the sense that it is possible to call this function while
 -- the array is currently in use.
 --
-unsafeFreeArrays :: forall arrs. Arrays arrs => arrs -> IO ()
-unsafeFreeArrays !arrs
-  = evalCUDA defaultContext
+unsafeFree :: Arrays arrs => arrs -> IO ()
+unsafeFree = unsafeFreeIn defaultContext
+
+unsafeFreeIn :: forall arrs. Arrays arrs => Context -> arrs -> IO ()
+unsafeFreeIn !ctx !arrs
+  = evalCUDA ctx
   $ freeR (arrays (undefined :: arrs)) (fromArr arrs)
   where
     freeR :: ArraysR a -> a -> CIO ()
@@ -417,5 +420,8 @@ unsafeFreeArrays !arrs
 -- Release any unused device memory
 --
 performGC :: IO ()
-performGC = evalCUDA defaultContext cleanupArrayData
+performGC = performGCIn defaultContext
+
+performGCIn :: Context -> IO ()
+performGCIn !ctx = evalCUDA ctx cleanupArrayData
 
