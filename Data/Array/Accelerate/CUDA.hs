@@ -186,16 +186,16 @@ module Data.Array.Accelerate.CUDA (
   Arrays,
 
   -- * Synchronous execution
-  run, run1, streamOut, stream, runWith, run1With,
-  streamOutWith, streamWith,
+  run, run1, runWith, run1With,
+  stream, streamOut, streamWith, streamOutWith,
 
   -- * Asynchronous execution
   Async, wait, poll, cancel,
-  runAsync, run1Async, runAsyncIn, run1AsyncIn,
+  runAsync, run1Async, runAsyncWith, run1AsyncWith,
 
   -- * Execution contexts
   Context, create, destroy,
-  unsafeFree, unsafeFreeIn, performGC, performGCIn,
+  unsafeFree, unsafeFreeWith, performGC, performGCWith,
 
 ) where
 
@@ -241,12 +241,12 @@ run a
 -- computation can be queried using 'wait', 'poll', and 'cancel'.
 --
 -- Note that a CUDA Context can be active on only one host thread at a time. If
--- you want to execute multiple computations in parallel, use 'runAsyncIn'.
+-- you want to execute multiple computations in parallel, use 'runAsyncWith'.
 --
 runAsync :: Arrays a => Acc a -> Async a
 runAsync a
   = unsafePerformIO
-  $ evaluate (runAsyncIn defaultContext a)
+  $ evaluate (runAsyncWith defaultContext a)
 
 -- | As 'run', but execute using the specified device context rather than using
 -- the default, automatically selected device.
@@ -264,15 +264,15 @@ runAsync a
 runWith :: Arrays a => Context -> Acc a -> a
 runWith ctx a
   = unsafePerformIO
-  $ evaluate (runAsyncIn ctx a) >>= wait
+  $ evaluate (runAsyncWith ctx a) >>= wait
 
 
 -- | As 'runWith', but execute asynchronously. Be sure not to destroy the context,
 -- or attempt to attach it to a different host thread, before all outstanding
 -- operations have completed.
 --
-runAsyncIn :: Arrays a => Context -> Acc a -> Async a
-runAsyncIn ctx a = unsafePerformIO $ async execute
+runAsyncWith :: Arrays a => Context -> Acc a -> Async a
+runAsyncWith ctx a = unsafePerformIO $ async execute
   where
     !acc    = convertAccWith config a
     execute = evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
@@ -321,18 +321,18 @@ run1 f
 run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
 run1Async f
   = unsafePerformIO
-  $ evaluate (run1AsyncIn defaultContext f)
+  $ evaluate (run1AsyncWith defaultContext f)
 
 -- | As 'run1', but execute in the specified context.
 --
 run1With :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
-run1With ctx f = let go = run1AsyncIn ctx f
-               in \a -> unsafePerformIO $ wait (go a)
+run1With ctx f = let go = run1AsyncWith ctx f
+                 in \a -> unsafePerformIO $ wait (go a)
 
 -- | As 'run1With', but execute asynchronously.
 --
-run1AsyncIn :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
-run1AsyncIn ctx f = \a -> unsafePerformIO $ async (execute a)
+run1AsyncWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
+run1AsyncWith ctx f = \a -> unsafePerformIO $ async (execute a)
   where
     !acc      = convertAfunWith config f
     !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc) >>= dumpStats
@@ -434,10 +434,10 @@ dumpStats next = return next
 -- the array is currently in use.
 --
 unsafeFree :: Arrays arrs => arrs -> IO ()
-unsafeFree = unsafeFreeIn defaultContext
+unsafeFree = unsafeFreeWith defaultContext
 
-unsafeFreeIn :: forall arrs. Arrays arrs => Context -> arrs -> IO ()
-unsafeFreeIn !ctx !arrs
+unsafeFreeWith :: forall arrs. Arrays arrs => Context -> arrs -> IO ()
+unsafeFreeWith !ctx !arrs
   = evalCUDA ctx
   $ freeR (arrays (undefined :: arrs)) (fromArr arrs)
   where
@@ -450,8 +450,8 @@ unsafeFreeIn !ctx !arrs
 -- Release any unused device memory
 --
 performGC :: IO ()
-performGC = performGCIn defaultContext
+performGC = performGCWith defaultContext
 
-performGCIn :: Context -> IO ()
-performGCIn !ctx = evalCUDA ctx cleanupArrayData
+performGCWith :: Context -> IO ()
+performGCWith !ctx = evalCUDA ctx cleanupArrayData
 
