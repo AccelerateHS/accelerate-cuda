@@ -17,7 +17,7 @@
 module Data.Array.Accelerate.CUDA.Array.Table (
 
   -- Tables for host/device memory associations
-  MemoryTable, new, lookup, malloc, insert, insertRemote, reclaim
+  MemoryTable, new, lookup, malloc, free, insert, insertRemote, reclaim
 
 ) where
 
@@ -173,6 +173,19 @@ malloc !ctx mt@(MemoryTable _ _ !nursery) !ad !n = do
   return ptr
 
 
+-- Deallocate the device array associated with the given host-side array. This
+-- calls the finaliser for that array immediately, regardless of the current (or
+-- future) use status of that array.
+--
+free :: Typeable a => Context -> MemoryTable -> ArrayData a -> IO ()
+free !ctx (MemoryTable !ref _ _) !arr = do
+  sa <- makeStableArray ctx arr
+  mw <- withMVar ref (`HT.lookup` sa)
+  case mw of
+    Nothing              -> message ("free/not found: " ++ show sa)
+    Just (DeviceArray w) -> trace   ("free/evict: " ++ show sa) $ finalize w
+
+
 -- Record an association between a host-side array and a new device memory area.
 -- The device memory will be freed when the host array is garbage collected.
 --
@@ -204,7 +217,7 @@ insertRemote !ctx (MemoryTable !ref !weak_ref _) !arr !ptr = do
 --
 reclaim :: MemoryTable -> IO ()
 reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
-  (free, total) <- CUDA.getMemInfo
+  (before, total) <- CUDA.getMemInfo
   performGC
   yield
   withMVar nrs N.flush
@@ -217,9 +230,9 @@ reclaim (MemoryTable _ weak_ref (Nursery nrs _)) = do
         unless alive $ finalize w
   --
   D.when D.dump_gc $ do
-    (free', _)  <- CUDA.getMemInfo
-    message $ "reclaim: freed "   ++ showBytes (fromIntegral (free - free'))
-                        ++ ", "   ++ showBytes (fromIntegral free')
+    (after, _) <- CUDA.getMemInfo
+    message $ "reclaim: freed "   ++ showBytes (fromIntegral (before - after))
+                        ++ ", "   ++ showBytes (fromIntegral after)
                         ++ " of " ++ showBytes (fromIntegral total) ++ " remaining"
 
 -- Because a finaliser might run at any time, we must reinstate the context in

@@ -195,6 +195,7 @@ module Data.Array.Accelerate.CUDA (
 
   -- * Execution contexts
   Context, create, destroy,
+  unsafeFreeArrays, performGC,
 
 ) where
 
@@ -420,4 +421,31 @@ dumpStats next = do
 #else
 dumpStats next = return next
 #endif
+
+
+-- Device memory management
+-- ------------------------
+--
+-- Temporarily defining here, until we can define the interface for it.
+
+
+-- Deallocate the device arrays corresponding to the given host side arrays.
+-- This is unsafe in the sense that it is possible to call this function while
+-- the array is currently in use.
+--
+unsafeFreeArrays :: forall arrs. Arrays arrs => arrs -> IO ()
+unsafeFreeArrays !arrs
+  = evalCUDA defaultContext
+  $ freeR (arrays (undefined :: arrs)) (fromArr arrs)
+  where
+    freeR :: ArraysR a -> a -> CIO ()
+    freeR ArraysRunit             ()             = return ()
+    freeR ArraysRarray            arr            = freeArray arr
+    freeR (ArraysRpair aeR1 aeR2) (arrs1, arrs2) = freeR aeR1 arrs1 >> freeR aeR2 arrs2
+
+
+-- Release any unused device memory
+--
+performGC :: IO ()
+performGC = evalCUDA defaultContext cleanupArrayData
 
