@@ -363,20 +363,21 @@ streamOut = streamOutWith defaultContext
 streamOutWith :: forall a. Arrays a => Context -> Seq [a] -> [a]
 streamOutWith ctx = exec . compile . convertSeq
   where
-    exec s
-      = go (streamSeq s)
+    compile     = unsafePerformIO . evalCUDA ctx . compileSeq
+    exec s      = go (streamSeq s)
       where
-        go !s'
-          = case step s' of
-              Nothing      -> []
-              Just (a, s'') -> a : go s''
-        step (StreamSeq ss) = unsafePerformIO . evalCUDA ctx
-               $ do
-                   m <- ss
-                   case m of
-                     Nothing -> return Nothing
-                     Just (a, s') -> collect a >> return (Just (a, s'))
-    compile = unsafePerformIO . evalCUDA ctx . compileSeq
+        go !s' = case step s' of
+          Nothing       -> []
+          Just (a, s'') -> a : go s''
+
+        step (StreamSeq ss)
+          = unsafePerformIO
+          $ evalCUDA ctx
+          $ do m <- ss
+               case m of
+                 Nothing      -> return Nothing
+                 Just (a, s') -> collect a >> return (Just (a, s'))
+
 
 -- RCE: Similar to run1* variants, we need to be ultra careful with streamOut*
 -- in order to make sure that the entire sequence is not reified at once.
