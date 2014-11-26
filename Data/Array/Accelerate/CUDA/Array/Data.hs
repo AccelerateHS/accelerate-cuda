@@ -19,7 +19,8 @@
 module Data.Array.Accelerate.CUDA.Array.Data (
 
   -- * Array operations and representations
-  mallocArray, indexArray,
+  mallocArray, freeArray,
+  indexArray,
   useArray,  useArrayAsync,
   useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
@@ -131,6 +132,25 @@ mallocArray (Array !sh !adata) = run doMalloc
         --
         mallocPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> IO ()
         mkPrimDispatch(mallocPrim,Prim.mallocArray)
+
+
+-- |Deallocate the device array accompanying the given host-side array.
+--
+-- Note that this does not take into account whether or not the data is still
+-- required by the current (or future) computation.
+--
+freeArray :: Array dim e -> CIO ()
+freeArray (Array !_ !adata) = run doFree
+  where
+    doFree !ctx !mt = freeR arrayElt adata
+      where
+        freeR :: ArrayEltR e -> ArrayData e -> IO ()
+        freeR ArrayEltRunit             _  = return ()
+        freeR (ArrayEltRpair aeR1 aeR2) ad = freeR aeR1 (fst ad) >> freeR aeR2 (snd ad)
+        freeR aer                       ad = freePrim aer ctx mt ad
+        --
+        freePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> IO ()
+        mkPrimDispatch(freePrim,free)
 
 
 -- |Upload an existing array to the device
