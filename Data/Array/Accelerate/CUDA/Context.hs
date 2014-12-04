@@ -23,7 +23,7 @@ module Data.Array.Accelerate.CUDA.Context (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Debug                 ( message, verbose, dump_gc, showFFloatSIBase )
+import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- system
@@ -67,7 +67,7 @@ create dev flags = do
   when (CUDA.computeCapability prp >= CUDA.Compute 2 0)
      $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.setCacheConfig CUDA.PreferL1)
 
-  message verbose (deviceInfo dev prp)
+  traceIO verbose (deviceInfo dev prp)
   return actx
 
 -- |Given a device context, construct a new context around it.
@@ -76,9 +76,9 @@ fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
 fromDeviceContext dev ctx = do
   prp           <- CUDA.props dev
   weak          <- mkWeakContext ctx $ do
-    message dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
+    traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
     CUDA.destroy ctx
-  message dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
+  traceIO dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
 
   return $! Context prp ctx weak
 
@@ -88,7 +88,7 @@ fromDeviceContext dev ctx = do
 {-# INLINE destroy #-}
 destroy :: Context -> IO ()
 destroy (deviceContext -> ctx) = do
-  message dump_gc ("gc: destroy context: #" ++ show (CUDA.useContext ctx))
+  traceIO dump_gc ("gc: destroy context: #" ++ show (CUDA.useContext ctx))
   CUDA.destroy ctx
 
 
@@ -98,7 +98,7 @@ destroy (deviceContext -> ctx) = do
 {-# INLINE push #-}
 push :: Context -> IO ()
 push (deviceContext -> ctx) = do
-  message dump_gc ("gc: push context: #" ++ show (CUDA.useContext ctx))
+  traceIO dump_gc ("gc: push context: #" ++ show (CUDA.useContext ctx))
   CUDA.push ctx
 
 
@@ -108,7 +108,7 @@ push (deviceContext -> ctx) = do
 pop :: IO ()
 pop = do
   ctx <- CUDA.pop
-  message dump_gc ("gc: pop context: #" ++ show (CUDA.useContext ctx))
+  traceIO dump_gc ("gc: pop context: #" ++ show (CUDA.useContext ctx))
 
 
 -- Make a weak pointer to a CUDA context. We need to be careful to put the

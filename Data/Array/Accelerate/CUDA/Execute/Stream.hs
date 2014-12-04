@@ -23,10 +23,7 @@ import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..) )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.FullList            as FL
-
-#ifdef ACCELERATE_DEBUG
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-#endif
 
 -- libraries
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
@@ -163,15 +160,11 @@ flush !tbl =
 
 {-# INLINE trace #-}
 trace :: String -> IO a -> IO a
-trace _msg next = do
-#ifdef ACCELERATE_DEBUG
-  D.when D.verbose $ D.message D.dump_exec ("stream: " ++ _msg)
-#endif
-  next
+trace msg next = message msg >> next
 
 {-# INLINE message #-}
 message :: String -> IO ()
-message s = s `trace` return ()
+message msg = D.traceIO D.dump_sched ("stream: " ++ msg)
 
 {-# INLINE showStream #-}
 showStream :: Stream -> String

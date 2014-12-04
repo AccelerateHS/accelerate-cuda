@@ -468,13 +468,9 @@ advancePtrsOfArrayData !n !_ !ptr = CUDA.advanceDevPtr ptr n
 showBytes :: Int -> String
 showBytes x = D.showFFloatSIBase (Just 0) 1024 (fromIntegral x :: Double) "B"
 
-{-# INLINE trace #-}
-trace :: String -> IO a -> IO a
-trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
-
 {-# INLINE message #-}
 message :: String -> IO ()
-message s = s `trace` return ()
+message msg = D.traceIO D.dump_gc ("gc: " ++ msg)
 
 {-# INLINE transfer #-}
 transfer :: String -> Int -> IO () -> IO ()

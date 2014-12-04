@@ -16,9 +16,7 @@ module Data.Array.Accelerate.CUDA.Execute.Event (
 ) where
 
 -- friends
-#ifdef ACCELERATE_DEBUG
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
-#endif
 
 -- libraries
 import Foreign.CUDA.Driver.Event                                ( Event(..) )
@@ -73,17 +71,9 @@ block = Event.block
 -- Debug
 -- -----
 
-{-# INLINE trace #-}
-trace :: String -> IO a -> IO a
-trace _msg next = do
-#ifdef ACCELERATE_DEBUG
-  D.when D.verbose $ D.message D.dump_exec ("event: " ++ _msg)
-#endif
-  next
-
 {-# INLINE message #-}
 message :: String -> IO ()
-message s = s `trace` return ()
+message msg = D.traceIO D.dump_sched ("event: " ++ msg)
 
 {-# INLINE showEvent #-}
 showEvent :: Event -> String

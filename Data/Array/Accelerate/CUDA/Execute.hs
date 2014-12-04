@@ -905,17 +905,17 @@ execute :: Marshalable args
         -> Stream                       -- Compute stream to execute in
         -> CIO ()
 execute !kernel !gamma !aenv !n !a !stream = do
-  args <- arguments kernel aenv gamma a stream
-  launch kernel (configure kernel n) args stream
+  args  <- arguments kernel aenv gamma a stream
+  liftIO $ launch kernel (configure kernel n) args stream
 
 
 -- Execute a device function, with the given thread configuration and function
 -- parameters. The tuple contains (threads per block, grid size, shared memory)
 --
-launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> Stream -> CIO ()
+launch :: AccKernel a -> (Int,Int,Int) -> [CUDA.FunParam] -> Stream -> IO ()
 launch (AccKernel entry !fn _ _ _ _ _) !(cta, grid, smem) !args !stream
   = D.timed D.dump_exec msg (Just stream)
-  $ liftIO $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem (Just stream) args
+  $ CUDA.launchKernel fn (grid,1,1) (cta,1,1) smem (Just stream) args
   where
     msg gpuTime cpuTime
       = "exec: " ++ entry ++ "<<< " ++ shows grid ", " ++ shows cta ", " ++ shows smem " >>> "

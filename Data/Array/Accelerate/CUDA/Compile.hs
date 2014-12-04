@@ -447,7 +447,7 @@ build1 acc code = do
       -- make sure kernel/stats are printed together. Use 'intercalate' rather
       -- than 'unlines' to avoid a trailing newline.
       --
-      message   $ intercalate "\n     ... " [msg1, msg2]
+      message   $ intercalate "\n      ... " [msg1, msg2]
 
 build1Simple :: CUTranslSkel aenv a -> CIO (AccKernel a)
 build1Simple code = do
@@ -482,7 +482,7 @@ build1Simple code = do
       -- make sure kernel/stats are printed together. Use 'intercalate' rather
       -- than 'unlines' to avoid a trailing newline.
       --
-      message   $ intercalate "\n     ... " [msg1, msg2]
+      message   $ intercalate "\n      ... " [msg1, msg2]
 
 
 -- Link a compiled binary and update the associated kernel entry in the hash
@@ -575,6 +575,8 @@ compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
   CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProperties
   ddir                  <- liftIO getDataDir
+  warnings              <- liftIO $ (&&) <$> D.queryFlag D.dump_cc <*> D.queryFlag D.verbose
+  debug                 <- liftIO $ D.queryFlag D.debug_cc
   return                $  filter (not . null) $
     [ "-I", ddir </> "cubits"
     , "-arch=sm_" ++ show m ++ show n
@@ -588,8 +590,6 @@ compileFlags cufile = do
     , machine
     , cufile ]
   where
-    warnings    = D.mode D.dump_cc && D.mode D.verbose
-    debug       = D.mode D.debug_cc
     machine     = case finiteBitSize (undefined :: Int) of
                     32  -> "-m32"
                     64  -> "-m64"
@@ -709,9 +709,5 @@ time p = do
 
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
-message msg = trace msg $ return ()
-
-{-# INLINE trace #-}
-trace :: MonadIO m => String -> m a -> m a
-trace msg next = D.message D.dump_cc ("cc: " ++ msg) >> next
+message msg = liftIO $ D.traceIO D.dump_cc ("cc: " ++ msg)
 

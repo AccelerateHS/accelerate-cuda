@@ -30,7 +30,7 @@ module Data.Array.Accelerate.CUDA.State (
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Debug                 ( message, dump_gc )
+import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, dump_gc )
 import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
 import Data.Array.Accelerate.CUDA.Array.Table           as MT ( MemoryTable, new )
 import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
@@ -100,7 +100,7 @@ evalCUDA !ctx !acc =
 theState :: State
 theState
   = unsafePerformIO
-  $ do  message dump_gc "gc: initialise CUDA state"
+  $ do  message "initialise CUDA state"
         mtb     <- keepAlive =<< MT.new
         ktb     <- keepAlive =<< KT.new
         rsv     <- keepAlive =<< ST.new
@@ -114,8 +114,16 @@ theState
 {-# NOINLINE defaultContext #-}
 defaultContext :: Context
 defaultContext = unsafePerformIO $ do
-  message dump_gc "gc: initialise default context"
+  message "initialise default context"
   CUDA.initialise []
   (dev,_)       <- selectBestDevice
   create dev [CUDA.SchedAuto]
+
+
+-- Debug
+-- -----
+
+{-# INLINE message #-}
+message :: String -> IO ()
+message msg = traceIO dump_gc ("gc: " ++ msg)
 

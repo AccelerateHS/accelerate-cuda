@@ -114,11 +114,7 @@ flush !tbl =
 -- Debug
 -- -----
 
-{-# INLINE trace #-}
-trace :: String -> IO a -> IO a
-trace msg next = D.message D.dump_gc ("gc: " ++ msg) >> next
-
 {-# INLINE message #-}
 message :: String -> IO ()
-message s = s `trace` return ()
+message msg = D.traceIO D.dump_gc ("gc: " ++ msg)
 

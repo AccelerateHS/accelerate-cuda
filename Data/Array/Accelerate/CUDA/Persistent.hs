@@ -41,8 +41,9 @@ import System.Mem.Weak
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
-import Control.Monad.Trans
+import Control.Monad                                    ( when )
 import Data.Version
+import Data.Maybe                                       ( fromMaybe )
 import Data.Binary
 import Data.Hashable
 import Data.Binary.Get
@@ -140,8 +141,8 @@ module_finalizer :: Weak CUDA.Context -> KernelKey -> CUDA.Module -> IO ()
 module_finalizer weak_ctx key mdl = do
   mc <- deRefWeak weak_ctx
   case mc of
-    Nothing     -> D.message D.dump_gc ("gc: finalise module/dead context: " ++ cacheFilePath key)
-    Just ctx    -> D.message D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
+    Nothing     -> D.traceIO D.dump_gc ("gc: finalise module/dead context: " ++ cacheFilePath key)
+    Just ctx    -> D.traceIO D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
                 >> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)
 
 
@@ -299,7 +300,8 @@ getMany n = go n []
 --
 restore :: FilePath -> IO PersistentCache
 restore !db = do
-  D.when D.flush_cache $ do
+  mflush <- D.queryFlag D.flush_cache
+  when (fromMaybe False mflush) $ do
     message "deleting persistent cache"
     cacheDir <- cacheDirectory
     removeDirectoryRecursive cacheDir
@@ -376,10 +378,6 @@ persist (KT !_ !pt_ref) !cubin !key = withMVar pt_ref $ \_ -> do
 -- -----
 
 {-# INLINE message #-}
-message :: MonadIO m => String -> m ()
-message msg = trace msg $ return ()
-
-{-# INLINE trace #-}
-trace :: MonadIO m => String -> m a -> m a
-trace msg next = D.message D.dump_cc ("cc: " ++ msg) >> next
+message :: String -> IO ()
+message msg = D.traceIO D.dump_cc ("cc: " ++ msg)
 
