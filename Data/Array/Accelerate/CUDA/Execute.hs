@@ -169,6 +169,8 @@ executeOpenAcc
     -> CIO arrs
 executeOpenAcc EmbedAcc{} _ _
   = $internalError "execute" "unexpected delayed array"
+executeOpenAcc (ExecSeq l)                                !aenv !stream
+  = executeSequence l aenv stream
 executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
@@ -210,15 +212,15 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Stencil _ _ a             -> stencilOp =<< travA a
       Stencil2 _ _ a1 _ a2      -> join $ stencil2Op <$> travA a1 <*> travA a2
 
-      -- Removed by fusion
-      Replicate _ _ _           -> fusionError
-      Slice _ _ _               -> fusionError
-      ZipWith _ _ _             -> fusionError
-
-      Collect  _                -> $internalError "executeOpenAcc" "uncompiled sequence computation"
+      -- AST nodes that should be inaccessible at this point
+      Replicate{}               -> fusionError
+      Slice{}                   -> fusionError
+      ZipWith{}                 -> fusionError
+      Collect{}                 -> streamingError
 
   where
-    fusionError = $internalError "executeOpenAcc" "unexpected fusible matter"
+    fusionError    = $internalError "executeOpenAcc" "unexpected fusible matter"
+    streamingError = $internalError "executeOpenAcc" "unexpected sequence computation"
 
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
@@ -431,8 +433,9 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       | otherwise
       = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
-executeOpenAcc (ExecSeq l) aenv stream = executeSequence l aenv stream
 
+-- Execute a streaming computation
+--
 executeSequence :: forall aenv arrs . Arrays arrs => ExecOpenSeq aenv () arrs -> Aval aenv -> Stream -> CIO arrs
 executeSequence topSequence aenv stream
   = initializeOpenSeq topSequence aenv stream >>= loop >>= returnOut
@@ -518,6 +521,7 @@ initializeOpenSeq l aenv stream =
     extent ExecAcc{}      = $internalError "executeOpenAcc" "expected delayed array"
     extent ExecSeq{}      = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh)  = executeExp sh aenv stream
+
 
 -- Turn a sequence computation into a suspended computation that can be forced
 -- an element at a time.
@@ -645,6 +649,7 @@ stepOpenSeq aenv !l stream = go l Empty
     extent ExecSeq{}      = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh)  = executeExp sh aenv stream
 
+
 -- Evaluating bindings
 -- -------------------
 
@@ -653,6 +658,7 @@ executeExtend BaseEnv       aenv = return aenv
 executeExtend (PushEnv e a) aenv = do
   aenv' <- executeExtend e aenv
   streaming (executeOpenAcc a aenv') $ \a' -> return $ Apush aenv' a'
+
 
 -- Scalar expression evaluation
 -- ----------------------------
