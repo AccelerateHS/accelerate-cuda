@@ -61,7 +61,6 @@ import Control.Monad.Trans                                      ( MonadIO, liftI
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
-import Data.Maybe
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
@@ -177,7 +176,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Awhile p f a              -> awhile p f =<< travA a
 
       -- Foreign
-      Aforeign ff afun a        -> fromMaybe (executeAfun1 afun) (canExecuteAcc ff) =<< travA a
+      Aforeign ff afun a        -> aforeign ff afun =<< travA a
 
       -- Producers
       Map _ a                   -> executeOp =<< extent a
@@ -227,6 +226,12 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       ok  <- indexArray r 0                     -- TLM TODO: memory manager should remember what is already on the host
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
             else return a
+
+    aforeign :: (Arrays as, Arrays bs, Foreign f) => f as bs -> PreAfun ExecOpenAcc (as -> bs) -> as -> CIO bs
+    aforeign ff pureFun a =
+      case canExecuteAcc ff of
+        Just cudaFun -> cudaFun stream a
+        Nothing      -> executeAfun1 pureFun a
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
