@@ -53,7 +53,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   allocateArray, newArray,
 
   -- * Running IO actions in an Accelerate context
-  CIO, liftIO, inContext, inDefaultContext
+  CIO, Stream, liftIO, inContext, inDefaultContext
 
 ) where
 
@@ -63,6 +63,7 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
+import Data.Array.Accelerate.CUDA.Execute.Stream        ( Stream )
 
 import Data.Typeable
 import Control.Exception                                ( bracket_ )
@@ -76,7 +77,7 @@ import Control.Monad.Trans                              ( liftIO )
 --
 data CUDAForeignAcc as bs where
   CUDAForeignAcc :: String                      -- name of the function
-                 -> (as -> CIO bs)              -- operation to execute
+                 -> (Stream -> as -> CIO bs)    -- operation to execute
                  -> CUDAForeignAcc as bs
 
 deriving instance Typeable CUDAForeignAcc
@@ -90,7 +91,7 @@ instance Foreign CUDAForeignAcc where
 canExecuteAcc
     :: (Foreign f, Typeable as, Typeable bs)
     => f as bs
-    -> Maybe (as -> CIO bs)
+    -> Maybe (Stream -> as -> CIO bs)
 canExecuteAcc ff
   | Just (CUDAForeignAcc _ fun) <- cast ff
   = Just fun
