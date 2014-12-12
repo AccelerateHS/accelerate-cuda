@@ -763,6 +763,7 @@ codegenPrim1 (PrimTruncate     ta tb) a   = codegenTruncate ta tb a
 codegenPrim1 (PrimRound        ta tb) a   = codegenRound ta tb a
 codegenPrim1 (PrimFloor        ta tb) a   = codegenFloor ta tb a
 codegenPrim1 (PrimCeiling      ta tb) a   = codegenCeiling ta tb a
+codegenPrim1 (PrimIsNaN            _) a   = ccall "isnan" [a]
 codegenPrim1 PrimLNot                 a   = [cexp| ! $exp:a|]
 codegenPrim1 PrimOrd                  a   = codegenOrd a
 codegenPrim1 PrimChr                  a   = codegenChr a
