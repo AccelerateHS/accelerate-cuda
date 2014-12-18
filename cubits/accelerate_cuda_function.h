@@ -45,7 +45,16 @@ static __inline__ __device__ T rotateR(const T x, const Int32 i)
 template <typename T>
 static __inline__ __device__ T idiv(const T x, const T y)
 {
-    return x > 0 && y < 0 ? (x - y - 1) / y : (x < 0 && y > 0 ? (x - y + 1) / y : x / y);
+    // Stolen from GHC.Classes
+    if ( x > 0 && y < 0 ) {
+        return ((x-1) / y) - 1;
+    } else
+    if ( x < 0 && y > 0 ) {
+        return ((x+1) / y) - 1;
+    }
+    else {
+        return x / y;
+    }
 }
 
 template <>
