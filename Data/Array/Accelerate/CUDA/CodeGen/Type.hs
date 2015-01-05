@@ -21,8 +21,9 @@ module Data.Array.Accelerate.CUDA.CodeGen.Type (
   accType, accTypeTex, segmentsType, expType,
   eltType, eltTypeTex, eltSizeOf,
 
-  -- primitive bits...
-  codegenIntegralType, codegenScalarType
+  -- working with reified dictionaries
+  TypeOf(..),
+  signedIntegralNum, unsignedIntegralNum,
 
 ) where
 
@@ -36,23 +37,44 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 
 -- libraries
 import Data.Bits
-import Data.Typeable
 import Language.C.Quote.CUDA
+import qualified Data.Typeable                          as T
 import qualified Language.C                             as C
 
 
-typename :: String -> C.Type
-typename name = [cty| typename $id:name |]
+class TypeOf a where
+  typeOf        :: a -> C.Type
+  texTypeOf     :: a -> C.Type
+
+instance TypeOf (ScalarType a) where
+  typeOf    = cScalarType
+  texTypeOf = cScalarTypeTex
+
+instance TypeOf (NumType a) where
+  typeOf    = cNumType
+  texTypeOf = cNumTypeTex
+
+instance TypeOf (IntegralType a) where
+  typeOf    = cIntegralType
+  texTypeOf = cIntegralTypeTex
+
+instance TypeOf (FloatingType a) where
+  typeOf    = cFloatingType
+  texTypeOf = cFloatingTypeTex
+
+instance TypeOf (NonNumType a) where
+  typeOf    = cNonNumType
+  texTypeOf = cNonNumTypeTex
+
 
 -- Surface element types
 -- ---------------------
 
-
 accType :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-accType = codegenTupleType . Sugar.delayedAccType
+accType = cTupleType . Sugar.delayedAccType
 
 expType :: DelayedOpenExp aenv env t -> [C.Type]
-expType = codegenTupleType . Sugar.preExpType Sugar.delayedAccType
+expType = cTupleType . Sugar.preExpType Sugar.delayedAccType
 
 segmentsType :: DelayedOpenAcc aenv (Sugar.Segments i) -> C.Type
 segmentsType seg
@@ -61,10 +83,10 @@ segmentsType seg
 
 
 eltType :: Sugar.Elt a => a {- dummy -} -> [C.Type]
-eltType =  codegenTupleType . Sugar.eltType
+eltType =  cTupleType . Sugar.eltType
 
 eltTypeTex :: Sugar.Elt a => a {- dummy -} -> [C.Type]
-eltTypeTex =  codegenTupleTex . Sugar.eltType
+eltTypeTex =  cTupleTypeTex . Sugar.eltType
 
 eltSizeOf :: Sugar.Elt a => a {- dummy -} -> [Int]
 eltSizeOf =  sizeOf' . Sugar.eltType
@@ -75,108 +97,131 @@ eltSizeOf =  sizeOf' . Sugar.eltType
     sizeOf' (PairTuple a b)     = sizeOf' a ++ sizeOf' b
 
 
--- Implementation
---
-codegenTupleType :: TupleType a -> [C.Type]
-codegenTupleType UnitTuple         = []
-codegenTupleType (SingleTuple  ty) = [codegenScalarType ty]
-codegenTupleType (PairTuple t1 t0) = codegenTupleType t1 ++ codegenTupleType t0
 
-codegenScalarType :: ScalarType a -> C.Type
-codegenScalarType (NumScalarType    ty) = codegenNumType ty
-codegenScalarType (NonNumScalarType ty) = codegenNonNumType ty
+cTupleType :: TupleType a -> [C.Type]
+cTupleType UnitTuple         = []
+cTupleType (SingleTuple  ty) = [cScalarType ty]
+cTupleType (PairTuple t1 t0) = cTupleType t1 ++ cTupleType t0
 
-codegenNumType :: NumType a -> C.Type
-codegenNumType (IntegralNumType ty) = codegenIntegralType ty
-codegenNumType (FloatingNumType ty) = codegenFloatingType ty
+cScalarType :: ScalarType a -> C.Type
+cScalarType (NumScalarType    ty) = cNumType ty
+cScalarType (NonNumScalarType ty) = cNonNumType ty
 
-codegenIntegralType :: IntegralType a -> C.Type
-codegenIntegralType (TypeInt8    _) = typename "Int8"
-codegenIntegralType (TypeInt16   _) = typename "Int16"
-codegenIntegralType (TypeInt32   _) = typename "Int32"
-codegenIntegralType (TypeInt64   _) = typename "Int64"
-codegenIntegralType (TypeWord8   _) = typename "Word8"
-codegenIntegralType (TypeWord16  _) = typename "Word16"
-codegenIntegralType (TypeWord32  _) = typename "Word32"
-codegenIntegralType (TypeWord64  _) = typename "Word64"
-codegenIntegralType (TypeCShort  _) = [cty|short|]
-codegenIntegralType (TypeCUShort _) = [cty|unsigned short|]
-codegenIntegralType (TypeCInt    _) = [cty|int|]
-codegenIntegralType (TypeCUInt   _) = [cty|unsigned int|]
-codegenIntegralType (TypeCLong   _) = [cty|long int|]
-codegenIntegralType (TypeCULong  _) = [cty|unsigned long int|]
-codegenIntegralType (TypeCLLong  _) = [cty|long long int|]
-codegenIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
-codegenIntegralType (TypeInt     _) = typename (showsTypeRep (typeOf (undefined::HTYPE_INT))  "")
-codegenIntegralType (TypeWord    _) = typename (showsTypeRep (typeOf (undefined::HTYPE_WORD)) "")
+cNumType :: NumType a -> C.Type
+cNumType (IntegralNumType ty) = cIntegralType ty
+cNumType (FloatingNumType ty) = cFloatingType ty
 
-codegenFloatingType :: FloatingType a -> C.Type
-codegenFloatingType (TypeFloat   _) = [cty|float|]
-codegenFloatingType (TypeCFloat  _) = [cty|float|]
-codegenFloatingType (TypeDouble  _) = [cty|double|]
-codegenFloatingType (TypeCDouble _) = [cty|double|]
+cIntegralType :: IntegralType a -> C.Type
+cIntegralType (TypeInt8    _) = typename "Int8"
+cIntegralType (TypeInt16   _) = typename "Int16"
+cIntegralType (TypeInt32   _) = typename "Int32"
+cIntegralType (TypeInt64   _) = typename "Int64"
+cIntegralType (TypeWord8   _) = typename "Word8"
+cIntegralType (TypeWord16  _) = typename "Word16"
+cIntegralType (TypeWord32  _) = typename "Word32"
+cIntegralType (TypeWord64  _) = typename "Word64"
+cIntegralType (TypeCShort  _) = [cty|short|]
+cIntegralType (TypeCUShort _) = [cty|unsigned short|]
+cIntegralType (TypeCInt    _) = [cty|int|]
+cIntegralType (TypeCUInt   _) = [cty|unsigned int|]
+cIntegralType (TypeCLong   _) = [cty|long int|]
+cIntegralType (TypeCULong  _) = [cty|unsigned long int|]
+cIntegralType (TypeCLLong  _) = [cty|long long int|]
+cIntegralType (TypeCULLong _) = [cty|unsigned long long int|]
+cIntegralType (TypeInt     _) = typename (T.showsTypeRep (T.typeOf (undefined::HTYPE_INT))  "")
+cIntegralType (TypeWord    _) = typename (T.showsTypeRep (T.typeOf (undefined::HTYPE_WORD)) "")
 
-codegenNonNumType :: NonNumType a -> C.Type
-codegenNonNumType (TypeBool   _) = typename "Word8"
-codegenNonNumType (TypeChar   _) = typename "Word32"
-codegenNonNumType (TypeCChar  _) = [cty|char|]
-codegenNonNumType (TypeCSChar _) = [cty|signed char|]
-codegenNonNumType (TypeCUChar _) = [cty|unsigned char|]
+cFloatingType :: FloatingType a -> C.Type
+cFloatingType (TypeFloat   _) = [cty|float|]
+cFloatingType (TypeCFloat  _) = [cty|float|]
+cFloatingType (TypeDouble  _) = [cty|double|]
+cFloatingType (TypeCDouble _) = [cty|double|]
+
+cNonNumType :: NonNumType a -> C.Type
+cNonNumType (TypeBool   _) = typename "Word8"
+cNonNumType (TypeChar   _) = typename "Word32"
+cNonNumType (TypeCChar  _) = [cty|char|]
+cNonNumType (TypeCSChar _) = [cty|signed char|]
+cNonNumType (TypeCUChar _) = [cty|unsigned char|]
 
 
 -- Texture types
 -- -------------
 
 accTypeTex :: DelayedOpenAcc aenv (Sugar.Array dim e) -> [C.Type]
-accTypeTex = codegenTupleTex . Sugar.delayedAccType
+accTypeTex = cTupleTypeTex . Sugar.delayedAccType
 
 
 -- Implementation
 --
-codegenTupleTex :: TupleType a -> [C.Type]
-codegenTupleTex UnitTuple         = []
-codegenTupleTex (SingleTuple t)   = [codegenScalarTex t]
-codegenTupleTex (PairTuple t1 t0) = codegenTupleTex t1 ++ codegenTupleTex t0
+cTupleTypeTex :: TupleType a -> [C.Type]
+cTupleTypeTex UnitTuple         = []
+cTupleTypeTex (SingleTuple t)   = [cScalarTypeTex t]
+cTupleTypeTex (PairTuple t1 t0) = cTupleTypeTex t1 ++ cTupleTypeTex t0
 
-codegenScalarTex :: ScalarType a -> C.Type
-codegenScalarTex (NumScalarType    ty) = codegenNumTex ty
-codegenScalarTex (NonNumScalarType ty) = codegenNonNumTex ty;
+cScalarTypeTex :: ScalarType a -> C.Type
+cScalarTypeTex (NumScalarType    ty) = cNumTypeTex ty
+cScalarTypeTex (NonNumScalarType ty) = cNonNumTypeTex ty;
 
-codegenNumTex :: NumType a -> C.Type
-codegenNumTex (IntegralNumType ty) = codegenIntegralTex ty
-codegenNumTex (FloatingNumType ty) = codegenFloatingTex ty
+cNumTypeTex :: NumType a -> C.Type
+cNumTypeTex (IntegralNumType ty) = cIntegralTypeTex ty
+cNumTypeTex (FloatingNumType ty) = cFloatingTypeTex ty
 
-codegenIntegralTex :: IntegralType a -> C.Type
-codegenIntegralTex (TypeInt8    _) = typename "TexInt8"
-codegenIntegralTex (TypeInt16   _) = typename "TexInt16"
-codegenIntegralTex (TypeInt32   _) = typename "TexInt32"
-codegenIntegralTex (TypeInt64   _) = typename "TexInt64"
-codegenIntegralTex (TypeWord8   _) = typename "TexWord8"
-codegenIntegralTex (TypeWord16  _) = typename "TexWord16"
-codegenIntegralTex (TypeWord32  _) = typename "TexWord32"
-codegenIntegralTex (TypeWord64  _) = typename "TexWord64"
-codegenIntegralTex (TypeCShort  _) = typename "TexCShort"
-codegenIntegralTex (TypeCUShort _) = typename "TexCUShort"
-codegenIntegralTex (TypeCInt    _) = typename "TexCInt"
-codegenIntegralTex (TypeCUInt   _) = typename "TexCUInt"
-codegenIntegralTex (TypeCLong   _) = typename "TexCLong"
-codegenIntegralTex (TypeCULong  _) = typename "TexCULong"
-codegenIntegralTex (TypeCLLong  _) = typename "TexCLLong"
-codegenIntegralTex (TypeCULLong _) = typename "TexCULLong"
-codegenIntegralTex (TypeInt     _) = typename ("TexInt"  ++ show (finiteBitSize (undefined::Int)))
-codegenIntegralTex (TypeWord    _) = typename ("TexWord" ++ show (finiteBitSize (undefined::Word)))
+cIntegralTypeTex :: IntegralType a -> C.Type
+cIntegralTypeTex (TypeInt8    _) = typename "TexInt8"
+cIntegralTypeTex (TypeInt16   _) = typename "TexInt16"
+cIntegralTypeTex (TypeInt32   _) = typename "TexInt32"
+cIntegralTypeTex (TypeInt64   _) = typename "TexInt64"
+cIntegralTypeTex (TypeWord8   _) = typename "TexWord8"
+cIntegralTypeTex (TypeWord16  _) = typename "TexWord16"
+cIntegralTypeTex (TypeWord32  _) = typename "TexWord32"
+cIntegralTypeTex (TypeWord64  _) = typename "TexWord64"
+cIntegralTypeTex (TypeCShort  _) = typename "TexCShort"
+cIntegralTypeTex (TypeCUShort _) = typename "TexCUShort"
+cIntegralTypeTex (TypeCInt    _) = typename "TexCInt"
+cIntegralTypeTex (TypeCUInt   _) = typename "TexCUInt"
+cIntegralTypeTex (TypeCLong   _) = typename "TexCLong"
+cIntegralTypeTex (TypeCULong  _) = typename "TexCULong"
+cIntegralTypeTex (TypeCLLong  _) = typename "TexCLLong"
+cIntegralTypeTex (TypeCULLong _) = typename "TexCULLong"
+cIntegralTypeTex (TypeInt     _) = typename ("TexInt"  ++ show (finiteBitSize (undefined::Int)))
+cIntegralTypeTex (TypeWord    _) = typename ("TexWord" ++ show (finiteBitSize (undefined::Word)))
 
-codegenFloatingTex :: FloatingType a -> C.Type
-codegenFloatingTex (TypeFloat   _) = typename "TexFloat"
-codegenFloatingTex (TypeCFloat  _) = typename "TexCFloat"
-codegenFloatingTex (TypeDouble  _) = typename "TexDouble"
-codegenFloatingTex (TypeCDouble _) = typename "TexCDouble"
+cFloatingTypeTex :: FloatingType a -> C.Type
+cFloatingTypeTex (TypeFloat   _) = typename "TexFloat"
+cFloatingTypeTex (TypeCFloat  _) = typename "TexCFloat"
+cFloatingTypeTex (TypeDouble  _) = typename "TexDouble"
+cFloatingTypeTex (TypeCDouble _) = typename "TexCDouble"
 
 
-codegenNonNumTex :: NonNumType a -> C.Type
-codegenNonNumTex (TypeBool   _) = typename "TexWord8"
-codegenNonNumTex (TypeChar   _) = typename "TexWord32"
-codegenNonNumTex (TypeCChar  _) = typename "TexCChar"
-codegenNonNumTex (TypeCSChar _) = typename "TexCSChar"
-codegenNonNumTex (TypeCUChar _) = typename "TexCUChar"
+cNonNumTypeTex :: NonNumType a -> C.Type
+cNonNumTypeTex (TypeBool   _) = typename "TexWord8"
+cNonNumTypeTex (TypeChar   _) = typename "TexWord32"
+cNonNumTypeTex (TypeCChar  _) = typename "TexCChar"
+cNonNumTypeTex (TypeCSChar _) = typename "TexCSChar"
+cNonNumTypeTex (TypeCUChar _) = typename "TexCUChar"
+
+
+-- Utilities
+-- ---------
+
+typename :: String -> C.Type
+typename name = [cty| typename $id:name |]
+
+signedIntegralNum :: IntegralType a -> Bool
+signedIntegralNum t =
+  case t of
+    TypeInt _    -> True
+    TypeInt8 _   -> True
+    TypeInt16 _  -> True
+    TypeInt32 _  -> True
+    TypeInt64 _  -> True
+    TypeCShort _ -> True
+    TypeCInt _   -> True
+    TypeCLong _  -> True
+    TypeCLLong _ -> True
+    _            -> False
+
+unsignedIntegralNum :: IntegralType a -> Bool
+unsignedIntegralNum = not . signedIntegralNum
 

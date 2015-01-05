@@ -137,7 +137,7 @@ data CUDelayedAcc aenv sh e where
 -- -----------------------
 
 cint :: C.Type
-cint = codegenScalarType (scalarType :: ScalarType Int)
+cint = typeOf (scalarType :: ScalarType Int)
 
 cvar :: Name -> C.Exp
 cvar x = [cexp|$id:x|]
