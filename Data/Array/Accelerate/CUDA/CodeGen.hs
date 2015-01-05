@@ -49,6 +49,7 @@ import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
 
 import Data.Array.Accelerate.CUDA.AST                           hiding ( Val(..), prj )
+import Data.Array.Accelerate.CUDA.CodeGen.Constant
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 import Data.Array.Accelerate.CUDA.CodeGen.Monad
@@ -169,7 +170,7 @@ codegenAcc dev (Manifest pacc) aenv
     travB _ Clamp        = return Clamp
     travB _ Mirror       = return Mirror
     travB _ Wrap         = return Wrap
-    travB _ (Constant c) = return . Constant $ CUExp ([], codegenConst (Sugar.eltType (undefined::e)) c)
+    travB _ (Constant c) = return . Constant $ CUExp ([], constant (Sugar.eltType (undefined::e)) c)
 
     -- caffeine and misery
     prim :: String
@@ -351,8 +352,8 @@ codegenOpenExp dev aenv = cvtE
       case exp of
         Let bnd body            -> elet bnd body env
         Var ix                  -> return $ prj ix env
-        PrimConst c             -> return $ [codegenPrimConst c]
-        Const c                 -> return $ codegenConst (Sugar.eltType (undefined::t)) c
+        PrimConst c             -> return $ [primConst c]
+        Const c                 -> return $ constant (Sugar.eltType (undefined::t)) c
         PrimApp f x             -> primApp f x env
         Tuple t                 -> cvtT t env
         Prj i t                 -> prjT i t exp env
@@ -735,12 +736,6 @@ codegenOpenExp dev aenv = cvtE
 -- Scalar Primitives
 -- -----------------
 
-codegenPrimConst :: PrimConst a -> C.Exp
-codegenPrimConst (PrimMinBound ty) = codegenMinBound ty
-codegenPrimConst (PrimMaxBound ty) = codegenMaxBound ty
-codegenPrimConst (PrimPi       ty) = codegenPi ty
-
-
 codegenPrim1 :: PrimFun f -> C.Exp -> C.Exp
 codegenPrim1 (PrimNeg              _) a   = [cexp| - $exp:a|]
 codegenPrim1 (PrimAbs             ty) a   = codegenAbs ty a
@@ -804,57 +799,19 @@ codegenPrim2 PrimLOr                  a b = [cexp|$exp:a || $exp:b|]
 codegenPrim2 _ _ _ =
   $internalError "codegenPrim2" "unknown primitive function"
 
--- Implementation of scalar primitives
---
-codegenConst :: TupleType a -> a -> [C.Exp]
-codegenConst UnitTuple           _      = []
-codegenConst (SingleTuple ty)    c      = [codegenScalar ty c]
-codegenConst (PairTuple ty1 ty0) (cs,c) = codegenConst ty1 cs ++ codegenConst ty0 c
 
 
--- Scalar constants
---
-codegenScalar :: ScalarType a -> a -> C.Exp
-codegenScalar (NumScalarType    ty) = codegenNumScalar ty
-codegenScalar (NonNumScalarType ty) = codegenNonNumScalar ty
 
-codegenNumScalar :: NumType a -> a -> C.Exp
-codegenNumScalar (IntegralNumType ty) = codegenIntegralScalar ty
-codegenNumScalar (FloatingNumType ty) = codegenFloatingScalar ty
-
-codegenIntegralScalar :: IntegralType a -> a -> C.Exp
-codegenIntegralScalar ty x | IntegralDict <- integralDict ty = [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
-
-codegenFloatingScalar :: FloatingType a -> a -> C.Exp
-codegenFloatingScalar (TypeFloat   _) x = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeCFloat  _) x = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeDouble  _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeCDouble _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
-
-codegenNonNumScalar :: NonNumType a -> a -> C.Exp
-codegenNonNumScalar (TypeBool   _) x = cbool x
-codegenNonNumScalar (TypeChar   _) x = [cexp|$char:x|]
-codegenNonNumScalar (TypeCChar  _) x = [cexp|$char:(chr (fromIntegral x))|]
-codegenNonNumScalar (TypeCUChar _) x = [cexp|$char:(chr (fromIntegral x))|]
-codegenNonNumScalar (TypeCSChar _) x = [cexp|$char:(chr (fromIntegral x))|]
 
 
 -- Constant methods of floating
 --
-codegenPi :: FloatingType a -> C.Exp
-codegenPi ty | FloatingDict <- floatingDict ty = codegenFloatingScalar ty pi
 
 
 -- Constant methods of bounded
 --
-codegenMinBound :: BoundedType a -> C.Exp
-codegenMinBound (IntegralBoundedType ty) | IntegralDict <- integralDict ty = codegenIntegralScalar ty minBound
-codegenMinBound (NonNumBoundedType   ty) | NonNumDict   <- nonNumDict   ty = codegenNonNumScalar   ty minBound
 
 
-codegenMaxBound :: BoundedType a -> C.Exp
-codegenMaxBound (IntegralBoundedType ty) | IntegralDict <- integralDict ty = codegenIntegralScalar ty maxBound
-codegenMaxBound (NonNumBoundedType   ty) | NonNumDict   <- nonNumDict   ty = codegenNonNumScalar   ty maxBound
 
 
 -- Methods from Num, Floating, Fractional and RealFrac
