@@ -27,8 +27,6 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 import Prelude                                                  hiding ( id, exp, replicate )
 import Control.Applicative                                      ( (<$>), (<*>) )
 import Control.Monad.State.Strict
-import Data.Loc
-import Data.Char
 import Data.HashSet                                             ( HashSet )
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
@@ -60,6 +58,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
 import Data.Array.Accelerate.CUDA.CodeGen.Streaming
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
+import qualified Data.Array.Accelerate.CUDA.CodeGen.Arithmetic  as A
 
 
 -- Local environments
@@ -405,18 +404,73 @@ codegenOpenExp dev aenv = cvtE
     -- short-circuit behaviour for logical operations.
     --
     primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
-    primApp f x env
-      | Tuple (NilTup `SnocTup` a `SnocTup` b) <- x
-      = do a' <- cvtE' a env
-           b' <- cvtE' b env
-           case f of
-             PrimQuotRem t      -> codegenQuotRem t a' b'
-             PrimDivMod t       -> codegenDivMod  t a' b'
-             _                  -> return [ codegenPrim2 f a' b' ]
-
-      | otherwise
-      = do a' <- cvtE' x env
-           return [ codegenPrim1 f a' ]
+    primApp f x env =
+      case f of
+        -- operators from Num
+        PrimAdd{}               -> binary A.add x env
+        PrimSub{}               -> binary A.sub x env
+        PrimMul{}               -> binary A.mul x env
+        PrimNeg{}               -> unary A.negate x env
+        PrimAbs ty              -> unary (A.abs ty) x env
+        PrimSig ty              -> unaryM (A.signum ty) x env
+        -- operators from Integral & Bits
+        PrimQuot{}              -> binary A.quot x env
+        PrimRem{}               -> binary A.rem x env
+        PrimQuotRem ty          -> binaryM2 (A.quotRem ty) x env
+        PrimIDiv ty             -> binaryM (A.idiv ty) x env
+        PrimMod ty              -> binaryM (A.mod ty) x env
+        PrimDivMod ty           -> binaryM2 (A.divMod ty) x env
+        PrimBAnd{}              -> binary A.band x env
+        PrimBOr{}               -> binary A.bor x env
+        PrimBXor{}              -> binary A.xor x env
+        PrimBNot{}              -> unary A.bnot x env
+        PrimBShiftL{}           -> binary A.shiftL x env
+        PrimBShiftR{}           -> binary A.shiftRA x env
+        PrimBRotateL ty         -> binaryM (A.rotateL ty) x env
+        PrimBRotateR ty         -> binaryM (A.rotateR ty) x env
+        -- operators from Fractional and Floating
+        PrimFDiv{}              -> binary A.fdiv x env
+        PrimRecip ty            -> unary (A.recip ty) x env
+        PrimSin ty              -> unary (A.sin ty) x env
+        PrimCos ty              -> unary (A.cos ty) x env
+        PrimTan ty              -> unary (A.tan ty) x env
+        PrimAsin ty             -> unary (A.asin ty) x env
+        PrimAcos ty             -> unary (A.acos ty) x env
+        PrimAtan ty             -> unary (A.atan ty) x env
+        PrimAsinh ty            -> unary (A.asinh ty) x env
+        PrimAcosh ty            -> unary (A.acosh ty) x env
+        PrimAtanh ty            -> unary (A.atanh ty) x env
+        PrimExpFloating ty      -> unary (A.exp ty) x env
+        PrimSqrt ty             -> unary (A.sqrt ty) x env
+        PrimLog ty              -> unary (A.log ty) x env
+        PrimFPow ty             -> binary (A.pow ty) x env
+        PrimLogBase ty          -> binary (A.logBase ty) x env
+        -- operators from RealFrac
+        PrimTruncate ta tb      -> unary (A.trunc ta tb) x env
+        PrimRound ta tb         -> unary (A.round ta tb) x env
+        PrimFloor ta tb         -> unary (A.floor ta tb) x env
+        PrimCeiling ta tb       -> unary (A.ceiling ta tb) x env
+        -- operators from RealFloat
+        PrimAtan2 ty            -> binary (A.atan2 ty) x env
+        PrimIsNaN{}             -> unary A.isNaN x env
+        -- relational and equality operators
+        PrimLt{}                -> binary A.lt x env
+        PrimGt{}                -> binary A.gt x env
+        PrimLtEq{}              -> binary A.leq x env
+        PrimGtEq{}              -> binary A.geq x env
+        PrimEq{}                -> binary A.eq x env
+        PrimNEq{}               -> binary A.neq x env
+        PrimMax ty              -> binary (A.max ty) x env
+        PrimMin ty              -> binary (A.min ty) x env
+        -- logical operators
+        PrimLAnd                -> binary A.land x env
+        PrimLOr                 -> binary A.lor x env
+        PrimLNot                -> unary A.lnot x env
+        -- type conversions
+        PrimOrd                 -> unary A.ord x env
+        PrimChr                 -> unary A.chr x env
+        PrimBoolToInt           -> unary A.boolToInt x env
+        PrimFromIntegral ta tb  -> unary (A.fromIntegral ta tb) x env
       where
         cvtE' :: DelayedOpenExp env aenv a -> Val env -> Gen C.Exp
         cvtE' e env = do
@@ -424,6 +478,37 @@ codegenOpenExp dev aenv = cvtE
           if null b
              then return r
              else return [cexp| ({ $items:b; $exp:r; }) |]
+
+        -- TLM: This is a bit ugly. Consider making all primitive functions from
+        --      Arithmetic.hs evaluate in the Gen monad.
+        --
+        unary :: (C.Exp -> C.Exp) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
+        unary f = unaryM  (return . f)
+
+        unaryM :: (C.Exp -> Gen C.Exp) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
+        unaryM f a env = do
+          a' <- cvtE' a env
+          r  <- f a'
+          return [r]
+
+        binary :: (C.Exp -> C.Exp -> C.Exp) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
+        binary f = binaryM (\a b -> return (f a b))
+
+        binaryM :: (C.Exp -> C.Exp -> Gen C.Exp) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
+        binaryM f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
+          a' <- cvtE' a env
+          b' <- cvtE' b env
+          r  <- f a' b'
+          return [r]
+        binaryM _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+
+        binaryM2 :: (C.Exp -> C.Exp -> Gen (C.Exp, C.Exp)) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
+        binaryM2 f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
+          a'    <- cvtE' a env
+          b'    <- cvtE' b env
+          (r,s) <- f a' b'
+          return [r,s]
+        binaryM2 _ _ _ = $internalError "primApp" "unexpected argument to binary function"
 
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
@@ -733,253 +818,21 @@ codegenOpenExp dev aenv = cvtE
     single loc _   = $internalError loc "expected single expression"
 
 
--- Scalar Primitives
--- -----------------
-
-codegenPrim1 :: PrimFun f -> C.Exp -> C.Exp
-codegenPrim1 (PrimNeg              _) a   = [cexp| - $exp:a|]
-codegenPrim1 (PrimAbs             ty) a   = codegenAbs ty a
-codegenPrim1 (PrimSig             ty) a   = codegenSig ty a
-codegenPrim1 (PrimBNot             _) a   = [cexp|~ $exp:a|]
-codegenPrim1 (PrimRecip           ty) a   = codegenRecip ty a
-codegenPrim1 (PrimSin             ty) a   = ccall (FloatingNumType ty `postfix` "sin")   [a]
-codegenPrim1 (PrimCos             ty) a   = ccall (FloatingNumType ty `postfix` "cos")   [a]
-codegenPrim1 (PrimTan             ty) a   = ccall (FloatingNumType ty `postfix` "tan")   [a]
-codegenPrim1 (PrimAsin            ty) a   = ccall (FloatingNumType ty `postfix` "asin")  [a]
-codegenPrim1 (PrimAcos            ty) a   = ccall (FloatingNumType ty `postfix` "acos")  [a]
-codegenPrim1 (PrimAtan            ty) a   = ccall (FloatingNumType ty `postfix` "atan")  [a]
-codegenPrim1 (PrimAsinh           ty) a   = ccall (FloatingNumType ty `postfix` "asinh") [a]
-codegenPrim1 (PrimAcosh           ty) a   = ccall (FloatingNumType ty `postfix` "acosh") [a]
-codegenPrim1 (PrimAtanh           ty) a   = ccall (FloatingNumType ty `postfix` "atanh") [a]
-codegenPrim1 (PrimExpFloating     ty) a   = ccall (FloatingNumType ty `postfix` "exp")   [a]
-codegenPrim1 (PrimSqrt            ty) a   = ccall (FloatingNumType ty `postfix` "sqrt")  [a]
-codegenPrim1 (PrimLog             ty) a   = ccall (FloatingNumType ty `postfix` "log")   [a]
-codegenPrim1 (PrimTruncate     ta tb) a   = codegenTruncate ta tb a
-codegenPrim1 (PrimRound        ta tb) a   = codegenRound ta tb a
-codegenPrim1 (PrimFloor        ta tb) a   = codegenFloor ta tb a
-codegenPrim1 (PrimCeiling      ta tb) a   = codegenCeiling ta tb a
-codegenPrim1 (PrimIsNaN            _) a   = ccall "isnan" [a]
-codegenPrim1 PrimLNot                 a   = [cexp| ! $exp:a|]
-codegenPrim1 PrimOrd                  a   = codegenOrd a
-codegenPrim1 PrimChr                  a   = codegenChr a
-codegenPrim1 PrimBoolToInt            a   = codegenBoolToInt a
-codegenPrim1 (PrimFromIntegral ta tb) a   = codegenFromIntegral ta tb a
-codegenPrim1 _ _ =
-  $internalError "codegenPrim1" "unknown primitive function"
-
-codegenPrim2 :: PrimFun f -> C.Exp -> C.Exp -> C.Exp
-codegenPrim2 (PrimAdd              _) a b = [cexp|$exp:a + $exp:b|]
-codegenPrim2 (PrimSub              _) a b = [cexp|$exp:a - $exp:b|]
-codegenPrim2 (PrimMul              _) a b = [cexp|$exp:a * $exp:b|]
-codegenPrim2 (PrimQuot             _) a b = [cexp|$exp:a / $exp:b|]
-codegenPrim2 (PrimRem              _) a b = [cexp|$exp:a % $exp:b|]
-codegenPrim2 (PrimIDiv             _) a b = ccall "idiv" [a,b]
-codegenPrim2 (PrimMod              _) a b = ccall "mod"  [a,b]
-codegenPrim2 (PrimBAnd             _) a b = [cexp|$exp:a & $exp:b|]
-codegenPrim2 (PrimBOr              _) a b = [cexp|$exp:a | $exp:b|]
-codegenPrim2 (PrimBXor             _) a b = [cexp|$exp:a ^ $exp:b|]
-codegenPrim2 (PrimBShiftL          _) a b = [cexp|$exp:a << $exp:b|]
-codegenPrim2 (PrimBShiftR          _) a b = [cexp|$exp:a >> $exp:b|]
-codegenPrim2 (PrimBRotateL         _) a b = ccall "rotateL" [a,b]
-codegenPrim2 (PrimBRotateR         _) a b = ccall "rotateR" [a,b]
-codegenPrim2 (PrimFDiv             _) a b = [cexp|$exp:a / $exp:b|]
-codegenPrim2 (PrimFPow            ty) a b = ccall (FloatingNumType ty `postfix` "pow")   [a,b]
-codegenPrim2 (PrimLogBase         ty) a b = codegenLogBase ty a b
-codegenPrim2 (PrimAtan2           ty) a b = ccall (FloatingNumType ty `postfix` "atan2") [a,b]
-codegenPrim2 (PrimLt               _) a b = [cexp|$exp:a < $exp:b|]
-codegenPrim2 (PrimGt               _) a b = [cexp|$exp:a > $exp:b|]
-codegenPrim2 (PrimLtEq             _) a b = [cexp|$exp:a <= $exp:b|]
-codegenPrim2 (PrimGtEq             _) a b = [cexp|$exp:a >= $exp:b|]
-codegenPrim2 (PrimEq               _) a b = [cexp|$exp:a == $exp:b|]
-codegenPrim2 (PrimNEq              _) a b = [cexp|$exp:a != $exp:b|]
-codegenPrim2 (PrimMax             ty) a b = codegenMax ty a b
-codegenPrim2 (PrimMin             ty) a b = codegenMin ty a b
-codegenPrim2 PrimLAnd                 a b = [cexp|$exp:a && $exp:b|]
-codegenPrim2 PrimLOr                  a b = [cexp|$exp:a || $exp:b|]
-codegenPrim2 _ _ _ =
-  $internalError "codegenPrim2" "unknown primitive function"
-
-
-
-
-
-
--- Constant methods of floating
---
-
-
--- Constant methods of bounded
---
-
-
-
-
--- Methods from Num, Floating, Fractional and RealFrac
---
-codegenAbs :: NumType a -> C.Exp -> C.Exp
-codegenAbs (FloatingNumType ty) x = ccall (FloatingNumType ty `postfix` "fabs") [x]
-codegenAbs (IntegralNumType ty) x =
-  case ty of
-    TypeWord _          -> x
-    TypeWord8 _         -> x
-    TypeWord16 _        -> x
-    TypeWord32 _        -> x
-    TypeWord64 _        -> x
-    TypeCUShort _       -> x
-    TypeCUInt _         -> x
-    TypeCULong _        -> x
-    TypeCULLong _       -> x
-    _                   -> ccall "abs" [x]
-
-
-codegenSig :: NumType a -> C.Exp -> C.Exp
-codegenSig (IntegralNumType ty) = codegenIntegralSig ty
-codegenSig (FloatingNumType ty) = codegenFloatingSig ty
-
-codegenIntegralSig :: IntegralType a -> C.Exp -> C.Exp
-codegenIntegralSig ty x =
-  case ty of
-    TypeWord _          -> unsigned
-    TypeWord8 _         -> unsigned
-    TypeWord16 _        -> unsigned
-    TypeWord32 _        -> unsigned
-    TypeWord64 _        -> unsigned
-    TypeCUShort _       -> unsigned
-    TypeCUInt _         -> unsigned
-    TypeCULong _        -> unsigned
-    TypeCULLong _       -> unsigned
-    _                   -> signed
-  where
-    unsigned    = [cexp| $exp:x > $exp:zero |]
-    signed      = [cexp| ($exp:x > $exp:zero) - ($exp:x < $exp:zero) |]
-    zero        | IntegralDict <- integralDict ty
-                = codegenIntegralScalar ty 0
-
-codegenFloatingSig :: FloatingType a -> C.Exp -> C.Exp
-codegenFloatingSig ty x =
-  [cexp|$exp:x == $exp:zero
-            ? $exp:zero
-            : $exp:(ccall (FloatingNumType ty `postfix` "copysign") [one,x]) |]
-  where
-    zero | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 0
-    one  | FloatingDict <- floatingDict ty = codegenFloatingScalar ty 1
-
-
-codegenRecip :: FloatingType a -> C.Exp -> C.Exp
-codegenRecip ty x | FloatingDict <- floatingDict ty = [cexp|$exp:(codegenFloatingScalar ty 1) / $exp:x|]
-
-
-codegenLogBase :: FloatingType a -> C.Exp -> C.Exp -> C.Exp
-codegenLogBase ty x y = let a = ccall (FloatingNumType ty `postfix` "log") [x]
-                            b = ccall (FloatingNumType ty `postfix` "log") [y]
-                        in
-                        [cexp|$exp:b / $exp:a|]
-
-
-codegenMin :: ScalarType a -> C.Exp -> C.Exp -> C.Exp
-codegenMin (NumScalarType ty@(IntegralNumType _)) a b = ccall (ty `postfix` "min")  [a,b]
-codegenMin (NumScalarType ty@(FloatingNumType _)) a b = ccall (ty `postfix` "fmin") [a,b]
-codegenMin (NonNumScalarType _)                   a b =
-  let ty = scalarType :: ScalarType Int32
-  in  codegenMin ty (ccast ty a) (ccast ty b)
-
-
-codegenMax :: ScalarType a -> C.Exp -> C.Exp -> C.Exp
-codegenMax (NumScalarType ty@(IntegralNumType _)) a b = ccall (ty `postfix` "max")  [a,b]
-codegenMax (NumScalarType ty@(FloatingNumType _)) a b = ccall (ty `postfix` "fmax") [a,b]
-codegenMax (NonNumScalarType _)                   a b =
-  let ty = scalarType :: ScalarType Int32
-  in  codegenMax ty (ccast ty a) (ccast ty b)
-
-
--- Type coercions
---
-codegenOrd :: C.Exp -> C.Exp
-codegenOrd = ccast (scalarType :: ScalarType Int)
-
-codegenChr :: C.Exp -> C.Exp
-codegenChr = ccast (scalarType :: ScalarType Char)
-
-codegenBoolToInt :: C.Exp -> C.Exp
-codegenBoolToInt = ccast (scalarType :: ScalarType Int)
-
-codegenFromIntegral :: IntegralType a -> NumType b -> C.Exp -> C.Exp
-codegenFromIntegral _ ty = ccast (NumScalarType ty)
-
-codegenTruncate :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenTruncate ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "trunc") [x]
-
-codegenRound :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenRound ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "round") [x]
-
-codegenFloor :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenFloor ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "floor") [x]
-
-codegenCeiling :: FloatingType a -> IntegralType b -> C.Exp -> C.Exp
-codegenCeiling ta tb x
-  = ccast (NumScalarType (IntegralNumType tb))
-  $ ccall (FloatingNumType ta `postfix` "ceil") [x]
-
-codegenQuotRem :: IntegralType a -> C.Exp -> C.Exp -> Gen [C.Exp]
-codegenQuotRem (codegenIntegralType -> t') n d = do
-  n'    <- bind t' [cexp| $exp:n |]             -- n and d might be statement expressions. See 'primApp'
-  d'    <- bind t' [cexp| $exp:d |]
-  q     <- bind t' [cexp| $exp:n' / $exp:d' |]
-  r     <- bind t' [cexp| $exp:n' - $exp:d' * $exp:q |]
-  return [q,r]
-
-codegenDivMod :: IntegralType a -> C.Exp -> C.Exp -> Gen [C.Exp]
-codegenDivMod t@(codegenIntegralType -> t') n d = do
-  n'    <- bind t' [cexp| $exp:n |]             -- n and d might be statement expressions. See 'primApp'
-  d'    <- bind t' [cexp| $exp:d |]
-  return [ codegenPrim2 (PrimIDiv t) n' d'      -- TODO: unified implementation
-         , codegenPrim2 (PrimMod  t) n' d' ]
-
-{--
- -- This is the default Integral class implementation taken from GHC/Real.lhs
- --
-  q     <- bind t' [cexp| $exp:n' / $exp:d' |]
-  r     <- bind t' [cexp| $exp:n' - $exp:d' * $exp:q |]
-  vd    <- lift fresh
-  vm    <- lift fresh
-  modify (\st -> st { localBindings = [citem| $ty:t' $id:vd, $id:vm; |] : localBindings st })
-  modify (\st -> st { localBindings = [citem| if ( $exp:(codegenSig (IntegralNumType t) r) == - $exp:(codegenSig (IntegralNumType t) d') ) {
-                                                  $id:vd = $exp:q - 1;
-                                                  $id:vm = $exp:r + $exp:d' ;
-                                              } else {
-                                                  $id:vd = $exp:q;
-                                                  $id:vm = $exp:r;
-                                              } |] : localBindings st })
-  return [ cvar vd, cvar vm ]
---}
-
 -- Auxiliary Functions
 -- -------------------
 
 ccast :: ScalarType a -> C.Exp -> C.Exp
-ccast ty x = [cexp|($ty:(codegenScalarType ty)) $exp:x|]
+ccast ty x = [cexp| ($ty:(typeOf ty)) $exp:x |]
 
 ccastTup :: TupleType e -> [C.Exp] -> [C.Exp]
 ccastTup ty = fst . travTup ty
   where
-    travTup :: TupleType e -> [C.Exp] -> ([C.Exp],[C.Exp])
+    travTup :: TupleType e -> [C.Exp] -> ([C.Exp], [C.Exp])
     travTup UnitTuple         xs     = ([], xs)
     travTup (SingleTuple ty') (x:xs) = ([ccast ty' x], xs)
-    travTup (PairTuple l r)   xs     = let
-                                         (ls, xs' ) = travTup l xs
-                                         (rs, xs'') = travTup r xs'
-                                       in (ls ++ rs, xs'')
-    travTup _ _                      = $internalError "ccastTup" "not enough expressions to match type"
-
-
-postfix :: NumType a -> String -> String
-postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
-postfix (FloatingNumType (TypeCFloat _)) x = x ++ "f"
-postfix _                                x = x
+    travTup (PairTuple l r)   xs     =
+      let (ls, xs' ) = travTup l xs
+          (rs, xs'') = travTup r xs'
+      in (ls ++ rs, xs'')
+    travTup _ _ = $internalError "ccastTup" "not enough expressions to match type"
 
