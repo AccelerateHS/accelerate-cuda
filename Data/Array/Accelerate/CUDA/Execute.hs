@@ -31,12 +31,16 @@ module Data.Array.Accelerate.CUDA.Execute (
   -- * Executing a sequence computation and streaming its output.
   StreamSeq(..), streamSeq,
 
+  -- BJS: Export these for now
+  Aval(..), executeOpenAcc, 
+  
+
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
+import Data.Array.Accelerate.CUDA.FullList                     ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )

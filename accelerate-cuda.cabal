@@ -105,7 +105,9 @@ Library
                         text                    >= 0.11,
                         template-haskell        >= 2.2,
                         transformers            >= 0.2,
-                        unordered-containers    >= 0.1.4
+                        unordered-containers    >= 0.1.4,
+-- added by JS 
+                        containers              >= 0.5.5.1
 
   if os(windows)
     cpp-options:        -DWIN32
@@ -116,6 +118,8 @@ Library
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
                         Data.Array.Accelerate.CUDA.Foreign
+-- Expose a while  
+                        Data.Array.Accelerate.CUDA.ExecuteMulti
 
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
@@ -144,6 +148,8 @@ Library
                         Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
+-- added by JS 			
+--                        Data.Array.Accelerate.CUDA.ExecuteMulti
                         Data.Array.Accelerate.CUDA.Execute.Event
                         Data.Array.Accelerate.CUDA.Execute.Stream
                         Data.Array.Accelerate.CUDA.Foreign.Export
