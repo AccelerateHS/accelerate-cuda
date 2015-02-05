@@ -305,9 +305,34 @@ runDelayedOpenAccMulti = traverseAcc
         
         Alet a b ->
           do
+            schedState <- get
+            
             let exec_a = compileOpenAcc a
-                free   = arrayRefs a 
 
+                -- These are the arrays needed for computing a 
+                free   = arrayRefs a 
+                -- Find out where they are
+                -- prefer to launch a on device that
+                -- has most of them 
+
+            -- How can a device report back that it is free.
+
+            -- Can we extend after
+            -- after :: Event -> Stream -> IO ()
+            -- to
+            -- after' :: Event -> Stream -> IO () -> IO ()
+            -- So that after Event.wait the passed in IO ()
+            -- action is performed. Use that IO action to fill out some MVar. 
+            --
+            -- Is an event fired off when a device finishes computing?
+            -- There is the cudaStreamSynchronize function.
+
+           
+
+                
+            
+                
+            
             -- Choose device to execute this on.
             -- Copy arrays to memory associated with that device 
                 
