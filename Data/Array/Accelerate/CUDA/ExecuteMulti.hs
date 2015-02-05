@@ -178,6 +178,11 @@ data Env env where
 -- Async MemID 
 
 
+
+
+-- Lots of comments associated with this function
+-- contains questions for rest of team to answer.
+-- 
 runDelayedOpenAccMulti :: DelayedOpenAcc aenv arrs
                        -> Env aenv 
                        -> SchedState
@@ -192,8 +197,29 @@ runDelayedOpenAccMulti = traverseAcc
     traverseAcc (Manifest pacc) _ _ =
       case pacc of
 
-        -- look up what is at position ix in the environment
-        -- Walk environment see if 
+        -- Avar ix
+        -- look up what is at position ix in the environment. 
+        -- When will this happen ?
+        --
+        -- let a = expensive1
+        -- in let b = expensive2 
+        -- in Avar ix
+        --
+        -- The above would mean that array at ix is the result
+        -- of the whole program (right ?).
+        --
+        -- What we want to do in runDelayedOpenAccMulti is
+        -- traverse "shallowly" the tree. That is we wont
+        -- look into a in let a b, just send it off to compileAcc
+        -- and then run it.
+        -- So what do we do when we hit an Avar constructor?
+        --
+        -- Is it safe to assume that if we do hit an Avar constructor
+        -- it is the looking up of the result of the program
+        -- and maybe it could be handled by more or less doing nothing?
+        -- just create some way of reading that array from wherever it
+        -- may be ? 
+        
         Avar ix -> $internalError "runDelayedOpenAccMulti" "Not implemented"
 
         -- Let binding.
@@ -205,7 +231,6 @@ runDelayedOpenAccMulti = traverseAcc
         
         Alet a b -> $internalError "runDelayedOpenAccMulti" "Not implemented"
 
-
         -- Another approach would be launch work
         -- at the operator level. 
         --
@@ -216,6 +241,13 @@ runDelayedOpenAccMulti = traverseAcc
         -- execution.
         
         Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
+
+        -- What should we do if we hit a Map here.
+        -- Can we make any assumptions about what
+        -- constructors we will possibly see, when
+        -- doing this "shallow" traversal of the AST ?
+
+        
         
         -- Array injection 
         Unit e   -> $internalError "runDelayedOpenAccMulti" "Not implemented"
@@ -249,7 +281,7 @@ arrayRefs (Manifest pacc) =
                     arrayRefs t `S.union`
                     arrayRefs e
 
-    Aforeign ff afun a -> $internalError "arrayRefs" "Aforeign"
+    Aforeign _ _ _ -> $internalError "arrayRefs" "Aforeign"
 
     Reshape s a -> travE s `S.union` arrayRefs a
     Replicate _ e a -> travE e `S.union` arrayRefs a
@@ -340,7 +372,7 @@ arrayRefsE exp =
     PrimConst  _     -> S.empty
     IndexAny         -> S.empty
     IndexNil         -> S.empty
-    Foreign   ff f x -> $internalError "arrayRefsE" "Foreign"
+    Foreign    _ _ _ -> $internalError "arrayRefsE" "Foreign"
     Let        a b   -> arrayRefsE a `S.union` arrayRefsE b 
     IndexCons  t h   -> arrayRefsE t `S.union` arrayRefsE h
     IndexHead  h     -> arrayRefsE h
