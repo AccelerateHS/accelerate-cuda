@@ -7,16 +7,22 @@
 
 -- Implementation experiments regarding multidevice execution and
 -- scheduling
-module Data.Array.Accelerate.CUDA.ExecuteMulti where
+module Data.Array.Accelerate.CUDA.ExecuteMulti
+       (  
+         runDelayedOpenAccMulti, 
 
--- import qualified Data.Array.Accelerate.CUDA.Execute as E
--- import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
-import Data.Array.Accelerate.CUDA.AST hiding (Idx_) 
+         ) where
+
+
+import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
 import Data.Array.Accelerate.CUDA.State
-
+import Data.Array.Accelerate.CUDA.Compile
+import qualified Data.Array.Accelerate.CUDA.Execute as E 
+import Data.Array.Accelerate.CUDA.Context 
+-- import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
-import Data.Array.Accelerate.Trafo.Base
+import Data.Array.Accelerate.Trafo.Base hiding (inject) 
 import Data.Array.Accelerate.Array.Sugar  ( Array
                                           , Shape
                                           , Elt
@@ -35,9 +41,12 @@ import Data.Array.Accelerate.Error
 import Foreign.CUDA.Driver.Device
 import Foreign.CUDA.Analysis.Device
 import qualified Foreign.CUDA.Driver    as CUDA
+import qualified Foreign.CUDA.Driver.Event as CUDA
 -- import Data.Array.Accelerate.CUDA.Analysis.Device
 
-import Data.Array.Accelerate.CUDA.Context 
+import Foreign.Ptr
+
+
 
 import Data.IORef
 
@@ -169,16 +178,65 @@ runDelayedAccMulti acc st =
   runDelayedOpenAccMulti acc Aempty st 
 
 
-
+-- Environment augmented with information about where
+-- arrays exist. 
 data Env env where
   Aempty :: Env ()
   Apush  :: Env env -> (t, IORef (Set MemID)) -> Env (env, t)
       -- Async t 
 
+
+-- Function that transforms a Env to a Aval
+-- Transfer arrays to MemID
+-- Transfer those arrays that are in the S.Set (Idx_ aenv)
+-- Take Env environment of where all arrays are located
+-- Start transfers and output a E.Aval environment (for execution) 
+transferArrays :: MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv) 
+transferArrays memid ixs aenv =
+  do 
+    uploadedEnv <- upload ixlist newEnv 
+     
+    return uploadedEnv 
+  where
+    newEnv = nilAval aenv
+    ixlist = S.toList ixs
+
+upload :: [Idx_ aenv] -> E.Aval aenv -> SchedMonad (E.Aval aenv) 
+upload [] env = return env
+upload (Idx_ x:xs) env =
+  let env' = inject x dummyAsync env
+  in upload xs env'
+    
+-- Not possible with the Idx_ 
+inject :: Idx env t -> E.Async t -> E.Aval env -> E.Aval env
+inject ZeroIdx        t  (E.Apush env _) = E.Apush env t
+inject (SuccIdx idx)  t  (E.Apush env a) = E.Apush (inject idx t env) a
+inject _ _ _ = $internalError "inject" "Nooo!"
+
+prj :: Idx aenv t -> Env aenv -> (t, IORef (Set MemID))
+prj ZeroIdx  (Apush _ x) = x
+prj (SuccIdx idx) (Apush env _) = prj idx env
+prj _ _ = $internalError "prj" "Nooo!" 
+
+nilAval :: Env aenv -> E.Aval aenv
+nilAval Aempty = E.Aempty
+nilAval (Apush e (t,_)) = E.Apush (nilAval e) (E.Async nilEvent t)
+
+-- Maybe actually create a real "this is nothing event" 
+nilEvent = CUDA.Event nullPtr 
+
+dummyAsync :: E.Async t 
+dummyAsync = E.Async nilEvent undefined
+
 -- Async MemID 
 
-
-
+-- The type of executeOpenAcc
+-- executeOpenAcc
+--     :: forall aenv arrs.
+--        ExecOpenAcc aenv arrs
+--     -> Aval aenv
+--     -> Stream
+--     -> CIO arrs
 
 -- Lots of comments associated with this function
 -- contains questions for rest of team to answer.
@@ -229,7 +287,15 @@ runDelayedOpenAccMulti = traverseAcc
         -- So approach we will follow is, enqueue a for computation
         -- keep going into b and keep enqueing work
         
-        Alet a b -> $internalError "runDelayedOpenAccMulti" "Not implemented"
+        Alet a b ->
+          do
+            let exec_a = compileOpenAcc a
+                free   = arrayRefs a 
+                
+                
+                         
+          
+            return $ undefined -- $internalError "runDelayedOpenAccMulti" "Not implemented"
 
         -- Another approach would be launch work
         -- at the operator level. 
@@ -241,6 +307,7 @@ runDelayedOpenAccMulti = traverseAcc
         -- execution.
         
         Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
+
 
         -- What should we do if we hit a Map here.
         -- Can we make any assumptions about what
@@ -378,6 +445,7 @@ arrayRefsE exp =
     IndexHead  h     -> arrayRefsE h
     IndexSlice _ x s -> arrayRefsE x `S.union` arrayRefsE s
     IndexFull  _ x s -> arrayRefsE x `S.union` arrayRefsE s
+    IndexTail  x     -> arrayRefsE x 
     ToIndex    s i   -> arrayRefsE s `S.union` arrayRefsE i
     FromIndex  s i   -> arrayRefsE s `S.union` arrayRefsE i
     Tuple      t     -> travT t

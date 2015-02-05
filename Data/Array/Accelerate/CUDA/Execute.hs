@@ -27,12 +27,12 @@ module Data.Array.Accelerate.CUDA.Execute (
 
   -- * Execute a computation under a CUDA environment
   executeAcc, executeAfun1,
-
+ 
   -- * Executing a sequence computation and streaming its output.
   StreamSeq(..), streamSeq,
 
   -- BJS: Export these for now
-  Aval(..), executeOpenAcc, 
+  Aval(..), executeOpenAcc, Async(..), 
   
 
 ) where

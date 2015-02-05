@@ -215,7 +215,7 @@ import Data.Array.Accelerate.CUDA.Async
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
-import Data.Array.Accelerate.CUDA.Execute
+import Data.Array.Accelerate.CUDA.Execute hiding (Async) 
 
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
