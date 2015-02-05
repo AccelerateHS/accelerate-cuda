@@ -197,12 +197,24 @@ runDelayedOpenAccMulti = traverseAcc
         Avar ix -> $internalError "runDelayedOpenAccMulti" "Not implemented"
 
         -- Let binding.
-        -- schedule b for execution when a is computed.
+        --
+        -- The format is: 
+        -- let real_work in a
+        -- So approach we will follow is, enqueue a for computation
+        -- keep going into b and keep enqueing work
         
         Alet a b -> $internalError "runDelayedOpenAccMulti" "Not implemented"
 
 
-        -- Launch jobs on the operator level ?!
+        -- Another approach would be launch work
+        -- at the operator level. 
+        --
+        -- This function of course needs to handle these cases
+        -- since let a = expensive in map f a
+        -- can occur (as an example)
+        -- In this case we would enqueu expensive and map f a for
+        -- execution.
+        
         Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
         
         -- Array injection 
