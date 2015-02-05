@@ -84,6 +84,10 @@ data Device = Device { did :: DevID
                                       -- higher priority.
                      }
               deriving (Show,Eq,Ord)
+-- Why not say DevID = MemID
+-- Then any device will use memory associated via a lookup somewhere
+-- with that DevID.
+
 
 -- As I understand it, we will first experiment without having a
 -- TaskGraph
@@ -160,23 +164,10 @@ runSched :: SchedMonad a -> SchedState -> CIO a
 runSched (SchedMonad m) = evalStateT m
   
 
--- Evaluate an PreOpenAcc or ExecAcc or something under the influence
--- of the scheduler
--- ------------------------------------------------------------------
 
--- The plan:
--- Traverse DelayedOpenAcc
---  compileAcc on subtrees (that the scheduler decides to execute)
---   gives: ExecAcc
---   Tie up all arrays.. Scheduler knows of all arrays and where they are
---   Create env to pass to execOpenAcc (with the ExecAcc object) 
 
-runDelayedAccMulti :: DelayedAcc arrs
-                   -> SchedState
-                   -> SchedMonad arrs
-runDelayedAccMulti acc st =
-  runDelayedOpenAccMulti acc Aempty st 
-
+-- Environments and operations thereupon
+-- ------------------------------------- 
 
 -- Environment augmented with information about where
 -- arrays exist. 
@@ -184,6 +175,7 @@ data Env env where
   Aempty :: Env ()
   Apush  :: Env env -> (t, IORef (Set MemID)) -> Env (env, t)
       -- Async t 
+      -- Async MemID 
 
 
 -- Function that transforms a Env to a Aval
@@ -193,7 +185,11 @@ data Env env where
 -- Start transfers and output a E.Aval environment (for execution) 
 transferArrays :: MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv) 
 transferArrays memid ixs aenv =
-  do 
+  do
+    -- Really implement moving of data to where it belongs
+    -- Create real Async t objects for operations depending
+    -- on these to wait on. 
+    
     uploadedEnv <- upload ixlist newEnv 
      
     return uploadedEnv 
@@ -228,8 +224,8 @@ nilEvent = CUDA.Event nullPtr
 dummyAsync :: E.Async t 
 dummyAsync = E.Async nilEvent undefined
 
--- Async MemID 
-
+----------------------------------------------------------------------
+-- Info:
 -- The type of executeOpenAcc
 -- executeOpenAcc
 --     :: forall aenv arrs.
@@ -237,6 +233,26 @@ dummyAsync = E.Async nilEvent undefined
 --     -> Aval aenv
 --     -> Stream
 --     -> CIO arrs
+
+
+
+-- Evaluate an PreOpenAcc or ExecAcc or something under the influence
+-- of the scheduler
+-- ------------------------------------------------------------------
+
+-- The plan:
+-- Traverse DelayedOpenAcc
+--  compileAcc on subtrees (that the scheduler decides to execute)
+--   gives: ExecAcc
+--   Tie up all arrays.. Scheduler knows of all arrays and where they are
+--   Create env to pass to execOpenAcc (with the ExecAcc object) 
+
+runDelayedAccMulti :: DelayedAcc arrs
+                   -> SchedState
+                   -> SchedMonad arrs
+runDelayedAccMulti acc st =
+  runDelayedOpenAccMulti acc Aempty st 
+
 
 -- Lots of comments associated with this function
 -- contains questions for rest of team to answer.
@@ -291,7 +307,9 @@ runDelayedOpenAccMulti = traverseAcc
           do
             let exec_a = compileOpenAcc a
                 free   = arrayRefs a 
-                
+
+            -- Choose device to execute this on.
+            -- Copy arrays to memory associated with that device 
                 
                          
           
