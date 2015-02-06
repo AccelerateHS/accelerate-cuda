@@ -93,7 +93,14 @@ createDeviceThread dev =
     work <- newEmptyMVar 
     done <- newMVar Done
     
-    tid <- forkIO $ deviceLoop done work
+    tid <- forkIO $
+           do
+             -- Bind the created context to this thread
+             -- I assume that means operations within
+             -- this thread will default to this context
+             CUDA.set (deviceContext ctx)
+             -- Enter the workloop 
+             deviceLoop done work
 
     return $ DeviceState ctx done work tid 
 
@@ -174,6 +181,8 @@ data SchedState =
   , allDevices  :: A.Array Int DeviceState 
   } 
 
+
+
 -- I dont think this SchedState is exactly what we need for this setup.
 -- 
 
@@ -212,8 +221,6 @@ runSched :: SchedMonad a -> SchedState -> IO a
 runSched (SchedMonad m) = evalStateT m
   
 
-
-
 -- Environments and operations thereupon
 -- ------------------------------------- 
 
@@ -221,16 +228,76 @@ runSched (SchedMonad m) = evalStateT m
 -- arrays exist. 
 data Env env where
   Aempty :: Env ()
-  Apush  :: Env env -> (t, IORef (Set MemID)) -> Env (env, t)
+  Apush  :: Arrays t => Env env -> (t, MVar (Set MemID)) -> Env (env, t)
+  -- MVar to wait on for computation of the desired array.
+  -- Once array is computed, the set indicates where it exists.
+  
   -- Arrays t => 
       -- Async t 
-      -- Async MemID 
+      -- Async MemID
+
+  -- Array sh a 
 
 -- new approach
 -- traverse Env and create E.Aval while doing the transfers.
 -- Create Idx_ s during recurse, perform lookups. 
 
 
+transExperiment :: forall aenv. MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv)
+transExperiment memid ixset aenv =
+  do
+    -- Assume for now that MemID and DevID are the same.
+    -- Which they probably will be in this setup. 
+    allDevs <- get >>= (return . allDevices)
+    -- Get the context we are moving arrays into.
+    -- This should however be the context bound
+    -- to the thread that is executing this.
+    let targetContext = devCtx $ allDevs A.! memid
+
+    --undefined 
+    trav targetContext aenv  
+
+--   trav _ (Apush Aempty _) = return (Idx_ ZeroIdx, E.Apush E.Aempty undefined )
+  where
+    trav :: forall aenv . Context -> Env aenv -> SchedMonad (E.Aval aenv)
+    trav _ Aempty = return E.Aempty
+    trav ctx a@(Apush e (t,loc)) =
+      do
+        env <- trav ctx e
+        
+        s <- liftIO $ takeMVar loc
+
+        let existsOnDevice = S.member memid s 
+
+       
+        case existsOnDevice of
+          True ->
+            do
+              -- Here everything should be fine. the
+              -- array is already on the machine.
+              -- Still need to create a valid Async though! 
+              return (E.Apush env (E.Async nilEvent t))
+          False ->
+            do
+              -- copy arrays into device
+              -- Traverse Arrays structure.
+              return (E.Apush env (E.Async nilEvent undefined))
+
+    
+    intset = S.map idx_ToInt  ixset
+
+-- DANGER ZONE -- DANGER ZONE -- DANGER ZONE -- DANGER ZONE --
+    dist :: forall aenv. Env aenv -> Int
+    dist Aempty = -1 
+    dist (Apush e _) = 1 + dist e 
+
+    idx_ToInt :: Idx_ env -> Int
+    idx_ToInt (Idx_ idx) = idxToInt idx
+-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
+
+
+
+          
 
 -- Function that transforms a Env to a Aval
 -- Transfer arrays to MemID
@@ -263,7 +330,7 @@ inject ZeroIdx        t  (E.Apush env _) = E.Apush env t
 inject (SuccIdx idx)  t  (E.Apush env a) = E.Apush (inject idx t env) a
 inject _ _ _ = $internalError "inject" "Nooo!"
 
-prj :: Idx aenv t -> Env aenv -> (t, IORef (Set MemID))
+prj :: Idx aenv t -> Env aenv -> (t, MVar (Set MemID))
 prj ZeroIdx  (Apush _ x) = x
 prj (SuccIdx idx) (Apush env _) = prj idx env
 prj _ _ = $internalError "prj" "Nooo!" 
@@ -322,7 +389,7 @@ runDelayedOpenAccMulti = traverseAcc
                 -> SchedState
                 -> SchedMonad arrs
     traverseAcc Delayed{} _ _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
-    traverseAcc (Manifest pacc) _ _ =
+    traverseAcc (Manifest pacc) env _ =
       case pacc of
 
         -- Avar ix
@@ -364,7 +431,13 @@ runDelayedOpenAccMulti = traverseAcc
             let exec_a = compileOpenAcc a
 
                 -- These are the arrays needed for computing a 
-                free   = arrayRefs a 
+                free   = arrayRefs a
+
+                -- we need to keep track of what Arrays have been computed.
+                -- How do we identify an array ?
+                -- 
+                
+                
                 -- Find out where they are
                 -- prefer to launch a on device that
                 -- has most of them
