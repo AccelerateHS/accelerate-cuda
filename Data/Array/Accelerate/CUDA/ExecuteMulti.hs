@@ -243,6 +243,12 @@ data Env env where
 -- Create Idx_ s during recurse, perform lookups. 
 
 
+-- ---------------------------------------------------------------
+-- TODO: 
+-- Gah! Use the strengthening on the set (change S.Set (Idx_ aenv)
+-- in each step, so that types match up) and
+-- always lookup index zero..
+
 transExperiment :: forall aenv. MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv)
 transExperiment memid ixset aenv =
   do
