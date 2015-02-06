@@ -2,7 +2,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-} 
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE BangPatterns #-} 
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE EmptyDataDecls #-} 
 
 
 -- Implementation experiments regarding multidevice execution and
@@ -55,12 +56,76 @@ import Data.Map as M
 import Data.Set as S
 import Data.List as L
 import Data.Function
-import Data.Ord 
--- import Debug.Trace
+import Data.Ord
+
+import qualified Data.Array as A
 
 import Control.Monad.State
 import Control.Applicative hiding (Const) 
--- import Control.Concurrent.MVar 
+
+-- Concurrency 
+import Control.Concurrent.MVar
+import Control.Concurrent 
+
+-- Datastructures for Gang of worker threads
+-- One thread per participating device
+-- -----------------------------------------
+
+data Done = Done -- Free to accept work  
+data Work = ShutDown
+          | Work (IO ()) 
+
+
+data DeviceState = DeviceState { devCtx      :: Context
+                               , devDoneMVar :: MVar Done
+                               , devWorkMVar :: MVar Work
+                               , devThread   :: ThreadId
+                               } 
+
+-- Each device is associated a worker thread
+-- that performs workloads passed to it from the
+-- Scheduler 
+createDeviceThread :: CUDA.Device -> IO DeviceState
+createDeviceThread dev =
+  do
+    ctx <- create dev contextFlags
+    
+    work <- newEmptyMVar 
+    done <- newMVar Done
+    
+    tid <- forkIO $ deviceLoop done work
+
+    return $ DeviceState ctx done work tid 
+
+    -- The worker thread 
+    where deviceLoop done work =
+            do
+              x <- takeMVar work
+              case x of
+                ShutDown -> putMVar done Done >> return () 
+                Work w -> w
+
+              putMVar done Done 
+                    
+-- Create the initial SchedState 
+initScheduler :: IO SchedState
+initScheduler = do
+  devs <- enumerateDevices
+   -- Create a device thread for each device 
+  devs' <- mapM createDeviceThread devs 
+  let numDevs = L.length devs
+
+  let assocList = zip [0..numDevs-1] devs'
+
+  return $ SchedState 
+                       -- (S.fromList (L.map fst assocList))
+                       -- M.empty
+                      M.empty
+                      S.empty
+                      S.empty
+                      (A.array (0,numDevs-1) assocList)
+
+
 
 -- Scheduler related datatypes
 -- ---------------------------
@@ -70,7 +135,6 @@ type MemID  = Int
 -- will we use TaskIDs using this approach ? 
 type TaskID = Int 
 type Size   = Word
-
 
 -- | Which memory space are we in, this can be any kind of unique ID.
 -- data MemID = CPU | GPU1 | GPU2    deriving (Show,Eq,Ord,Read)
@@ -95,20 +159,19 @@ data Device = Device { did :: DevID
 -- | Scheduler state 
 data SchedState =
   SchedState {
-    freeDevs    :: Set DevID         -- ^ Free devices 
-  , workingDevs :: Map DevID TaskID  -- ^ Busy devices  
-  , arrays      :: Map TaskID (Size, Set MemID)
+--     freeDevs    :: Set DevID         -- ^ Free devices 
+--    workingDevs :: Map DevID TaskID  -- ^ Busy devices  
+   arrays      :: Map TaskID (Size, Set MemID)
     -- ^ Resident arrays, indexed by the taskID that produced them.
     -- Note, a given array can be on more than one device.  Every
     -- taskId eventually appears in here, so it is also our
     -- "completed" list.
   , waiting     :: Set TaskID -- ^ Work waiting for executor
   , outstanding :: Set TaskID -- ^ Work assigned to executor
-
       
   -- A map from DevID to the devices available on the system
   -- The CUDA context identifies a device
-  , allDevices  :: Map DevID Context 
+  , allDevices  :: A.Array Int DeviceState 
   } 
 
 -- I dont think this SchedState is exactly what we need for this setup.
@@ -136,31 +199,16 @@ enumerateDevices = do
 contextFlags :: [CUDA.ContextFlag]
 contextFlags = [CUDA.SchedAuto]
 
-initState :: IO SchedState
-initState = do
-  devs <- enumerateDevices
-  devs' <- mapM (flip create contextFlags) devs 
-  let numDevs = L.length devs
-
-  let assocList = zip [0..numDevs-1] devs'
-  return $ SchedState (S.fromList (L.map fst assocList))
-                      M.empty
-                      M.empty
-                      S.empty
-                      S.empty
-                      (M.fromList assocList)
-
-
 -- at any point along the traversal of the AST the executeOpenAccMulti
 -- function will be under the influence of the SchedState
-newtype SchedMonad a = SchedMonad (StateT SchedState CIO a)
+newtype SchedMonad a = SchedMonad (StateT SchedState IO a)
           deriving ( MonadState SchedState
                    , Monad
                    , MonadIO
                    , Functor 
                    , Applicative )
 
-runSched :: SchedMonad a -> SchedState -> CIO a
+runSched :: SchedMonad a -> SchedState -> IO a
 runSched (SchedMonad m) = evalStateT m
   
 
@@ -174,8 +222,14 @@ runSched (SchedMonad m) = evalStateT m
 data Env env where
   Aempty :: Env ()
   Apush  :: Env env -> (t, IORef (Set MemID)) -> Env (env, t)
+  -- Arrays t => 
       -- Async t 
       -- Async MemID 
+
+-- new approach
+-- traverse Env and create E.Aval while doing the transfers.
+-- Create Idx_ s during recurse, perform lookups. 
+
 
 
 -- Function that transforms a Env to a Aval
@@ -313,8 +367,33 @@ runDelayedOpenAccMulti = traverseAcc
                 free   = arrayRefs a 
                 -- Find out where they are
                 -- prefer to launch a on device that
-                -- has most of them 
+                -- has most of them
 
+                -- execOpenAcc . compileOpenAcc
+                
+            -- Fire off IO Thread     
+            -- Create a CIO (runCIO) 
+            -- runWithContext (context is the one from the device chosen) 
+                
+            -- Create a stream for data copy
+            -- Create events for copy complete
+            -- Copy 
+
+
+          
+            -- create a stream for kernel execute
+            -- create event for execute 
+            -- wait for copy complete
+            -- compute  (executeOpenAcc . compileOpenAcc)
+            -- record event execute done
+            -- block on that event. and update free devices 
+            
+
+                
+                  
+
+
+            
             -- How can a device report back that it is free.
 
             -- Can we extend after
@@ -326,6 +405,8 @@ runDelayedOpenAccMulti = traverseAcc
             --
             -- Is an event fired off when a device finishes computing?
             -- There is the cudaStreamSynchronize function.
+            -- And the cudaEventSynchronize function
+            --    I think this is called "block" in Foreign.CUDA
 
            
 
@@ -350,7 +431,12 @@ runDelayedOpenAccMulti = traverseAcc
         -- execution.
         
         Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
-
+        -- It does the normal thing:
+        --   Free vars
+        --   Copy to device
+        --   executeOpenAcc
+        --
+        --   decide where to copy this or not. 
 
         -- What should we do if we hit a Map here.
         -- Can we make any assumptions about what
