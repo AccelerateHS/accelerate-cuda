@@ -256,90 +256,127 @@ transExperiment memid ixset aenv =
     -- Which they probably will be in this setup. 
     allDevs <- get >>= (return . allDevices)
     -- Get the context we are moving arrays into.
-    -- This should however be the context bound
+    -- This should, however, be the context bound
     -- to the thread that is executing this.
+    -- If it is not, I have no idea how to allocate memory
+    -- in that context. a withContext function or inContext
+    -- function could be nice.
     let targetContext = devCtx $ allDevs A.! memid
 
-    --undefined 
-    trav targetContext aenv  
+    -- Traverse environment and copy all arrays
+    -- that are needed. 
+    trav targetContext aenv ixset 
 
 --   trav _ (Apush Aempty _) = return (Idx_ ZeroIdx, E.Apush E.Aempty undefined )
   where
-    trav :: forall aenv . Context -> Env aenv -> SchedMonad (E.Aval aenv)
-    trav _ Aempty = return E.Aempty
-    trav ctx a@(Apush e (t,loc)) =
+    trav :: forall aenv . Context -> Env aenv -> S.Set (Idx_ aenv) -> SchedMonad (E.Aval aenv)
+    trav _ Aempty _ = return E.Aempty
+    trav ctx a@(Apush e (t,loc)) reqset =
       do
-        env <- trav ctx e
-        
-        s <- liftIO $ takeMVar loc
+        let (needArray,newset) = isNeeded reqset 
+        env <- trav ctx e newset
 
-        let existsOnDevice = S.member memid s 
+        if needArray
+          then
+          do
+            -- when take this lock ? 
+            s <- liftIO $ takeMVar loc
+            -- And when release it ? 
+            
+            let existsOnDevice = S.member memid s 
+            case existsOnDevice of
+              True ->
+                do
+                  -- Here everything should be fine. the
+                  -- array is already on the machine.
+                  -- Still need to create a valid Async though!
+                  -- So, a real event is needed
 
-       
-        case existsOnDevice of
-          True ->
-            do
-              -- Here everything should be fine. the
-              -- array is already on the machine.
-              -- Still need to create a valid Async though! 
-              return (E.Apush env (E.Async nilEvent t))
-          False ->
-            do
-              -- copy arrays into device
-              -- Traverse Arrays structure.
-              return (E.Apush env (E.Async nilEvent undefined))
+                  -- The array already exists here
+                  liftIO $ putMVar loc s
+                  
+                  return (E.Apush env (E.Async nilEvent t))
+                 
+              False ->
+                do
+                  -- copy arrays into device
+                  -- Traverse Arrays 
+                  copyArrays t s
+
+                  -- now this array will exist here as well. 
+                  liftIO $ putMVar loc (S.insert memid s )  
+                  return (E.Apush env (E.Async nilEvent undefined))
+          else
+          -- We do not need this array,
+          -- So this location in the env will never be touched
+          -- by the computation. So putting trash here should be fine. 
+          return (E.Apush env (E.Async nilEvent t))
+
+    -- Is the "current" array needed by the computation.
+    -- Figure this out by checking if zero is in the set.
+    -- Then "Strengthen" the set, remove zero and decrement all remaining
+    -- indices. 
+    isNeeded :: Arrays t => S.Set (Idx_ (aenv',t)) -> (Bool,S.Set (Idx_ aenv'))
+    isNeeded s =
+      let needed = S.member (Idx_ ZeroIdx) s
+      in (needed, strengthen s) 
+
+copyArrays :: Arrays t => t -> Set MemID -> SchedMonad ()
+copyArrays = undefined
+-- do
+--    allDevs <- get >>= (return . allDevices)
 
     
-    intset = S.map idx_ToInt  ixset
+--    intset = S.map idx_ToInt  ixset
 
 -- DANGER ZONE -- DANGER ZONE -- DANGER ZONE -- DANGER ZONE --
-    dist :: forall aenv. Env aenv -> Int
-    dist Aempty = -1 
-    dist (Apush e _) = 1 + dist e 
+    -- dist :: forall aenv. Env aenv -> Int
+    -- dist Aempty = -1 
+    -- dist (Apush e _) = 1 + dist e 
 
-    idx_ToInt :: Idx_ env -> Int
-    idx_ToInt (Idx_ idx) = idxToInt idx
+    -- idx_ToInt :: Idx_ env -> Int
+    -- idx_ToInt (Idx_ idx) = idxToInt idx
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
 
 
 
           
-
+-- OLD EXPERIMENTS 
 -- Function that transforms a Env to a Aval
 -- Transfer arrays to MemID
 -- Transfer those arrays that are in the S.Set (Idx_ aenv)
 -- Take Env environment of where all arrays are located
 -- Start transfers and output a E.Aval environment (for execution) 
-transferArrays :: MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv) 
-transferArrays memid ixs aenv =
-  do
-    -- Really implement moving of data to where it belongs
-    -- Create real Async t objects for operations depending
-    -- on these to wait on. 
+-- transferArrays :: MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv) 
+-- transferArrays memid ixs aenv =
+--   do
+--     -- Really implement moving of data to where it belongs
+--     -- Create real Async t objects for operations depending
+--     -- on these to wait on. 
     
-    uploadedEnv <- upload ixlist newEnv 
+--     uploadedEnv <- upload ixlist newEnv 
      
-    return uploadedEnv 
-  where
-    newEnv = nilAval aenv
-    ixlist = S.toList ixs
+--     return uploadedEnv 
+--   where
+--     newEnv = nilAval aenv
+--     ixlist = S.toList ixs
 
-upload :: [Idx_ aenv] -> E.Aval aenv -> SchedMonad (E.Aval aenv) 
-upload [] env = return env
-upload (Idx_ x:xs) env =
-  let env' = inject x dummyAsync env
-  in upload xs env'
+-- upload :: [Idx_ aenv] -> E.Aval aenv -> SchedMonad (E.Aval aenv) 
+-- upload [] env = return env
+-- upload (Idx_ x:xs) env =
+--   let env' = inject x dummyAsync env
+--   in upload xs env'
     
--- Not possible with the Idx_ 
-inject :: Idx env t -> E.Async t -> E.Aval env -> E.Aval env
-inject ZeroIdx        t  (E.Apush env _) = E.Apush env t
-inject (SuccIdx idx)  t  (E.Apush env a) = E.Apush (inject idx t env) a
-inject _ _ _ = $internalError "inject" "Nooo!"
+-- -- Not possible with the Idx_ 
+-- inject :: Idx env t -> E.Async t -> E.Aval env -> E.Aval env
+-- inject ZeroIdx        t  (E.Apush env _) = E.Apush env t
+-- inject (SuccIdx idx)  t  (E.Apush env a) = E.Apush (inject idx t env) a
+-- inject _ _ _ = $internalError "inject" "Nooo!"
 
-prj :: Idx aenv t -> Env aenv -> (t, MVar (Set MemID))
-prj ZeroIdx  (Apush _ x) = x
-prj (SuccIdx idx) (Apush env _) = prj idx env
-prj _ _ = $internalError "prj" "Nooo!" 
+-- prj :: Idx aenv t -> Env aenv -> (t, MVar (Set MemID))
+-- prj ZeroIdx  (Apush _ x) = x
+-- prj (SuccIdx idx) (Apush env _) = prj idx env
+-- prj _ _ = $internalError "prj" "Nooo!" 
 
 nilAval :: Env aenv -> E.Aval aenv
 nilAval Aempty = E.Aempty
