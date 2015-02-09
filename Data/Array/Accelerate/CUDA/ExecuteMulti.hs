@@ -356,45 +356,25 @@ nilEvent = CUDA.Event nullPtr
 dummyAsync :: E.Async t 
 dummyAsync = E.Async nilEvent undefined
 
-----------------------------------------------------------------------
--- Info:
--- The type of executeOpenAcc
--- executeOpenAcc
---     :: forall aenv arrs.
---        ExecOpenAcc aenv arrs
---     -> Aval aenv
---     -> Stream
---     -> CIO arrs
-
-
 
 -- Evaluate an PreOpenAcc or ExecAcc or something under the influence
 -- of the scheduler
 -- ------------------------------------------------------------------
-
--- The plan:
--- Traverse DelayedOpenAcc
---  compileAcc on subtrees (that the scheduler decides to execute)
---   gives: ExecAcc
---   Tie up all arrays.. Scheduler knows of all arrays and where they are
---   Create env to pass to execOpenAcc (with the ExecAcc object) 
-
 runMulti :: Arrays arrs => DelayedAcc arrs -> IO arrs
 runMulti acc =
   do  st <- initScheduler
       runSched (runDelayedAccMulti acc)  st
+      -- Here a collect-like function is needed. 
 
 runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
                    -> SchedMonad arrs
 runDelayedAccMulti acc =
   do
     mv <- runDelayedOpenAccMulti acc Aempty
-    liftIO $ takeMVar mv 
+    liftIO $ takeMVar mv
 
-
--- Lots of comments associated with this function
--- contains questions for rest of team to answer.
--- 
+-- This is the multirunner for DelayedOpenAcc
+-- ------------------------------------------
 runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
                        -> Env aenv 
                        -> SchedMonad (MVar arrs)
@@ -567,7 +547,7 @@ runDelayedOpenAccMulti = traverseAcc
         
         _       -> $internalError "runDelayedOpenAccMulti" "Not implemented" 
     
-
+    registerAsFree :: SchedState -> DevID -> IO () 
     registerAsFree st dev = writeChan (freeDevs st) dev 
 
         
