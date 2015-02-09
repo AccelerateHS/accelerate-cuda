@@ -14,14 +14,12 @@ module Data.Array.Accelerate.CUDA.ExecuteMulti
 
          ) where
 
-
 import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
 import qualified Data.Array.Accelerate.CUDA.State as CUDA 
 import Data.Array.Accelerate.CUDA.Compile
 import qualified Data.Array.Accelerate.CUDA.Execute as E 
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Data
--- import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
 import Data.Array.Accelerate.Trafo.Base hiding (inject) 
@@ -38,14 +36,13 @@ import Data.Array.Accelerate.Array.Sugar  ( Array
                                           , IsAtuple
                                           , Scalar )
 
--- import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import Data.Array.Accelerate.Error
 --
 import Foreign.CUDA.Driver.Device
 import Foreign.CUDA.Analysis.Device
 import qualified Foreign.CUDA.Driver    as CUDA
 import qualified Foreign.CUDA.Driver.Event as CUDA
--- import Data.Array.Accelerate.CUDA.Analysis.Device
+
 
 import Foreign.Ptr
 
@@ -164,8 +161,8 @@ type DevID  = Int
 type MemID  = Int 
 
 -- will we use TaskIDs using this approach ? 
-type TaskID = Int 
-type Size   = Word
+--type TaskID = Int 
+--type Size   = Word
 
 -- | Which memory space are we in, this can be any kind of unique ID.
 -- data MemID = CPU | GPU1 | GPU2    deriving (Show,Eq,Ord,Read)
@@ -244,6 +241,8 @@ runSched (SchedMonad m) = runReaderT m
 
 -- Environments and operations thereupon
 -- ------------------------------------- 
+
+data Async t = MVar (t, Set MemID) 
 
 -- Environment augmented with information about where
 -- arrays exist. 
@@ -380,23 +379,30 @@ dummyAsync = E.Async nilEvent undefined
 --   Tie up all arrays.. Scheduler knows of all arrays and where they are
 --   Create env to pass to execOpenAcc (with the ExecAcc object) 
 
-runDelayedAccMulti :: DelayedAcc arrs
+runMulti :: Arrays arrs => DelayedAcc arrs -> IO arrs
+runMulti acc =
+  do  st <- initScheduler
+      runSched (runDelayedAccMulti acc)  st
+
+runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
                    -> SchedMonad arrs
 runDelayedAccMulti acc =
-  runDelayedOpenAccMulti acc Aempty 
+  do
+    mv <- runDelayedOpenAccMulti acc Aempty
+    liftIO $ takeMVar mv 
 
 
 -- Lots of comments associated with this function
 -- contains questions for rest of team to answer.
 -- 
-runDelayedOpenAccMulti :: DelayedOpenAcc aenv arrs
+runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
                        -> Env aenv 
-                       -> SchedMonad arrs
+                       -> SchedMonad (MVar arrs)
 runDelayedOpenAccMulti = traverseAcc 
   where
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs
                 -> Env aenv
-                -> SchedMonad arrs
+                -> SchedMonad (MVar arrs)
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
     traverseAcc (Manifest pacc) env =
       case pacc of
@@ -435,6 +441,7 @@ runDelayedOpenAccMulti = traverseAcc
         
         Alet a b ->
           do
+            arrayOnTheWay <- liftIO $ newEmptyMVar
             schedState <- ask
 
             -- Here! Fork of a thread that waits for all the
@@ -474,12 +481,9 @@ runDelayedOpenAccMulti = traverseAcc
                             
                             result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
 
-                                      
-                            -- # Mark device as free
-
+                            
+                            liftIO $ putMVar arrayOnTheWay (result, S.singleton devid)  
                             -- # Thread dies.
-       
-
                             
                             return () 
 
@@ -490,13 +494,12 @@ runDelayedOpenAccMulti = traverseAcc
 
                    
                      
-                     return ()
+                     -- return ()
 
-            arrayOnTheWay <- liftIO $ newEmptyMVar
+            
             traverseAcc b (env `Apush` arrayOnTheWay)
-            --  execDelayedOpenAcc b     
-                -- execOpenAcc . compileOpenAcc
-                
+
+
             -- Fire off IO Thread     
             -- Create a CIO (runCIO) 
             -- runWithContext (context is the one from the device chosen) 
@@ -532,7 +535,7 @@ runDelayedOpenAccMulti = traverseAcc
                 
                          
           
-            return $ undefined -- $internalError "runDelayedOpenAccMulti" "Not implemented"
+            -- return $ undefined -- $internalError "runDelayedOpenAccMulti" "Not implemented"
 
         -- Another approach would be launch work
         -- at the operator level. 
