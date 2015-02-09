@@ -37,16 +37,12 @@ import Data.Array.Accelerate.Array.Sugar  ( Array
                                           , Scalar )
 
 import Data.Array.Accelerate.Error
---
 import Foreign.CUDA.Driver.Device
 import Foreign.CUDA.Analysis.Device
-import qualified Foreign.CUDA.Driver    as CUDA
+import qualified Foreign.CUDA.Driver       as CUDA
 import qualified Foreign.CUDA.Driver.Event as CUDA
 
-
-import Foreign.Ptr
-
-
+import Foreign.Ptr (nullPtr)
 
 import Data.IORef
 
@@ -80,18 +76,6 @@ data DeviceState = DeviceState { devCtx      :: Context
                                , devWorkMVar :: MVar Work
                                , devThread   :: ThreadId
                                }
--- Decouple the device and the work thread!
--- Go for this setup:
---  Spawn of work thread.
---  Work thread waits for all dependencies to be computed.
---  Work thread choses device to use for work.
---  Work thread executes work.
---  Work thread dies.
---
---  The reason: Do not prematurely lock any device
---  a specific piece of work. Doing that will lead to deadlock
---  if all devices are busy with waiting for array a to be computed
---  but there is no device free for computing  a. 
                    
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
