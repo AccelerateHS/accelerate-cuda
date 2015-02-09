@@ -128,7 +128,6 @@ createDeviceThread dev =
 
 -- Initialize a starting state
 -- ---------------------------
-
 initScheduler :: IO SchedState
 initScheduler = do
   devs <- enumerateDevices
@@ -146,60 +145,13 @@ initScheduler = do
                       free
 
 
---  -- (S.fromList (L.map fst assocList))
---  -- M.empty
-    -- M.empty
-    -- S.empty
-    -- S.empty
-    -- (A.array (0,numDevs-1) assocList)
-
-
-
 -- Scheduler related datatypes
 -- ---------------------------
 type DevID  = Int 
 type MemID  = Int 
 
--- will we use TaskIDs using this approach ? 
---type TaskID = Int 
---type Size   = Word
-
--- | Which memory space are we in, this can be any kind of unique ID.
--- data MemID = CPU | GPU1 | GPU2    deriving (Show,Eq,Ord,Read)
-
--- data Device = Device { did :: DevID   
---                      , mem :: MemID   -- ^ From which memory does this
---                                       -- device consume and produce
---                                       -- results?
---                      , prio :: Double -- ^ A bias factor, tend towards
---                                       -- using this device if it is
---                                       -- higher priority.
---                      }
---               deriving (Show,Eq,Ord)
--- Why not say DevID = MemID
--- Then any device will use memory associated via a lookup somewhere
--- with that DevID.
-
--- -- | Scheduler state 
--- data SchedState =
---   SchedState {
--- --     freeDevs    :: Set DevID         -- ^ Free devices 
--- --    workingDevs :: Map DevID TaskID  -- ^ Busy devices  
---    liveArrays      :: Map TaskID (Size, Set MemID)
---     -- ^ Resident arrays, indexed by the taskID that produced them.
---     -- Note, a given array can be on more than one device.  Every
---     -- taskId eventually appears in here, so it is also our
---     -- "completed" list.
---   , waiting     :: Set TaskID -- ^ Work waiting for executor
---   , outstanding :: Set TaskID -- ^ Work assigned to executor
-      
---   -- A map from DevID to the devices available on the system
---   -- The CUDA context identifies a device
---   , allDevices  :: A.Array Int DeviceState 
---   } 
-
 data SchedState =
-  SchedState { 
+  SchedState {
       deviceState  :: A.Array Int DeviceState
       -- this is a channel, for now. 
     , freeDevs     :: Chan DevID 
