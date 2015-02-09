@@ -381,10 +381,9 @@ dummyAsync = E.Async nilEvent undefined
 --   Create env to pass to execOpenAcc (with the ExecAcc object) 
 
 runDelayedAccMulti :: DelayedAcc arrs
-                   -> SchedState
                    -> SchedMonad arrs
-runDelayedAccMulti acc st =
-  runDelayedOpenAccMulti acc Aempty st 
+runDelayedAccMulti acc =
+  runDelayedOpenAccMulti acc Aempty 
 
 
 -- Lots of comments associated with this function
@@ -392,16 +391,14 @@ runDelayedAccMulti acc st =
 -- 
 runDelayedOpenAccMulti :: DelayedOpenAcc aenv arrs
                        -> Env aenv 
-                       -> SchedState
                        -> SchedMonad arrs
 runDelayedOpenAccMulti = traverseAcc 
   where
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs
                 -> Env aenv
-                -> SchedState
                 -> SchedMonad arrs
-    traverseAcc Delayed{} _ _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
-    traverseAcc (Manifest pacc) env _ =
+    traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
+    traverseAcc (Manifest pacc) env =
       case pacc of
 
         -- Avar ix
@@ -494,7 +491,10 @@ runDelayedOpenAccMulti = traverseAcc
                    
                      
                      return ()
-              --  execDelayedOpenAcc b     
+
+            arrayOnTheWay <- liftIO $ newEmptyMVar
+            traverseAcc b (env `Apush` arrayOnTheWay)
+            --  execDelayedOpenAcc b     
                 -- execOpenAcc . compileOpenAcc
                 
             -- Fire off IO Thread     
