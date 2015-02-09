@@ -19,12 +19,14 @@ import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj)
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Compile
 import qualified Data.Array.Accelerate.CUDA.Execute as E 
-import Data.Array.Accelerate.CUDA.Context 
+import Data.Array.Accelerate.CUDA.Context
+-- import Data.Array.Accelerate.CUDA.Array.Data 
 -- import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
 import Data.Array.Accelerate.Trafo.Base hiding (inject) 
 import Data.Array.Accelerate.Array.Sugar  ( Array
+                                          , Arrays(..), ArraysR(..)
                                           , Shape
                                           , Elt
                                           , Arrays
@@ -75,12 +77,24 @@ data Done = Done -- Free to accept work
 data Work = ShutDown
           | Work (IO ()) 
 
-
 data DeviceState = DeviceState { devCtx      :: Context
                                , devDoneMVar :: MVar Done
                                , devWorkMVar :: MVar Work
                                , devThread   :: ThreadId
-                               } 
+                               }
+-- Decouple the device and the work thread!
+-- Go for this setup:
+--  Spawn of work thread.
+--  Work thread waits for all dependencies to be computed.
+--  Work thread choses device to use for work.
+--  Work thread executes work.
+--  Work thread signals "Done".
+--
+--  The reason: Do not prematurely lock any device
+--  a specific piece of work. Doing that will lead to deadlock
+--  if all devices are busy with waiting for array a to be computed
+--  but there is no device free for computing  a. 
+                   
 
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
@@ -168,7 +182,7 @@ data SchedState =
   SchedState {
 --     freeDevs    :: Set DevID         -- ^ Free devices 
 --    workingDevs :: Map DevID TaskID  -- ^ Busy devices  
-   arrays      :: Map TaskID (Size, Set MemID)
+   liveArrays      :: Map TaskID (Size, Set MemID)
     -- ^ Resident arrays, indexed by the taskID that produced them.
     -- Note, a given array can be on more than one device.  Every
     -- taskId eventually appears in here, so it is also our
@@ -321,8 +335,16 @@ transExperiment memid ixset aenv =
       let needed = S.member (Idx_ ZeroIdx) s
       in (needed, strengthen s) 
 
-copyArrays :: Arrays t => t -> Set MemID -> SchedMonad ()
-copyArrays = undefined
+copyArrays :: forall t. Arrays t => t -> Set MemID -> SchedMonad ()
+copyArrays arrs s = copyArraysR (arrays (undefined :: t)) (fromArr arrs)
+  where
+    copyArraysR :: ArraysR a -> a -> SchedMonad () 
+    copyArraysR ArraysRunit () = return ()
+    copyArraysR ArraysRarray arr = return ()
+    copyArraysR (ArraysRpair r1 r2) (arrs1, arrs2) =
+      do copyArraysR r1 arrs1
+         copyArraysR r2 arrs2 
+  
 -- do
 --    allDevs <- get >>= (return . allDevices)
 
@@ -339,7 +361,20 @@ copyArrays = undefined
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
 
 
-
+-- Wait for all arrays in the set to be computed.
+waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
+waitOnArrays Aempty _ = return ()
+waitOnArrays (Apush e (t,loc)) reqset =
+  do
+    let needed = S.member (Idx_ ZeroIdx) reqset
+        ns     = strengthen reqset 
+    
+    case needed of
+      True -> do s <- takeMVar loc
+                 putMVar loc s
+                 waitOnArrays e ns
+      False -> waitOnArrays e ns 
+              
           
 -- OLD EXPERIMENTS 
 -- Function that transforms a Env to a Aval
@@ -470,11 +505,20 @@ runDelayedOpenAccMulti = traverseAcc
         Alet a b ->
           do
             schedState <- get
-            
-            let exec_a = compileOpenAcc a
+
+            -- Here! Fork of a thread that waits for all the
+            -- arrays that a depends upon to be computed.
+            -- Otherwise there will be deadlocks!
+            -- This is before deciding what device to use.
+            tid <- liftIO $ forkIO $
+                   do let free = arrayRefs a
+                      waitOnArrays env free  
+
+                      let exec_a = compileOpenAcc a
+                      return ()  
 
                 -- These are the arrays needed for computing a 
-                free   = arrayRefs a
+                -- free   = arrayRefs a
 
                 -- we need to keep track of what Arrays have been computed.
                 -- How do we identify an array ?
