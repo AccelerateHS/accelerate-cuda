@@ -254,7 +254,7 @@ useDevicePtrs !ctx !mt !ptr !n0 =
       (adata, _) = runArrayData $ (,undefined) `fmap` newArrayData n
   in do
     message $ "useDevicePtrs: " ++ showBytes bytes
-    insertRemote ctx mt adata ptr
+    insertUnmanaged ctx mt adata ptr
     return adata
 
 

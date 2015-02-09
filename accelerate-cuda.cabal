@@ -87,6 +87,7 @@ Library
                         base                    == 4.7.*,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
+                        containers              >= 0.3,
                         cryptohash              >= 0.7,
                         cuda                    >= 0.6.0.2,
                         directory               >= 1.0,
@@ -121,7 +122,6 @@ Library
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
                         Data.Array.Accelerate.CUDA.Array.Data
-                        Data.Array.Accelerate.CUDA.Array.Nursery
                         Data.Array.Accelerate.CUDA.Array.Prim
                         Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
@@ -148,7 +148,6 @@ Library
                         Data.Array.Accelerate.CUDA.Execute.Stream
                         Data.Array.Accelerate.CUDA.Foreign.Export
                         Data.Array.Accelerate.CUDA.Foreign.Import
-                        Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
                         Paths_accelerate_cuda

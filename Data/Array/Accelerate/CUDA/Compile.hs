@@ -34,7 +34,7 @@ import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Analysis.Launch
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc, canExecuteExp )
 import Data.Array.Accelerate.CUDA.Persistent                    as KT
-import qualified Data.Array.Accelerate.CUDA.FullList            as FL
+import qualified Data.Array.Accelerate.FullList                 as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries

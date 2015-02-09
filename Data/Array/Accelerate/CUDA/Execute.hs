@@ -36,7 +36,6 @@ module Data.Array.Accelerate.CUDA.Execute (
 -- friends
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..), List(..) )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
@@ -52,6 +51,7 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Interpreter                        ( evalPrim, evalPrimConst, evalPrj )
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
+import Data.Array.Accelerate.FullList                           ( FullList(..), List(..) )
 import Data.Array.Accelerate.Trafo                              ( Extend(..) )
 import qualified Data.Array.Accelerate.Array.Representation     as R
 
