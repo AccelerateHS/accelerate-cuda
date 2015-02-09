@@ -20,7 +20,7 @@ import qualified Data.Array.Accelerate.CUDA.State as CUDA
 import Data.Array.Accelerate.CUDA.Compile
 import qualified Data.Array.Accelerate.CUDA.Execute as E 
 import Data.Array.Accelerate.CUDA.Context
--- import Data.Array.Accelerate.CUDA.Array.Data 
+import Data.Array.Accelerate.CUDA.Array.Data
 -- import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
@@ -60,7 +60,8 @@ import Data.List as L
 import Data.Function
 import Data.Ord
 
-import qualified Data.Array as A
+-- import qualified Data.Array as A
+import qualified Data.Array.IArray as A 
 
 import Control.Monad.Reader
 import Control.Applicative hiding (Const) 
@@ -73,13 +74,10 @@ import Control.Concurrent.Chan
 -- Datastructures for Gang of worker threads
 -- One thread per participating device
 -- -----------------------------------------
-
--- This goes away. 
 data Done = Done -- Free to accept work  
 data Work = ShutDown
           | Work (IO ()) 
 
--- This goes away. 
 data DeviceState = DeviceState { devCtx      :: Context
                                , devDoneMVar :: MVar Done
                                , devWorkMVar :: MVar Work
@@ -206,13 +204,11 @@ type Size   = Word
 data SchedState =
   SchedState { 
       deviceState  :: A.Array Int DeviceState
+      -- this is a channel, for now. 
     , freeDevs     :: Chan DevID 
                       
     }  
       
-
--- I dont think this SchedState is exactly what we need for this setup.
--- 
 
 -- Need some way of keeping track of actual devices.  What identifies
 -- these devices ?  
@@ -258,51 +254,26 @@ data Env env where
   -- MVar to wait on for computation of the desired array.
   -- Once array is computed, the set indicates where it exists.
   
-  -- Arrays t => 
-      -- Async t 
-      -- Async MemID
 
-  -- Array sh a 
-
--- new approach
 -- traverse Env and create E.Aval while doing the transfers.
--- Create Idx_ s during recurse, perform lookups. 
-
--- TODO: 
--- Should be in CIO
---  runWithDevice helper function
---    run a CIO action with device passed in.
--- evalCUDA ctx cio-action
---  This is what we need..  Its in CUDA.State 
-
-
--- Create an environment for use in a local computation.
-transExperiment :: forall aenv. MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv)
-transExperiment memid ixset aenv =
-  do
-    -- Assume for now that MemID and DevID are the same.
-    -- Which they probably will be in this setup. 
-    allDevs <- ask >>= (return . deviceState) -- allDevices)
-    -- Get the context we are moving arrays into.
-    -- This should, however, be the context bound
-    -- to the thread that is executing this.
-    -- If it is not, I have no idea how to allocate memory
-    -- in that context. a withContext function or inContext
-    -- function could be nice.
-    let targetContext = devCtx $ allDevs A.! memid
-
-    -- Traverse environment and copy all arrays
-    -- that are needed. 
-    trav targetContext aenv ixset 
-
---   trav _ (Apush Aempty _) = return (Idx_ ZeroIdx, E.Apush E.Aempty undefined )
+transferArrays :: forall aenv.
+                  A.Array Int DeviceState
+               -> DevID 
+               -> S.Set (Idx_ aenv)
+               -> Env aenv
+               -> CUDA.CIO (E.Aval aenv) 
+transferArrays alldevices devid dependencies env =
+  trav env dependencies 
   where
-    trav :: forall aenv . Context -> Env aenv -> S.Set (Idx_ aenv) -> SchedMonad (E.Aval aenv)
-    trav _ Aempty _ = return E.Aempty
-    trav ctx a@(Apush e tloc) reqset =
+    allContexts = A.amap devCtx alldevices
+    myContext   = allContexts A.! devid
+    
+    trav :: forall aenv . Env aenv -> S.Set (Idx_ aenv) -> CUDA.CIO (E.Aval aenv)
+    trav Aempty _ = return E.Aempty
+    trav a@(Apush e tloc) reqset =
       do
         let (needArray,newset) = isNeeded reqset 
-        env <- trav ctx e newset
+        env <- trav e newset
 
         if needArray
           then
@@ -311,7 +282,7 @@ transExperiment memid ixset aenv =
             (t,loc) <- liftIO $ takeMVar tloc
             -- And when release it ? 
             
-            let existsOnDevice = S.member memid loc
+            let existsOnDevice = S.member devid loc
             case existsOnDevice of
               True ->
                 do
@@ -328,10 +299,12 @@ transExperiment memid ixset aenv =
               False ->
                 do
                   -- copy arrays into device
-                  copyArrays t loc
+                  let srcContext = allContexts A.! (head $ S.elems loc)
+                      
+                  copyArrays t srcContext myContext 
 
                   -- now this array will exist here as well. 
-                  liftIO $ putMVar tloc (t,(S.insert memid loc)) 
+                  liftIO $ putMVar tloc (t,(S.insert devid loc)) 
                   return (E.Apush env (E.Async nilEvent t))
           else
           -- We do not need this array,
@@ -348,13 +321,17 @@ transExperiment memid ixset aenv =
       let needed = S.member (Idx_ ZeroIdx) s
       in (needed, strengthen s) 
 
-copyArrays :: forall t. Arrays t => t -> Set MemID -> SchedMonad ()
-copyArrays arrs s = copyArraysR (arrays (undefined :: t)) (fromArr arrs)
+copyArrays :: forall t. Arrays t => t -> Context -> Context -> CUDA.CIO ()
+copyArrays arrs src dst = copyArraysR (arrays (undefined :: t)) (fromArr arrs)
   where
     -- MOCK-UP 
-    copyArraysR :: ArraysR a -> a -> SchedMonad () 
+    copyArraysR :: ArraysR a -> a -> CUDA.CIO () 
     copyArraysR ArraysRunit () = return ()
-    copyArraysR ArraysRarray arr = return ()
+    copyArraysR ArraysRarray arr =
+      do
+        mallocArray arr
+        copyArrayPeer arr src arr dst 
+        
     copyArraysR (ArraysRpair r1 r2) (arrs1, arrs2) =
       do copyArraysR r1 arrs1
          copyArraysR r2 arrs2 
@@ -473,24 +450,38 @@ runDelayedOpenAccMulti = traverseAcc
                    do
                      
                      -- What arrays are needed to perform this piece of work 
-                     let free = arrayRefs a
+                     let dependencies = arrayRefs a
                      -- Wait for those arrays to be computed     
-                     waitOnArrays env free  
+                     waitOnArrays env dependencies   
 
                      -- Replace following code
                      -- with a "getSuitableWorker" function 
                      -- Wait for at least one free device.
-                     mydev <- liftIO $ readChan (freeDevs schedState)
+                     devid <- liftIO $ readChan (freeDevs schedState)
                      -- To get somewhere, grab head.
                     
-                     let mydevstate = deviceState schedState A.! mydev
+                     let mydevstate = alldevices A.! devid
+                         alldevices = deviceState schedState
 
                      liftIO $ putMVar (devWorkMVar mydevstate) $
                         Work $
                         CUDA.evalCUDA (devCtx mydevstate) $
                           -- We are now in CIO 
-                          do 
+                          do
+                            -- transfer all arrays to chosen device.
+                            -- The device state is needed to find the
+                            -- contexts. 
+                            aenv <- transferArrays alldevices devid dependencies env
+
+                            compiled <- compileOpenAcc a
                             
+                            result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
+
+                                      
+                            -- # Mark device as free
+
+                            -- # Thread dies.
+       
 
                             
                             return () 
@@ -498,24 +489,10 @@ runDelayedOpenAccMulti = traverseAcc
                      -- wait on the done signal
                      Done <- takeMVar (devDoneMVar mydevstate)
                      
-                     registerAsFree schedState mydev         
+                     registerAsFree schedState devid
 
+                   
                      
-                     
-                       
-                     -- TODO: 
-                     -- # Select a device
-                     --   - mark device as in use 
-
-                     -- Enter into CIO! (with state and all) 
-                     -- # Launch array copy code
-
-                     -- # Launch computation on device
-
-                     -- # Mark device as free
-
-                     -- # Thread dies.
-                         
                      return ()
               --  execDelayedOpenAcc b     
                 -- execOpenAcc . compileOpenAcc

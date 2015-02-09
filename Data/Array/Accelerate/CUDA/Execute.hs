@@ -32,7 +32,7 @@ module Data.Array.Accelerate.CUDA.Execute (
   StreamSeq(..), streamSeq,
 
   -- BJS: Export these for now
-  Aval(..), executeOpenAcc, Async(..), 
+  Aval(..), executeOpenAcc, Async(..), streaming, waitForIt, 
   
 
 ) where
@@ -115,6 +115,10 @@ after stream (Async event arr) = liftIO $ Event.after event stream >> return arr
 --
 wait :: MonadIO m => Async a -> m a
 wait (Async e x) = liftIO $ Event.block e >> return x
+
+-- BJS 
+waitForIt :: MonadIO m => Async a -> m a
+waitForIt = wait 
 
 
 -- Execute the given computation in a unique execution stream.
