@@ -446,85 +446,33 @@ runDelayedOpenAccMulti = traverseAcc
                     
                      let mydevstate = alldevices A.! devid
                          alldevices = deviceState schedState
-
+                         
+                     -- Send away work to the device 
                      liftIO $ putMVar (devWorkMVar mydevstate) $
                         Work $
                         CUDA.evalCUDA (devCtx mydevstate) $
                           -- We are now in CIO 
                           do
-                            -- transfer all arrays to chosen device.
-                            -- The device state is needed to find the
-                            -- contexts. 
+                            -- Transfer all arrays to chosen device.
                             aenv <- transferArrays alldevices devid dependencies env
-
+                            -- Compile workload
                             compiled <- compileOpenAcc a
-                            
+                            -- Execute workload in a fresh stream and wait for work to finish 
                             result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
 
-                            
+                            -- Update environment with the result and where it exists
                             liftIO $ putMVar arrayOnTheWay (result, S.singleton devid)  
-                            -- # Thread dies.
-                            
+                            -- Work is over! 
                             return () 
 
                      -- wait on the done signal
                      Done <- takeMVar (devDoneMVar mydevstate)
-                     
+                     -- This device is now free
                      registerAsFree schedState devid
 
-                   
-                     
-                     -- return ()
-
-            
+            -- Continue traversal in b 
             traverseAcc b (env `Apush` arrayOnTheWay)
 
-
-            -- Fire off IO Thread     
-            -- Create a CIO (runCIO) 
-            -- runWithContext (context is the one from the device chosen) 
-                
-            -- Create a stream for data copy
-            -- Create events for copy complete
-            -- Copy 
-          
-            -- create a stream for kernel execute
-            -- create event for execute 
-            -- wait for copy complete
-            -- compute  (executeOpenAcc . compileOpenAcc)
-            -- record event execute done
-            -- block on that event. and update free devices 
-                      
-            -- How can a device report back that it is free.
-
-            -- Can we extend after
-            -- after :: Event -> Stream -> IO ()
-            -- to
-            -- after' :: Event -> Stream -> IO () -> IO ()
-            -- So that after Event.wait the passed in IO ()
-            -- action is performed. Use that IO action to fill out some MVar. 
-            --
-            -- Is an event fired off when a device finishes computing?
-            -- There is the cudaStreamSynchronize function.
-            -- And the cudaEventSynchronize function
-            --    I think this is called "block" in Foreign.CUDA
-
-          
-            -- Choose device to execute this on.
-            -- Copy arrays to memory associated with that device 
-                
-                         
-          
-            -- return $ undefined -- $internalError "runDelayedOpenAccMulti" "Not implemented"
-
-        -- Another approach would be launch work
-        -- at the operator level. 
-        --
-        -- This function of course needs to handle these cases
-        -- since let a = expensive in map f a
-        -- can occur (as an example)
-        -- In this case we would enqueu expensive and map f a for
-        -- execution.
         
         Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
         -- It does the normal thing:
@@ -724,11 +672,3 @@ instance Eq (Idx_ aenv) where
 
 instance Ord (Idx_ aenv) where
   Idx_ ix1 `compare` Idx_ ix2 = idxToInt ix1 `compare` idxToInt ix2 
-
-
-    
-
-
-
-
-
