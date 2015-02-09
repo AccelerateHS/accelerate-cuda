@@ -25,6 +25,8 @@ module Data.Array.Accelerate.CUDA.State (
   -- Querying execution state
   defaultContext, deviceProperties, activeContext, kernelTable, memoryTable, streamReservoir,
 
+  -- BJS: Exported
+  theState, 
 ) where
 
 -- friends

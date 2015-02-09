@@ -16,7 +16,7 @@ module Data.Array.Accelerate.CUDA.ExecuteMulti
 
 
 import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
-import Data.Array.Accelerate.CUDA.State
+import qualified Data.Array.Accelerate.CUDA.State as CUDA 
 import Data.Array.Accelerate.CUDA.Compile
 import qualified Data.Array.Accelerate.CUDA.Execute as E 
 import Data.Array.Accelerate.CUDA.Context
@@ -62,7 +62,7 @@ import Data.Ord
 
 import qualified Data.Array as A
 
-import Control.Monad.State
+import Control.Monad.Reader
 import Control.Applicative hiding (Const) 
 
 -- Concurrency 
@@ -73,10 +73,12 @@ import Control.Concurrent
 -- One thread per participating device
 -- -----------------------------------------
 
+-- This goes away. 
 data Done = Done -- Free to accept work  
 data Work = ShutDown
           | Work (IO ()) 
 
+-- This goes away. 
 data DeviceState = DeviceState { devCtx      :: Context
                                , devDoneMVar :: MVar Done
                                , devWorkMVar :: MVar Work
@@ -88,24 +90,23 @@ data DeviceState = DeviceState { devCtx      :: Context
 --  Work thread waits for all dependencies to be computed.
 --  Work thread choses device to use for work.
 --  Work thread executes work.
---  Work thread signals "Done".
+--  Work thread dies.
 --
 --  The reason: Do not prematurely lock any device
 --  a specific piece of work. Doing that will lead to deadlock
 --  if all devices are busy with waiting for array a to be computed
 --  but there is no device free for computing  a. 
                    
-
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
--- Scheduler 
+-- Scheduler
 createDeviceThread :: CUDA.Device -> IO DeviceState
 createDeviceThread dev =
   do
     ctx <- create dev contextFlags
     
     work <- newEmptyMVar 
-    done <- newMVar Done
+    done <- newEmptyMVar
     
     tid <- forkIO $
            do
@@ -127,8 +128,11 @@ createDeviceThread dev =
                 Work w -> w
 
               putMVar done Done 
-                    
--- Create the initial SchedState 
+
+
+-- Initialize a starting state
+-- ---------------------------
+
 initScheduler :: IO SchedState
 initScheduler = do
   devs <- enumerateDevices
@@ -138,13 +142,19 @@ initScheduler = do
 
   let assocList = zip [0..numDevs-1] devs'
 
-  return $ SchedState 
-                       -- (S.fromList (L.map fst assocList))
-                       -- M.empty
-                      M.empty
-                      S.empty
-                      S.empty
-                      (A.array (0,numDevs-1) assocList)
+  -- All devices start out free
+  free <- newMVar (L.map fst assocList) 
+  
+  return $ SchedState (A.array (0,numDevs-1) assocList)
+                      free
+
+
+--  -- (S.fromList (L.map fst assocList))
+--  -- M.empty
+    -- M.empty
+    -- S.empty
+    -- S.empty
+    -- (A.array (0,numDevs-1) assocList)
 
 
 
@@ -160,41 +170,43 @@ type Size   = Word
 -- | Which memory space are we in, this can be any kind of unique ID.
 -- data MemID = CPU | GPU1 | GPU2    deriving (Show,Eq,Ord,Read)
 
-data Device = Device { did :: DevID   
-                     , mem :: MemID   -- ^ From which memory does this
-                                      -- device consume and produce
-                                      -- results?
-                     , prio :: Double -- ^ A bias factor, tend towards
-                                      -- using this device if it is
-                                      -- higher priority.
-                     }
-              deriving (Show,Eq,Ord)
+-- data Device = Device { did :: DevID   
+--                      , mem :: MemID   -- ^ From which memory does this
+--                                       -- device consume and produce
+--                                       -- results?
+--                      , prio :: Double -- ^ A bias factor, tend towards
+--                                       -- using this device if it is
+--                                       -- higher priority.
+--                      }
+--               deriving (Show,Eq,Ord)
 -- Why not say DevID = MemID
 -- Then any device will use memory associated via a lookup somewhere
 -- with that DevID.
 
-
--- As I understand it, we will first experiment without having a
--- TaskGraph
-
--- | Scheduler state 
-data SchedState =
-  SchedState {
---     freeDevs    :: Set DevID         -- ^ Free devices 
---    workingDevs :: Map DevID TaskID  -- ^ Busy devices  
-   liveArrays      :: Map TaskID (Size, Set MemID)
-    -- ^ Resident arrays, indexed by the taskID that produced them.
-    -- Note, a given array can be on more than one device.  Every
-    -- taskId eventually appears in here, so it is also our
-    -- "completed" list.
-  , waiting     :: Set TaskID -- ^ Work waiting for executor
-  , outstanding :: Set TaskID -- ^ Work assigned to executor
+-- -- | Scheduler state 
+-- data SchedState =
+--   SchedState {
+-- --     freeDevs    :: Set DevID         -- ^ Free devices 
+-- --    workingDevs :: Map DevID TaskID  -- ^ Busy devices  
+--    liveArrays      :: Map TaskID (Size, Set MemID)
+--     -- ^ Resident arrays, indexed by the taskID that produced them.
+--     -- Note, a given array can be on more than one device.  Every
+--     -- taskId eventually appears in here, so it is also our
+--     -- "completed" list.
+--   , waiting     :: Set TaskID -- ^ Work waiting for executor
+--   , outstanding :: Set TaskID -- ^ Work assigned to executor
       
-  -- A map from DevID to the devices available on the system
-  -- The CUDA context identifies a device
-  , allDevices  :: A.Array Int DeviceState 
-  } 
+--   -- A map from DevID to the devices available on the system
+--   -- The CUDA context identifies a device
+--   , allDevices  :: A.Array Int DeviceState 
+--   } 
 
+data SchedState =
+  SchedState { 
+      deviceState  :: A.Array Int DeviceState
+    , freeDevs     :: MVar [DevID] 
+    }  
+      
 
 
 -- I dont think this SchedState is exactly what we need for this setup.
@@ -215,24 +227,21 @@ enumerateDevices = do
       | compute x == compute y  = comparing flops   x y
       | otherwise               = comparing compute x y
 
--- Initialize a starting state
--- ---------------------------
-
 -- What flags to use ?
 contextFlags :: [CUDA.ContextFlag]
 contextFlags = [CUDA.SchedAuto]
 
 -- at any point along the traversal of the AST the executeOpenAccMulti
 -- function will be under the influence of the SchedState
-newtype SchedMonad a = SchedMonad (StateT SchedState IO a)
-          deriving ( MonadState SchedState
+newtype SchedMonad a = SchedMonad (ReaderT SchedState IO a)
+          deriving ( MonadReader SchedState
                    , Monad
                    , MonadIO
                    , Functor 
                    , Applicative )
 
 runSched :: SchedMonad a -> SchedState -> IO a
-runSched (SchedMonad m) = evalStateT m
+runSched (SchedMonad m) = runReaderT m
   
 
 -- Environments and operations thereupon
@@ -242,7 +251,8 @@ runSched (SchedMonad m) = evalStateT m
 -- arrays exist. 
 data Env env where
   Aempty :: Env ()
-  Apush  :: Arrays t => Env env -> (t, MVar (Set MemID)) -> Env (env, t)
+  -- Empty MVar signifies that array has not yet been computed.  
+  Apush  :: Arrays t => Env env -> MVar (t, Set MemID) -> Env (env, t)
   -- MVar to wait on for computation of the desired array.
   -- Once array is computed, the set indicates where it exists.
   
@@ -256,19 +266,21 @@ data Env env where
 -- traverse Env and create E.Aval while doing the transfers.
 -- Create Idx_ s during recurse, perform lookups. 
 
-
--- ---------------------------------------------------------------
 -- TODO: 
--- Gah! Use the strengthening on the set (change S.Set (Idx_ aenv)
--- in each step, so that types match up) and
--- always lookup index zero..
+-- Should be in CIO
+--  runWithDevice helper function
+--    run a CIO action with device passed in.
+-- evalCUDA ctx cio-action
+--  This is what we need..  Its in CUDA.State 
 
+
+-- Create an environment for use in a local computation.
 transExperiment :: forall aenv. MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv)
 transExperiment memid ixset aenv =
   do
     -- Assume for now that MemID and DevID are the same.
     -- Which they probably will be in this setup. 
-    allDevs <- get >>= (return . allDevices)
+    allDevs <- ask >>= (return . deviceState) -- allDevices)
     -- Get the context we are moving arrays into.
     -- This should, however, be the context bound
     -- to the thread that is executing this.
@@ -285,7 +297,7 @@ transExperiment memid ixset aenv =
   where
     trav :: forall aenv . Context -> Env aenv -> S.Set (Idx_ aenv) -> SchedMonad (E.Aval aenv)
     trav _ Aempty _ = return E.Aempty
-    trav ctx a@(Apush e (t,loc)) reqset =
+    trav ctx a@(Apush e tloc) reqset =
       do
         let (needArray,newset) = isNeeded reqset 
         env <- trav ctx e newset
@@ -294,37 +306,36 @@ transExperiment memid ixset aenv =
           then
           do
             -- when take this lock ? 
-            s <- liftIO $ takeMVar loc
+            (t,loc) <- liftIO $ takeMVar tloc
             -- And when release it ? 
             
-            let existsOnDevice = S.member memid s 
+            let existsOnDevice = S.member memid loc
             case existsOnDevice of
               True ->
                 do
                   -- Here everything should be fine. the
                   -- array is already on the machine.
                   -- Still need to create a valid Async though!
-                  -- So, a real event is needed
+                  -- So, a real event is needed (is it ?) 
 
                   -- The array already exists here
-                  liftIO $ putMVar loc s
+                  liftIO $ putMVar tloc (t,loc)
                   
                   return (E.Apush env (E.Async nilEvent t))
                  
               False ->
                 do
                   -- copy arrays into device
-                  -- Traverse Arrays 
-                  copyArrays t s
+                  copyArrays t loc
 
                   -- now this array will exist here as well. 
-                  liftIO $ putMVar loc (S.insert memid s )  
-                  return (E.Apush env (E.Async nilEvent undefined))
+                  liftIO $ putMVar tloc (t,(S.insert memid loc)) 
+                  return (E.Apush env (E.Async nilEvent t))
           else
           -- We do not need this array,
           -- So this location in the env will never be touched
           -- by the computation. So putting trash here should be fine. 
-          return (E.Apush env (E.Async nilEvent t))
+          return (E.Apush env dummyAsync)
 
     -- Is the "current" array needed by the computation.
     -- Figure this out by checking if zero is in the set.
@@ -338,6 +349,7 @@ transExperiment memid ixset aenv =
 copyArrays :: forall t. Arrays t => t -> Set MemID -> SchedMonad ()
 copyArrays arrs s = copyArraysR (arrays (undefined :: t)) (fromArr arrs)
   where
+    -- MOCK-UP 
     copyArraysR :: ArraysR a -> a -> SchedMonad () 
     copyArraysR ArraysRunit () = return ()
     copyArraysR ArraysRarray arr = return ()
@@ -345,78 +357,21 @@ copyArrays arrs s = copyArraysR (arrays (undefined :: t)) (fromArr arrs)
       do copyArraysR r1 arrs1
          copyArraysR r2 arrs2 
   
--- do
---    allDevs <- get >>= (return . allDevices)
-
-    
---    intset = S.map idx_ToInt  ixset
-
--- DANGER ZONE -- DANGER ZONE -- DANGER ZONE -- DANGER ZONE --
-    -- dist :: forall aenv. Env aenv -> Int
-    -- dist Aempty = -1 
-    -- dist (Apush e _) = 1 + dist e 
-
-    -- idx_ToInt :: Idx_ env -> Int
-    -- idx_ToInt (Idx_ idx) = idxToInt idx
--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 
-
-
 -- Wait for all arrays in the set to be computed.
 waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
 waitOnArrays Aempty _ = return ()
-waitOnArrays (Apush e (t,loc)) reqset =
+waitOnArrays (Apush e tloc) reqset =
   do
     let needed = S.member (Idx_ ZeroIdx) reqset
         ns     = strengthen reqset 
     
     case needed of
-      True -> do s <- takeMVar loc
-                 putMVar loc s
+      True -> do s <- takeMVar tloc
+                 putMVar tloc s
                  waitOnArrays e ns
       False -> waitOnArrays e ns 
               
           
--- OLD EXPERIMENTS 
--- Function that transforms a Env to a Aval
--- Transfer arrays to MemID
--- Transfer those arrays that are in the S.Set (Idx_ aenv)
--- Take Env environment of where all arrays are located
--- Start transfers and output a E.Aval environment (for execution) 
--- transferArrays :: MemID -> S.Set (Idx_ aenv) -> Env aenv -> SchedMonad (E.Aval aenv) 
--- transferArrays memid ixs aenv =
---   do
---     -- Really implement moving of data to where it belongs
---     -- Create real Async t objects for operations depending
---     -- on these to wait on. 
-    
---     uploadedEnv <- upload ixlist newEnv 
-     
---     return uploadedEnv 
---   where
---     newEnv = nilAval aenv
---     ixlist = S.toList ixs
-
--- upload :: [Idx_ aenv] -> E.Aval aenv -> SchedMonad (E.Aval aenv) 
--- upload [] env = return env
--- upload (Idx_ x:xs) env =
---   let env' = inject x dummyAsync env
---   in upload xs env'
-    
--- -- Not possible with the Idx_ 
--- inject :: Idx env t -> E.Async t -> E.Aval env -> E.Aval env
--- inject ZeroIdx        t  (E.Apush env _) = E.Apush env t
--- inject (SuccIdx idx)  t  (E.Apush env a) = E.Apush (inject idx t env) a
--- inject _ _ _ = $internalError "inject" "Nooo!"
-
--- prj :: Idx aenv t -> Env aenv -> (t, MVar (Set MemID))
--- prj ZeroIdx  (Apush _ x) = x
--- prj (SuccIdx idx) (Apush env _) = prj idx env
--- prj _ _ = $internalError "prj" "Nooo!" 
-
-nilAval :: Env aenv -> E.Aval aenv
-nilAval Aempty = E.Aempty
-nilAval (Apush e (t,_)) = E.Apush (nilAval e) (E.Async nilEvent t)
-
 -- Maybe actually create a real "this is nothing event" 
 nilEvent = CUDA.Event nullPtr 
 
@@ -504,31 +459,39 @@ runDelayedOpenAccMulti = traverseAcc
         
         Alet a b ->
           do
-            schedState <- get
+            schedState <- ask
 
             -- Here! Fork of a thread that waits for all the
             -- arrays that a depends upon to be computed.
             -- Otherwise there will be deadlocks!
             -- This is before deciding what device to use.
+            -- Here, spawn off a worker thread ,that is not tied to a device
+            -- it is tied to the Work!
             tid <- liftIO $ forkIO $
-                   do let free = arrayRefs a
-                      waitOnArrays env free  
+                   do
+                     
+                     -- What arrays are needed to perform this piece of work 
+                     let free = arrayRefs a
+                     -- Wait for those arrays to be computed     
+                     waitOnArrays env free  
 
-                      let exec_a = compileOpenAcc a
-                      return ()  
+                     
+                       
+                     -- TODO: 
+                     -- # Select a device
+                     --   - mark device as in use 
 
-                -- These are the arrays needed for computing a 
-                -- free   = arrayRefs a
+                     -- Enter into CIO! (with state and all) 
+                     -- # Launch array copy code
 
-                -- we need to keep track of what Arrays have been computed.
-                -- How do we identify an array ?
-                -- 
-                
-                
-                -- Find out where they are
-                -- prefer to launch a on device that
-                -- has most of them
+                     -- # Launch computation on device
 
+                     -- # Mark device as free
+
+                     -- # Thread dies.
+                         
+                     return ()
+              --  execDelayedOpenAcc b     
                 -- execOpenAcc . compileOpenAcc
                 
             -- Fire off IO Thread     
@@ -538,8 +501,6 @@ runDelayedOpenAccMulti = traverseAcc
             -- Create a stream for data copy
             -- Create events for copy complete
             -- Copy 
-
-
           
             -- create a stream for kernel execute
             -- create event for execute 
@@ -547,13 +508,7 @@ runDelayedOpenAccMulti = traverseAcc
             -- compute  (executeOpenAcc . compileOpenAcc)
             -- record event execute done
             -- block on that event. and update free devices 
-            
-
-                
-                  
-
-
-            
+                      
             -- How can a device report back that it is free.
 
             -- Can we extend after
@@ -568,12 +523,7 @@ runDelayedOpenAccMulti = traverseAcc
             -- And the cudaEventSynchronize function
             --    I think this is called "block" in Foreign.CUDA
 
-           
-
-                
-            
-                
-            
+          
             -- Choose device to execute this on.
             -- Copy arrays to memory associated with that device 
                 
@@ -615,7 +565,7 @@ runDelayedOpenAccMulti = traverseAcc
 -- Those arrays must be copied to the device where that DelayedOpenAcc
 -- will execute.
 
-arrayRefs :: forall aenv arrs. DelayedOpenAcc aenv arrs -> S.Set (Idx_ aenv) -- change type
+arrayRefs :: forall aenv arrs. DelayedOpenAcc aenv arrs -> S.Set (Idx_ aenv) 
 arrayRefs (Delayed{}) = $internalError "arrayRefs" "unexpected delayed array"
 arrayRefs (Manifest pacc) =
   case pacc of
