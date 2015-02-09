@@ -67,7 +67,8 @@ import Control.Applicative hiding (Const)
 
 -- Concurrency 
 import Control.Concurrent.MVar
-import Control.Concurrent 
+import Control.Concurrent
+import Control.Concurrent.Chan 
 
 -- Datastructures for Gang of worker threads
 -- One thread per participating device
@@ -143,7 +144,8 @@ initScheduler = do
   let assocList = zip [0..numDevs-1] devs'
 
   -- All devices start out free
-  free <- newMVar (L.map fst assocList) 
+  free <- newChan
+  writeList2Chan free (L.map fst assocList) 
   
   return $ SchedState (A.array (0,numDevs-1) assocList)
                       free
@@ -204,10 +206,10 @@ type Size   = Word
 data SchedState =
   SchedState { 
       deviceState  :: A.Array Int DeviceState
-    , freeDevs     :: MVar [DevID] 
+    , freeDevs     :: Chan DevID 
+                      
     }  
       
-
 
 -- I dont think this SchedState is exactly what we need for this setup.
 -- 
@@ -475,6 +477,30 @@ runDelayedOpenAccMulti = traverseAcc
                      -- Wait for those arrays to be computed     
                      waitOnArrays env free  
 
+                     -- Replace following code
+                     -- with a "getSuitableWorker" function 
+                     -- Wait for at least one free device.
+                     mydev <- liftIO $ readChan (freeDevs schedState)
+                     -- To get somewhere, grab head.
+                    
+                     let mydevstate = deviceState schedState A.! mydev
+
+                     liftIO $ putMVar (devWorkMVar mydevstate) $
+                        Work $
+                        CUDA.evalCUDA (devCtx mydevstate) $
+                          -- We are now in CIO 
+                          do 
+                            
+
+                            
+                            return () 
+
+                     -- wait on the done signal
+                     Done <- takeMVar (devDoneMVar mydevstate)
+                     
+                     registerAsFree schedState mydev         
+
+                     
                      
                        
                      -- TODO: 
@@ -560,6 +586,11 @@ runDelayedOpenAccMulti = traverseAcc
         Use arrs -> $internalError "runDelayedOpenAccMulti" "Not implemented"
         
         _       -> $internalError "runDelayedOpenAccMulti" "Not implemented" 
+    
+
+    registerAsFree st dev = writeChan (freeDevs st) dev 
+
+        
 
 -- Traverse a DelayedOpenAcc and figure out what arrays are being referenced
 -- Those arrays must be copied to the device where that DelayedOpenAcc
