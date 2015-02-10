@@ -120,7 +120,7 @@ createDeviceThread dev =
              -- Bind the created context to this thread
              -- I assume that means operations within
              -- this thread will default to this context
-             CUDA.set (deviceContext ctx)
+             -- CUDA.set (deviceContext ctx)
              -- Enter the workloop 
              deviceLoop done work
 
