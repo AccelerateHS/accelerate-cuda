@@ -117,7 +117,7 @@ createDeviceThread dev =
     done <- newEmptyMVar
 
     debugMsg $ "Forking device work thread" 
-    tid <- forkIO $
+    tid <- runInBoundThread $ forkIO $
            do
              -- Bind the created context to this thread
              -- I assume that means operations within
