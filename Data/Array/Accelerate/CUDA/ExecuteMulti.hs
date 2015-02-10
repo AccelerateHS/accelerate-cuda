@@ -71,14 +71,15 @@ import System.IO.Unsafe
 
 debug = True 
 
-debugLock = unsafePerformIO $ newMVar () 
+debugLock :: MVar Integer 
+debugLock = unsafePerformIO $ newMVar 0 
 
 debugMsg str =
   when debug $ 
   do
-    () <- takeMVar debugLock
-    hPutStrLn stderr str
-    putMVar debugLock () 
+    n <- takeMVar debugLock
+    hPutStrLn stderr $ show n ++ ": " ++ str
+    putMVar debugLock (n+1) 
 
 
 -- Datastructures for Gang of worker threads
