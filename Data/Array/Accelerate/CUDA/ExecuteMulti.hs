@@ -402,10 +402,15 @@ runDelayedOpenAccMulti = traverseAcc
         -- Atuple tup -> travTup
           
         _ -> perform (Manifest pacc) env 
-    
+
+   
+    -- Register a device as being free.
+    -- --------------------------------
     registerAsFree :: SchedState -> DevID -> IO () 
     registerAsFree st dev = writeChan (freeDevs st) dev 
 
+    -- This performs the main part of the scheduler work. 
+    -- --------------------------------------------------
     perform :: forall aenv arrs . DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Async arrs) 
     perform a env = do
       arrayOnTheWay <- liftIO $ newEmptyMVar
