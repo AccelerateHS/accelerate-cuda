@@ -10,9 +10,9 @@
 -- scheduling
 module Data.Array.Accelerate.CUDA.ExecuteMulti
        (  
-         runDelayedOpenAccMulti, 
-
-         ) where
+         runDelayedOpenAccMulti,
+         runDelayedAccMulti,
+       ) where
 
 import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
 import qualified Data.Array.Accelerate.CUDA.State as CUDA 
@@ -53,6 +53,7 @@ import Data.List as L
 import Data.Function
 import Data.Ord
 
+
 -- import qualified Data.Array as A
 import qualified Data.Array.IArray as A 
 
@@ -62,7 +63,21 @@ import Control.Applicative hiding (Const)
 -- Concurrency 
 import Control.Concurrent.MVar
 import Control.Concurrent
-import Control.Concurrent.Chan 
+import Control.Concurrent.Chan
+
+import System.IO 
+import System.IO.Unsafe 
+debug = True
+
+debugLock = unsafePerformIO $ newMVar () 
+
+debugMsg str =
+  when debug $ 
+  do
+    () <- takeMVar debugLock
+    hPutStrLn stderr str
+    putMVar debugLock () 
+
 
 -- Datastructures for Gang of worker threads
 -- One thread per participating device
@@ -76,6 +91,16 @@ data DeviceState = DeviceState { devCtx      :: Context
                                , devWorkMVar :: MVar Work
                                , devThread   :: ThreadId
                                }
+                   deriving Show
+
+instance Show Context where
+  show _ = "Context"
+
+instance Show (Chan a) where
+  show _ = "Chan"
+
+instance Show (MVar a) where
+  show _ = "MVar" 
                    
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
@@ -102,13 +127,20 @@ createDeviceThread dev =
     -- The worker thread 
     where deviceLoop done work =
             do
+              debugMsg $ "Entered device workloop" 
               x <- takeMVar work
+              debugMsg $ "Work available!" 
               case x of
                 ShutDown -> putMVar done Done >> return () 
-                Work w -> w
+                Work w ->
+                  do debugMsg $ "Entering work loop" 
+                     w
+                     debugMsg $ "Exiting work loop"
 
-              putMVar done Done 
-
+              debugMsg $ "Device reporting done"
+              putMVar done Done
+              deviceLoop done work 
+  
 
 -- Initialize a starting state
 -- ---------------------------
@@ -118,15 +150,21 @@ initScheduler = do
    -- Create a device thread for each device 
   devs' <- mapM createDeviceThread devs 
   let numDevs = L.length devs
-
+  --
+      
+  debugMsg $ "InitScheduler: found " ++ show numDevs ++ " devices." 
   let assocList = zip [0..numDevs-1] devs'
 
   -- All devices start out free
   free <- newChan
   writeList2Chan free (L.map fst assocList) 
-  
-  return $ SchedState (A.array (0,numDevs-1) assocList)
+
+  let st = SchedState (A.array (0,numDevs-1) assocList)
                       free
+
+  debugMsg $ "InitScheduler: " ++ show st 
+  
+  return $ st
 
 
 -- Scheduler related datatypes
@@ -140,7 +178,8 @@ data SchedState =
       -- this is a channel, for now. 
     , freeDevs     :: Chan DevID 
                       
-    }  
+    }
+  deriving Show 
       
 
 -- Need some way of keeping track of actual devices.  What identifies
@@ -178,14 +217,14 @@ runSched (SchedMonad m) = runReaderT m
 -- Environments and operations thereupon
 -- ------------------------------------- 
 
-data Async t = MVar (t, Set MemID) 
+type Async t = MVar (t, Set MemID)
 
 -- Environment augmented with information about where
 -- arrays exist. 
 data Env env where
   Aempty :: Env ()
   -- Empty MVar signifies that array has not yet been computed.  
-  Apush  :: Arrays t => Env env -> MVar (t, Set MemID) -> Env (env, t)
+  Apush  :: Arrays t => Env env -> Async t -> Env (env, t)
   -- MVar to wait on for computation of the desired array.
   -- Once array is computed, the set indicates where it exists.
   
@@ -213,9 +252,7 @@ transferArrays alldevices devid dependencies env =
         if needArray
           then
           do
-            -- when take this lock ? 
             (t,loc) <- liftIO $ takeMVar tloc
-            -- And when release it ? 
             
             let existsOnDevice = S.member devid loc
             case existsOnDevice of
@@ -276,6 +313,7 @@ waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
 waitOnArrays Aempty _ = return ()
 waitOnArrays (Apush e tloc) reqset =
   do
+    debugMsg $ "Waiting on arrays" 
     let needed = S.member (Idx_ ZeroIdx) reqset
         ns     = strengthen reqset 
     
@@ -283,7 +321,8 @@ waitOnArrays (Apush e tloc) reqset =
       True -> do s <- takeMVar tloc
                  putMVar tloc s
                  waitOnArrays e ns
-      False -> waitOnArrays e ns 
+      False -> waitOnArrays e ns
+    debugMsg $ "All arrays arrived" 
               
           
 -- Maybe actually create a real "this is nothing event" 
@@ -296,144 +335,116 @@ dummyAsync = E.Async nilEvent undefined
 -- Evaluate an PreOpenAcc or ExecAcc or something under the influence
 -- of the scheduler
 -- ------------------------------------------------------------------
-runMulti :: Arrays arrs => DelayedAcc arrs -> IO arrs
-runMulti acc =
-  do  st <- initScheduler
-      runSched (runDelayedAccMulti acc)  st
-      -- Here a collect-like function is needed. 
 
 runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
-                   -> SchedMonad arrs
+                   -> IO arrs
 runDelayedAccMulti acc =
   do
-    mv <- runDelayedOpenAccMulti acc Aempty
-    liftIO $ takeMVar mv
+    st <- initScheduler
+    flip runSched st $ 
+      do mv <- runDelayedOpenAccMulti acc Aempty
+         liftIO $ debugMsg $ "Waiting for final result" 
+         (arr,ixset) <- liftIO $ takeMVar mv
+         -- This means that arr exists on all machines
+         -- in ixset
+         schedState <- ask 
+         let machine = deviceState schedState A.! (head (S.toList ixset))
+             mCtx    = devCtx machine
+         -- Bind the device context to transfer result array from 
+         liftIO $ collectArrs mCtx arr
+
+
+collectArrs :: forall arrs. Arrays arrs => Context -> arrs -> IO arrs
+collectArrs ctx !arrs =
+  do
+    arrs' <- CUDA.evalCUDA ctx $ collectR (arrays (undefined :: arrs)) (fromArr arrs)
+    return $ toArr arrs'   
+  where
+    collectR :: ArraysR a -> a -> CUDA.CIO a
+    collectR ArraysRunit         ()             = return ()
+    collectR ArraysRarray        arr            = peekArray arr >> return arr
+    collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
+                                                      <*> collectR r2 arrs2
 
 -- This is the multirunner for DelayedOpenAcc
 -- ------------------------------------------
 runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
                        -> Env aenv 
-                       -> SchedMonad (MVar arrs)
+                       -> SchedMonad (Async arrs) -- (MVar arrs)
 runDelayedOpenAccMulti = traverseAcc 
   where
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs
                 -> Env aenv
-                -> SchedMonad (MVar arrs)
+                -> SchedMonad (Async arrs)
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
     traverseAcc (Manifest pacc) env =
       case pacc of
-
-        -- Avar ix
-        -- look up what is at position ix in the environment. 
-        -- When will this happen ?
-        --
-        -- let a = expensive1
-        -- in let b = expensive2 
-        -- in Avar ix
-        --
-        -- The above would mean that array at ix is the result
-        -- of the whole program (right ?).
-        --
-        -- What we want to do in runDelayedOpenAccMulti is
-        -- traverse "shallowly" the tree. That is we wont
-        -- look into a in let a b, just send it off to compileAcc
-        -- and then run it.
-        -- So what do we do when we hit an Avar constructor?
-        --
-        -- Is it safe to assume that if we do hit an Avar constructor
-        -- it is the looking up of the result of the program
-        -- and maybe it could be handled by more or less doing nothing?
-        -- just create some way of reading that array from wherever it
-        -- may be ? 
-        
-        Avar ix -> $internalError "runDelayedOpenAccMulti" "Not implemented"
-
-        -- Let binding.
-        --
-        -- The format is: 
-        -- let real_work in a
-        -- So approach we will follow is, enqueue a for computation
-        -- keep going into b and keep enqueing work
-        
         Alet a b ->
-          do
-            arrayOnTheWay <- liftIO $ newEmptyMVar
-            schedState <- ask
+          do res <- perform a env
+             traverseAcc b (env `Apush` res)
 
-            -- Here! Fork of a thread that waits for all the
-            -- arrays that a depends upon to be computed.
-            -- Otherwise there will be deadlocks!
-            -- This is before deciding what device to use.
-            -- Here, spawn off a worker thread ,that is not tied to a device
-            -- it is tied to the Work!
-            tid <- liftIO $ forkIO $
-                   do
-                     
-                     -- What arrays are needed to perform this piece of work 
-                     let dependencies = arrayRefs a
-                     -- Wait for those arrays to be computed     
-                     waitOnArrays env dependencies   
-
-                     -- Replace following code
-                     -- with a "getSuitableWorker" function 
-                     -- Wait for at least one free device.
-                     devid <- liftIO $ readChan (freeDevs schedState)
-                     -- To get somewhere, grab head.
-                    
-                     let mydevstate = alldevices A.! devid
-                         alldevices = deviceState schedState
-                         
-                     -- Send away work to the device 
-                     liftIO $ putMVar (devWorkMVar mydevstate) $
-                        Work $
-                        CUDA.evalCUDA (devCtx mydevstate) $
-                          -- We are now in CIO 
-                          do
-                            -- Transfer all arrays to chosen device.
-                            aenv <- transferArrays alldevices devid dependencies env
-                            -- Compile workload
-                            compiled <- compileOpenAcc a
-                            -- Execute workload in a fresh stream and wait for work to finish 
-                            result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
-
-                            -- Update environment with the result and where it exists
-                            liftIO $ putMVar arrayOnTheWay (result, S.singleton devid)  
-                            -- Work is over! 
-                            return () 
-
-                     -- wait on the done signal
-                     Done <- takeMVar (devDoneMVar mydevstate)
-                     -- This device is now free
-                     registerAsFree schedState devid
-
-            -- Continue traversal in b 
-            traverseAcc b (env `Apush` arrayOnTheWay)
-
-        
-        Map f a -> $internalError "runDelayedOpenAccMulti" "Not implemented"
-        -- It does the normal thing:
-        --   Free vars
-        --   Copy to device
-        --   executeOpenAcc
-        --
-        --   decide where to copy this or not. 
-
-        -- What should we do if we hit a Map here.
-        -- Can we make any assumptions about what
-        -- constructors we will possibly see, when
-        -- doing this "shallow" traversal of the AST ?
-
-        
-        
-        -- Array injection 
-        Unit e   -> $internalError "runDelayedOpenAccMulti" "Not implemented"
-        Use arrs -> $internalError "runDelayedOpenAccMulti" "Not implemented"
-        
-        _       -> $internalError "runDelayedOpenAccMulti" "Not implemented" 
+        _ -> perform (Manifest pacc) env 
     
     registerAsFree :: SchedState -> DevID -> IO () 
     registerAsFree st dev = writeChan (freeDevs st) dev 
 
+    perform :: forall aenv arrs . DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Async arrs) 
+    perform a env = do
+      arrayOnTheWay <- liftIO $ newEmptyMVar
+      schedState <- ask
+
+      -- Here! Fork of a thread that waits for all the
+      -- arrays that a depends upon to be computed.
+      -- Otherwise there will be deadlocks!
+      -- This is before deciding what device to use.
+      -- Here, spawn off a worker thread ,that is not tied to a device
+      -- it is tied to the Work!
+      tid <- liftIO $ forkIO $
+             do
+                     
+               -- What arrays are needed to perform this piece of work 
+               let dependencies = arrayRefs a
+               -- Wait for those arrays to be computed     
+               waitOnArrays env dependencies   
+
+               -- Replace following code
+               -- with a "getSuitableWorker" function 
+               -- Wait for at least one free device.
+               devid <- liftIO $ readChan (freeDevs schedState)
+               -- To get somewhere, grab head.
+                    
+               let mydevstate = alldevices A.! devid
+                   alldevices = deviceState schedState
+                         
+               -- Send away work to the device
+               debugMsg $ "Launching work on device: " ++ show devid
+               liftIO $ putMVar (devWorkMVar mydevstate) $
+                 Work $
+                 CUDA.evalCUDA (devCtx mydevstate) $
+                 -- We are now in CIO 
+                 do
+                   -- Transfer all arrays to chosen device.
+                   liftIO $ debugMsg $ "   Transfer arrays to device " ++ show devid
+                   aenv <- transferArrays alldevices devid dependencies env
+                   -- Compile workload
+                   liftIO $ debugMsg $ "   Compiling OpenAcc" 
+                   compiled <- compileOpenAcc a
+                   -- Execute workload in a fresh stream and wait for work to finish
+                   liftIO $ debugMsg $ "   Executing work on stream"
+                   result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
+
+                   -- Update environment with the result and where it exists
+                   liftIO $ debugMsg $ "   Updating environment with computed array" 
+                   liftIO $ putMVar arrayOnTheWay (result, S.singleton devid)  
+                   -- Work is over! 
+                   return () 
+
+               -- wait on the done signal
+               debugMsg $ "Waiting for device to report done." 
+               Done <- takeMVar (devDoneMVar mydevstate)
+               -- This device is now free
+               registerAsFree schedState devid
+      return arrayOnTheWay 
         
 
 -- Traverse a DelayedOpenAcc and figure out what arrays are being referenced
@@ -441,7 +452,11 @@ runDelayedOpenAccMulti = traverseAcc
 -- will execute.
 
 arrayRefs :: forall aenv arrs. DelayedOpenAcc aenv arrs -> S.Set (Idx_ aenv) 
-arrayRefs (Delayed{}) = $internalError "arrayRefs" "unexpected delayed array"
+arrayRefs (Delayed extent index lin) =
+  travE extent `S.union`
+  travF index  `S.union`
+  travF lin 
+--   $internalError "arrayRefs" "unexpected delayed array"
 arrayRefs (Manifest pacc) =
   case pacc of
     Use  arr -> S.empty
@@ -530,12 +545,13 @@ arrayRefs (Manifest pacc) =
     travT NilAtup  = S.empty
     travT (SnocAtup !t !a) = travT t `S.union` arrayRefs a 
 
-    travE :: DelayedOpenExp env aenv' t -> S.Set (Idx_ aenv')
-    travE = arrayRefsE
 
-    travF :: DelayedOpenFun env aenv' t -> S.Set (Idx_ aenv') 
-    travF (Body b)  = travE b
-    travF (Lam  f)  = travF f
+travE :: DelayedOpenExp env aenv' t -> S.Set (Idx_ aenv')
+travE = arrayRefsE
+
+travF :: DelayedOpenFun env aenv' t -> S.Set (Idx_ aenv') 
+travF (Body b)  = travE b
+travF (Lam  f)  = travF f
 
 
 arrayRefsE :: DelayedOpenExp env aenv e -> S.Set (Idx_ aenv)
@@ -583,9 +599,9 @@ arrayRefsE exp =
     travT NilTup = S.empty
     travT (SnocTup t e) = travT t `S.union` arrayRefsE e 
 
-    travF :: DelayedOpenFun env aenv t -> S.Set (Idx_ aenv)
-    travF (Body b) = arrayRefsE b
-    travF (Lam f)  = travF f
+    -- travF :: DelayedOpenFun env aenv t -> S.Set (Idx_ aenv)
+    -- travF (Body b) = arrayRefsE b
+    -- travF (Lam f)  = travF f
 
     
     
