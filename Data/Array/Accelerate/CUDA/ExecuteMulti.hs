@@ -23,7 +23,7 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Data
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
-import Data.Array.Accelerate.Trafo.Base hiding (inject) 
+-- import Data.Array.Accelerate.Trafo.Base hiding (inject) 
 import Data.Array.Accelerate.Array.Sugar  ( Array
                                           , Arrays(..), ArraysR(..)
                                           , Shape
@@ -44,8 +44,6 @@ import qualified Foreign.CUDA.Driver       as CUDA
 import qualified Foreign.CUDA.Driver.Event as CUDA
 
 import Foreign.Ptr (nullPtr)
-
-import Data.IORef
 
 import Data.Word
 import Data.Map as M
@@ -235,8 +233,6 @@ data Env env where
   Aempty :: Env ()
   -- Empty MVar signifies that array has not yet been computed.  
   Apush  :: Arrays t => Env env -> Async t -> Env (env, t)
-  -- MVar to wait on for computation of the desired array.
-  -- Once array is computed, the set indicates where it exists.
   
 
 -- traverse Env and create E.Aval while doing the transfers.
@@ -254,7 +250,7 @@ transferArrays alldevices devid dependencies env =
     
     trav :: forall aenv . Env aenv -> S.Set (Idx_ aenv) -> CUDA.CIO (E.Aval aenv)
     trav Aempty _ = return E.Aempty
-    trav a@(Apush e tloc) reqset =
+    trav (Apush e tloc) reqset =
       do
         let (needArray,newset) = isNeeded reqset 
         env <- trav e newset
@@ -268,11 +264,6 @@ transferArrays alldevices devid dependencies env =
             case existsOnDevice of
               True ->
                 do
-                  -- Here everything should be fine. the
-                  -- array is already on the machine.
-                  -- Still need to create a valid Async though!
-                  -- So, a real event is needed (is it ?) 
-
                   -- The array already exists here
                   liftIO $ putMVar tloc (t,loc)
                   evt <- liftIO $ E.create 
@@ -294,6 +285,10 @@ transferArrays alldevices devid dependencies env =
           -- So this location in the env will never be touched
           -- by the computation. So putting trash here should be fine. 
           return (E.Apush env dummyAsync)
+          where
+            dummyAsync :: E.Async t 
+            dummyAsync = E.Async (CUDA.Event nullPtr) undefined
+
 
     -- Is the "current" array needed by the computation.
     -- Figure this out by checking if zero is in the set.
@@ -336,13 +331,6 @@ waitOnArrays (Apush e tloc) reqset =
     debugMsg $ "All arrays arrived" 
               
           
--- Maybe actually create a real "this is nothing event" 
-nilEvent = CUDA.Event nullPtr 
-
-dummyAsync :: E.Async t 
-dummyAsync = E.Async nilEvent undefined
-
-
 -- Evaluate an PreOpenAcc or ExecAcc or something under the influence
 -- of the scheduler
 -- ------------------------------------------------------------------
@@ -398,7 +386,6 @@ runDelayedOpenAccMulti = traverseAcc
 
         -- Avar ix  
 
-        -- Atuple (Avar ix, AVar ix2) ->
         -- Atuple tup -> travTup
           
         _ -> perform (Manifest pacc) env 
@@ -417,12 +404,12 @@ runDelayedOpenAccMulti = traverseAcc
       schedState <- ask
 
       -- Here! Fork of a thread that waits for all the
-      -- arrays that a depends upon to be computed.
+      -- arrays that "a" depends upon to be computed.
       -- Otherwise there will be deadlocks!
       -- This is before deciding what device to use.
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
-      tid <- liftIO $ forkIO $
+      _ <- liftIO $ forkIO $
              do
                      
                -- What arrays are needed to perform this piece of work 
@@ -479,11 +466,10 @@ arrayRefs (Delayed extent index lin) =
   travE extent `S.union`
   travF index  `S.union`
   travF lin 
---   $internalError "arrayRefs" "unexpected delayed array"
 arrayRefs (Manifest pacc) =
   case pacc of
-    Use  arr -> S.empty
-    Unit x   -> S.empty
+    Use  _   -> S.empty
+    Unit _   -> S.empty
     
     Avar ix -> addFree ix
     Alet a b -> arrayRefs a `S.union` (strengthen (arrayRefs b))
@@ -491,7 +477,7 @@ arrayRefs (Manifest pacc) =
     Apply f a -> arrayRefsAF f `S.union` arrayRefs a 
        
     Atuple tup -> travT tup
-    Aprj ix tup -> arrayRefs tup
+    Aprj _ tup -> arrayRefs tup
 
     Awhile p f a -> arrayRefsAF p `S.union`
                     arrayRefsAF f `S.union`
@@ -557,7 +543,7 @@ arrayRefs (Manifest pacc) =
                             arrayRefs a1 `S.union`
                             arrayRefs a2
 
-    Collect l -> $internalError "arrayRefs" "Collect" 
+    Collect _ -> $internalError "arrayRefs" "Collect" 
                  
   where
     arrayRefsAF :: DelayedOpenAfun aenv' arrs' -> S.Set (Idx_ aenv')
@@ -622,12 +608,6 @@ arrayRefsE exp =
     travT NilTup = S.empty
     travT (SnocTup t e) = travT t `S.union` arrayRefsE e 
 
-    -- travF :: DelayedOpenFun env aenv t -> S.Set (Idx_ aenv)
-    -- travF (Body b) = arrayRefsE b
-    -- travF (Lam f)  = travF f
-
-    
-    
 
 -- Various
 -- -------
