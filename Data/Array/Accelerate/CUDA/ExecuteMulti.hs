@@ -17,7 +17,8 @@ module Data.Array.Accelerate.CUDA.ExecuteMulti
 import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
 import qualified Data.Array.Accelerate.CUDA.State as CUDA 
 import Data.Array.Accelerate.CUDA.Compile
-import qualified Data.Array.Accelerate.CUDA.Execute as E 
+import qualified Data.Array.Accelerate.CUDA.Execute as E
+import qualified Data.Array.Accelerate.CUDA.Execute.Event as E 
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Data
 
@@ -67,7 +68,8 @@ import Control.Concurrent.Chan
 
 import System.IO 
 import System.IO.Unsafe 
-debug = True
+
+debug = False 
 
 debugLock = unsafePerformIO $ newMVar () 
 
@@ -265,19 +267,20 @@ transferArrays alldevices devid dependencies env =
 
                   -- The array already exists here
                   liftIO $ putMVar tloc (t,loc)
-                  
-                  return (E.Apush env (E.Async nilEvent t))
+                  evt <- liftIO $ E.create 
+                  return (E.Apush env (E.Async evt t))
                  
               False ->
                 do
                   -- copy arrays into device
                   let srcContext = allContexts A.! (head $ S.elems loc)
                       
-                  copyArrays t srcContext myContext 
+                  copyArrays t srcContext myContext
+                  evt <- liftIO $ E.create 
 
                   -- now this array will exist here as well. 
                   liftIO $ putMVar tloc (t,(S.insert devid loc)) 
-                  return (E.Apush env (E.Async nilEvent t))
+                  return (E.Apush env (E.Async evt t))
           else
           -- We do not need this array,
           -- So this location in the env will never be touched
@@ -340,6 +343,7 @@ runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
                    -> IO arrs
 runDelayedAccMulti acc =
   do
+    CUDA.initialise []
     st <- initScheduler
     flip runSched st $ 
       do mv <- runDelayedOpenAccMulti acc Aempty
@@ -370,7 +374,7 @@ collectArrs ctx !arrs =
 -- ------------------------------------------
 runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
                        -> Env aenv 
-                       -> SchedMonad (Async arrs) -- (MVar arrs)
+                       -> SchedMonad (Async arrs) 
 runDelayedOpenAccMulti = traverseAcc 
   where
     traverseAcc :: forall aenv arrs. DelayedOpenAcc aenv arrs
@@ -383,6 +387,12 @@ runDelayedOpenAccMulti = traverseAcc
           do res <- perform a env
              traverseAcc b (env `Apush` res)
 
+
+        -- Avar ix  
+
+        -- Atuple (Avar ix, AVar ix2) ->
+        -- Atuple tup -> travTup
+          
         _ -> perform (Manifest pacc) env 
     
     registerAsFree :: SchedState -> DevID -> IO () 
