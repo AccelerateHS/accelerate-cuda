@@ -110,11 +110,13 @@ instance Show (MVar a) where
 createDeviceThread :: CUDA.Device -> IO DeviceState
 createDeviceThread dev =
   do
+    debugMsg $ "Creating context on device" 
     ctx <- create dev contextFlags
     
     work <- newEmptyMVar 
     done <- newEmptyMVar
-    
+
+    debugMsg $ "Forking device work thread" 
     tid <- forkIO $
            do
              -- Bind the created context to this thread
@@ -149,12 +151,14 @@ createDeviceThread dev =
 initScheduler :: IO SchedState
 initScheduler = do
   devs <- enumerateDevices
+  let numDevs = L.length devs
+  debugMsg $ "InitScheduler: found " ++ show numDevs ++ " devices."
+  
    -- Create a device thread for each device 
   devs' <- mapM createDeviceThread devs 
-  let numDevs = L.length devs
+  debugMsg $ "InitScheduler: Created device threads."
   --
-      
-  debugMsg $ "InitScheduler: found " ++ show numDevs ++ " devices." 
+    
   let assocList = zip [0..numDevs-1] devs'
 
   -- All devices start out free
