@@ -110,8 +110,8 @@ instance Show (MVar a) where
 createDeviceThread :: CUDA.Device -> IO DeviceState
 createDeviceThread dev =
   do
-    debugMsg $ "Creating context on device" 
-    ctx <- create dev contextFlags
+    debugMsg $ "Creating context on device"
+    ctxMVar <- newEmptyMVar 
     
     work <- newEmptyMVar 
     done <- newEmptyMVar
@@ -119,6 +119,8 @@ createDeviceThread dev =
     debugMsg $ "Forking device work thread" 
     tid <- runInBoundThread $ forkIO $
            do
+             ctx <- create dev contextFlags
+             putMVar ctxMVar ctx 
              -- Bind the created context to this thread
              -- I assume that means operations within
              -- this thread will default to this context
@@ -126,6 +128,7 @@ createDeviceThread dev =
              -- Enter the workloop 
              deviceLoop done work
 
+    ctx <- takeMVar ctxMVar
     return $ DeviceState ctx done work tid 
 
     -- The worker thread 
