@@ -69,7 +69,7 @@ import Control.Concurrent.Chan
 import System.IO 
 import System.IO.Unsafe 
 
-debug = False 
+debug = True 
 
 debugLock = unsafePerformIO $ newMVar () 
 
