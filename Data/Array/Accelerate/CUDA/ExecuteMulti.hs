@@ -5,7 +5,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE EmptyDataDecls #-} 
 {-# LANGUAGE TypeFamilies #-}
-
+{-# LANGUAGE FlexibleContexts #-} 
 
 -- Implementation experiments regarding multidevice execution and
 -- scheduling
@@ -38,6 +38,8 @@ import Data.Array.Accelerate.Array.Sugar  ( Array
                                           , TupleRepr
                                           , IsAtuple
                                           , Scalar )
+import Data.Array.Accelerate.Product
+
 
 import Data.Array.Accelerate.Error
 import Foreign.CUDA.Driver.Device
@@ -53,7 +55,7 @@ import Data.Set as S
 import Data.List as L
 import Data.Function
 import Data.Ord
-
+import Data.Proxy 
 
 -- import qualified Data.Array as A
 import qualified Data.Array.IArray as A 
@@ -235,6 +237,10 @@ data Env env where
   -- Empty MVar signifies that array has not yet been computed.  
   Apush  :: Arrays t => Env env -> Asyncs t -> Env (env, t)
 
+prj :: Idx env t -> Env env -> Asyncs t
+prj ZeroIdx        (Apush  _ v)  = v
+prj (SuccIdx idx)  (Apush val _) = prj idx val
+prj _              _            = $internalError "prj" "inconsistency" 
 
 -- traverse Env and create E.Aval while doing the transfers.
 transferArrays :: forall aenv.
@@ -306,7 +312,7 @@ waitOnArrays (Apush e arr) reqset =
         ns     = strengthen reqset 
     
     case needed of
-      True -> do awaitAll arr 
+      True -> awaitAll arr 
       False -> waitOnArrays e ns
     debugMsg $ "All arrays arrived"
   where
@@ -367,20 +373,27 @@ runDelayedOpenAccMulti = traverseAcc
                 -> Env aenv
                 -> SchedMonad (Asyncs arrs)
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
-    traverseAcc (Manifest pacc) env =
+    traverseAcc dacc@(Manifest pacc) env =
       case pacc of
         Alet a b ->
           do res <- perform a env
              traverseAcc b (env `Apush` res)
 
 
-        -- Avar ix ->  
+        Avar ix -> return $ prj ix env 
 
-        -- Atuple tup -> travTup
+        Atuple tup -> travT tup 
           
-        _ -> perform (Manifest pacc) env 
+        _ -> perform (dacc) env 
 
-   
+    -- Traverse Array tuple
+    -- --------------------
+    travT :: forall aenv arrs. (Arrays arrs, IsAtuple arrs)
+          => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)  
+          -> SchedMonad (Asyncs arrs)
+    travT tup = undefined 
+
+      
     -- Register a device as being free.
     -- --------------------------------
     registerAsFree :: SchedState -> DevID -> IO () 
@@ -402,7 +415,7 @@ runDelayedOpenAccMulti = traverseAcc
       -- it is tied to the Work!
       _ <- liftIO $ forkIO $
              do
-                     
+                
                -- What arrays are needed to perform this piece of work 
                let dependencies = arrayRefs a
                -- Wait for those arrays to be computed     
