@@ -1,14 +1,16 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns               #-}
+{-# LANGUAGE EmptyDataDecls             #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell #-} 
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE EmptyDataDecls #-} 
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE FlexibleContexts #-} 
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE TypeOperators              #-}
 
 -- Implementation experiments regarding multidevice execution and
 -- scheduling
+--
 module Data.Array.Accelerate.CUDA.ExecuteMulti
        (  
          runDelayedOpenAccMulti,
@@ -25,20 +27,8 @@ import Data.Array.Accelerate.CUDA.Array.Data
 
 import Data.Array.Accelerate.Trafo  hiding (strengthen) 
 -- import Data.Array.Accelerate.Trafo.Base hiding (inject) 
-import Data.Array.Accelerate.Array.Sugar  ( Array
-                                          , Arrays(..), ArraysR(..)
-                                          , ArrRepr(..)
-                                          , Shape
-                                          , Elt
-                                          , Arrays
-                                          , Vector
-                                          , EltRepr
-                                          , Atuple(..)
-                                          , Tuple(..)
-                                          , TupleRepr
-                                          , IsAtuple
-                                          , Scalar )
-import Data.Array.Accelerate.Product
+import Data.Array.Accelerate.Array.Sugar
+import Data.Array.Accelerate.Analysis.Match
 
 
 import Data.Array.Accelerate.Error
@@ -49,13 +39,11 @@ import qualified Foreign.CUDA.Driver.Event as CUDA
 
 import Foreign.Ptr (nullPtr)
 
-import Data.Word
-import Data.Map as M
-import Data.Set as S
-import Data.List as L
 import Data.Function
+import Data.List                                                as L
 import Data.Ord
-import Data.Proxy 
+import Data.Set                                                 as S
+import Data.Typeable
 
 -- import qualified Data.Array as A
 import qualified Data.Array.IArray as A 
@@ -66,7 +54,6 @@ import Control.Applicative hiding (Const)
 -- Concurrency 
 import Control.Concurrent.MVar
 import Control.Concurrent
-import Control.Concurrent.Chan
 
 import System.IO 
 import System.IO.Unsafe 
@@ -362,6 +349,40 @@ collectArrs ctx !arrs =
     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
                                                       <*> collectR r2 arrs2
 
+
+
+
+matchArrayType
+    :: forall sh1 sh2 e1 e2. (Shape sh1, Shape sh2, Elt e1, Elt e2)
+    => Array sh1 e1 {- dummy -}
+    -> Array sh2 e2 {- dummy -}
+    -> Maybe (Array sh1 e1 :=: Array sh2 e2)
+matchArrayType a1 a2
+  | Just REFL <- matchTupleType (eltType (undefined::sh1)) (eltType (undefined::sh2))
+  , Just REFL <- matchTupleType (eltType (undefined::e1))  (eltType (undefined::e2))
+  = gcast REFL
+
+matchArrayType _ _
+  = Nothing
+
+
+matchArraysR :: ArraysR s -> ArraysR t -> Maybe (s :=: t)
+matchArraysR ArraysRunit ArraysRunit
+  = Just REFL
+
+matchArraysR (ArraysRarray :: ArraysR s) (ArraysRarray :: ArraysR t)
+  | Just REFL <- matchArrayType (undefined::s) (undefined::t)
+  = Just REFL
+
+matchArraysR (ArraysRpair s1 s2) (ArraysRpair t1 t2)
+  | Just REFL <- matchArraysR s1 t1
+  , Just REFL <- matchArraysR s2 t2
+  = Just REFL
+
+matchArraysR _ _
+  = Nothing
+
+
 -- This is the multirunner for DelayedOpenAcc
 -- ------------------------------------------
 runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
@@ -382,18 +403,33 @@ runDelayedOpenAccMulti = traverseAcc
 
         Avar ix -> return $ prj ix env 
 
-        Atuple tup -> travT tup 
+        Atuple tup -> travT tup env
           
         _ -> perform (dacc) env 
 
     -- Traverse Array tuple
     -- --------------------
     travT :: forall aenv arrs. (Arrays arrs, IsAtuple arrs)
-          => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)  
+          => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)
+          -> Env aenv
           -> SchedMonad (Asyncs arrs)
-    travT tup = undefined 
+    travT tup aenv = Asyncs <$> go (arrays (undefined::arrs)) tup
+      where
+        go :: ArraysR a -> Atuple (DelayedOpenAcc aenv) atup -> SchedMonad (AsyncsR a)
+        go ArraysRunit NilAtup
+          = return A_Unit
 
-      
+        go (ArraysRpair ar2 ar1) (SnocAtup a2 (a1 :: DelayedOpenAcc aenv a1))
+          | Just REFL <- matchArraysR ar1 (arrays (undefined :: a1))
+          = do
+               Asyncs a1' <- traverseAcc a1 aenv
+               a2'        <- go ar2 a2
+               return      $ A_Pair a2' a1'
+
+        go _ _
+          = $internalError "travT" "unexpected case"
+
+
     -- Register a device as being free.
     -- --------------------------------
     registerAsFree :: SchedState -> DevID -> IO () 
