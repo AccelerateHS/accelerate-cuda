@@ -7,6 +7,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE PatternGuards              #-} 
 
 -- Implementation experiments regarding multidevice execution and
 -- scheduling
@@ -56,13 +57,15 @@ import Control.Concurrent.MVar
 import Control.Concurrent
 
 import System.IO 
-import System.IO.Unsafe 
+import System.IO.Unsafe
 
+debug :: Bool
 debug = True 
 
 debugLock :: MVar Integer 
 debugLock = unsafePerformIO $ newMVar 0 
 
+debugMsg :: String -> IO () 
 debugMsg str =
   when debug $ 
   do
@@ -181,7 +184,7 @@ data SchedState =
   deriving Show 
 
 getDeviceCtx :: SchedState -> DevID -> Context
-getDeviceCtx st id = devCtx $ deviceState st A.! id 
+getDeviceCtx st devid = devCtx $ deviceState st A.! devid 
            
 
 -- Need some way of keeping track of actual devices.  What identifies
@@ -242,20 +245,20 @@ transferArrays alldevices devid dependencies env =
     allContexts = A.amap devCtx alldevices
     -- myContext   = allContexts A.! devid
     
-    trav :: forall aenv . Env aenv -> S.Set (Idx_ aenv) -> CUDA.CIO (E.Aval aenv)
+    trav :: Env aenv' -> S.Set (Idx_ aenv') -> CUDA.CIO (E.Aval aenv')
     trav Aempty _ = return E.Aempty
     trav (Apush e arrs) reqset =
       do
         let (needArrays,newset) = isNeeded reqset 
-        env <- trav e newset
+        env' <- trav e newset
 
         if needArrays
           then do 
             arrs' <- copyArrays arrs allContexts devid
             evt <- liftIO $ E.create 
-            return $ E.Apush env (E.Async evt arrs') 
+            return $ E.Apush env' (E.Async evt arrs') 
                
-          else return (E.Apush env dummyAsync)
+          else return (E.Apush env' dummyAsync)
           
     dummyAsync :: E.Async t
     dummyAsync = E.Async (CUDA.Event nullPtr) undefined
@@ -275,13 +278,18 @@ copyArrays (Asyncs arrs) allContexts devid = toArr <$> copyArraysR (arrays (unde
       do
         (arr,loc) <- liftIO $ takeMVar a 
         case (devid `S.member` loc) of 
-           True -> return arr 
+           True ->
+             do
+               -- Array exists on device.
+               liftIO $ putMVar a (arr,loc)
+               return arr 
            False -> 
              do let src = allContexts A.! (S.findMin loc) 
                     dst = allContexts A.! devid 
         
                 mallocArray arr
                 copyArrayPeer arr src arr dst
+                liftIO $ putMVar a (arr, S.insert devid loc)
                 return arr 
         
     copyArraysR (ArraysRpair r1 r2) (A_Pair arrs1 arrs2) =
@@ -337,17 +345,17 @@ runDelayedAccMulti acc =
          collectAsyncs async_result -- collectArrs mCtx arr
 
 
-collectArrs :: forall arrs. Arrays arrs => Context -> arrs -> IO arrs
-collectArrs ctx !arrs =
-  do
-    arrs' <- CUDA.evalCUDA ctx $ collectR (arrays (undefined :: arrs)) (fromArr arrs)
-    return $ toArr arrs'   
-  where
-    collectR :: ArraysR a -> a -> CUDA.CIO a
-    collectR ArraysRunit         ()             = return ()
-    collectR ArraysRarray        arr            = peekArray arr >> return arr
-    collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
-                                                      <*> collectR r2 arrs2
+-- collectArrs :: forall arrs. Arrays arrs => Context -> arrs -> IO arrs
+-- collectArrs ctx !arrs =
+--   do
+--     arrs' <- CUDA.evalCUDA ctx $ collectR (arrays (undefined :: arrs)) (fromArr arrs)
+--     return $ toArr arrs'   
+--   where
+--     collectR :: ArraysR a -> a -> CUDA.CIO a
+--     collectR ArraysRunit         ()             = return ()
+--     collectR ArraysRarray        arr            = peekArray arr >> return arr
+--     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
+--                                                       <*> collectR r2 arrs2
 
 
 
@@ -357,7 +365,7 @@ matchArrayType
     => Array sh1 e1 {- dummy -}
     -> Array sh2 e2 {- dummy -}
     -> Maybe (Array sh1 e1 :=: Array sh2 e2)
-matchArrayType a1 a2
+matchArrayType _ _ -- a1 a2
   | Just REFL <- matchTupleType (eltType (undefined::sh1)) (eltType (undefined::sh2))
   , Just REFL <- matchTupleType (eltType (undefined::e1))  (eltType (undefined::e2))
   = gcast REFL
@@ -605,8 +613,8 @@ travF (Lam  f)  = travF f
 
 
 arrayRefsE :: DelayedOpenExp env aenv e -> S.Set (Idx_ aenv)
-arrayRefsE exp =
-  case exp of
+arrayRefsE expr =
+  case expr of
     Index       a e -> arrayRefs a `S.union` arrayRefsE e 
     LinearIndex a e -> arrayRefs a `S.union` arrayRefsE e 
     Shape       a   -> arrayRefs a
@@ -687,10 +695,10 @@ waitAsync (Async tloc) =
      return (t,loc) 
 
 -- add a location to the set of where arrays exist
-addLocation :: Async t -> MemID -> IO ()
-addLocation (Async tloc) mid =
-  do (t,loc) <- takeMVar tloc
-     putMVar tloc (t, S.insert mid loc)  
+-- addLocation :: Async t -> MemID -> IO ()
+-- addLocation (Async tloc) mid =
+--   do (t,loc) <- takeMVar tloc
+--      putMVar tloc (t, S.insert mid loc)  
 
 data Asyncs a where
   Asyncs :: AsyncsR (ArrRepr a)
@@ -723,8 +731,8 @@ putAsyncs devid a (Asyncs arrs) =
     go (ArraysRpair a1 a2) (b1,b2) (A_Pair c1 c2) = 
       do go a1 b1 c1
          go a2 b2 c2
-    go ArraysRarray        a     (A_Array (Async a'))  =
-      do putMVar a' (a,S.singleton devid)
+    go ArraysRarray        arr     (A_Array (Async a'))  =
+      do putMVar a' (arr,S.singleton devid)
       
 
 -- copy a collection of Async arrays back to host
