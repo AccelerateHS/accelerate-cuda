@@ -332,34 +332,11 @@ runDelayedAccMulti acc =
   do
     CUDA.initialise []
     st <- initScheduler
-    flip runSched st $ 
-      do async_result <- runDelayedOpenAccMulti acc Aempty
-         liftIO $ debugMsg $ "Waiting for final result" 
-         --(arr,ixset) <- liftIO $ takeMVar mv
-         -- This means that arr exists on all machines
-         -- in ixset
-         --schedState <- ask 
-         --let machine = deviceState schedState A.! (head (S.toList ixset))
-         --    mCtx    = devCtx machine
-         -- Bind the device context to transfer result array from 
-         collectAsyncs async_result -- collectArrs mCtx arr
+    flip runSched st $ collectAsyncs =<< runDelayedOpenAccMulti acc Aempty 
+ 
 
-
--- collectArrs :: forall arrs. Arrays arrs => Context -> arrs -> IO arrs
--- collectArrs ctx !arrs =
---   do
---     arrs' <- CUDA.evalCUDA ctx $ collectR (arrays (undefined :: arrs)) (fromArr arrs)
---     return $ toArr arrs'   
---   where
---     collectR :: ArraysR a -> a -> CUDA.CIO a
---     collectR ArraysRunit         ()             = return ()
---     collectR ArraysRarray        arr            = peekArray arr >> return arr
---     collectR (ArraysRpair r1 r2) (arrs1, arrs2) = (,) <$> collectR r1 arrs1
---                                                       <*> collectR r2 arrs2
-
-
-
-
+-- Magic
+-- ----- 
 matchArrayType
     :: forall sh1 sh2 e1 e2. (Shape sh1, Shape sh2, Elt e1, Elt e2)
     => Array sh1 e1 {- dummy -}
