@@ -100,8 +100,8 @@ instance Show (MVar a) where
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
 -- Scheduler
-createDeviceThread :: CUDA.Device -> IO DeviceState
-createDeviceThread dev =
+createDeviceThread :: DevID -> CUDA.Device -> IO DeviceState
+createDeviceThread devid dev =
   do
     debugMsg $ "Creating context on device"
     ctxMVar <- newEmptyMVar 
@@ -110,7 +110,7 @@ createDeviceThread dev =
     done <- newEmptyMVar
 
     debugMsg $ "Forking device work thread" 
-    tid <- runInBoundThread $ forkIO $
+    tid <- runInBoundThread $ forkOn devid $
            do
              ctx <- create dev contextFlags
              putMVar ctxMVar ctx 
@@ -151,7 +151,7 @@ initScheduler = do
   debugMsg $ "InitScheduler: found " ++ show numDevs ++ " devices."
   
    -- Create a device thread for each device 
-  devs' <- mapM createDeviceThread devs 
+  devs' <- zipWithM createDeviceThread [0..] devs 
   debugMsg $ "InitScheduler: Created device threads."
   --
     
