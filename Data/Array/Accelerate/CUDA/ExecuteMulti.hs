@@ -434,7 +434,7 @@ runDelayedOpenAccMulti = traverseAcc
       -- This is before deciding what device to use.
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
-      _ <- liftIO $ forkIO $
+      _ <- liftIO $ runInBoundThread $ forkIO $
              do
                 
                -- What arrays are needed to perform this piece of work 
