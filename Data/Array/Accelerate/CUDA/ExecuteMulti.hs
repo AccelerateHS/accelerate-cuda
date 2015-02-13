@@ -60,7 +60,7 @@ import System.IO
 import System.IO.Unsafe
 
 debug :: Bool
-debug = True 
+debug = False
 
 debugLock :: MVar Integer 
 debugLock = unsafePerformIO $ newMVar 0 
