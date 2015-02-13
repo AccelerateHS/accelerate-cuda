@@ -8,7 +8,7 @@ import Data.Version
 import System.Directory
 
 version :: Version
-version = Version {versionBranch = [0,14,0,0], versionTags = ["dev"]}
+version = Version {versionBranch = [2,0,0,0], versionTags = ["dev"]}
 
 getDataDir :: IO FilePath
 getDataDir = getCurrentDirectory

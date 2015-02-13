@@ -419,7 +419,7 @@ config =  Phase
   , floatOutAccFromExp     = True
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
-  , vectoriseSequences     = False
+  , vectoriseSequences     = True
   }
 
 

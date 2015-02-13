@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP          #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
 -- Copyright   : [2013..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -17,20 +18,21 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Array.Nursery                 ( ) -- hashable CUDA.Context instance
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
-import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..) )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
+import Data.Array.Accelerate.FullList                           ( FullList(..) )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
-import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
+import qualified Data.Array.Accelerate.FullList                 as FL
 
 -- libraries
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Exception                                        ( bracket_ )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
+import Data.Hashable                                            ( Hashable(..) )
 import System.Mem.Weak                                          ( Weak, deRefWeak )
 import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
+import Foreign.Ptr                                              ( ptrToIntPtr )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Driver.Stream                     as Stream
 
@@ -49,6 +51,11 @@ type HashTable key val  = HT.BasicHashTable key val
 type RSV                = MVar ( HashTable CUDA.Context (FullList () Stream) )
 data Reservoir          = Reservoir {-# UNPACK #-} !RSV
                                     {-# UNPACK #-} !(Weak RSV)
+
+instance Hashable CUDA.Context where
+  {-# INLINE hashWithSalt #-}
+  hashWithSalt salt (CUDA.Context ctx)
+    = salt `hashWithSalt` (fromIntegral (ptrToIntPtr ctx) :: Int)
 
 
 -- Executing operations in streams

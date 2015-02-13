@@ -32,7 +32,7 @@ import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import Data.Array.Accelerate.Trafo                      ( Extend )
-import qualified Data.Array.Accelerate.CUDA.FullList    as FL
+import qualified Data.Array.Accelerate.FullList         as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
 

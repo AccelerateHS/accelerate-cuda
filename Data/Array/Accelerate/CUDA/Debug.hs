@@ -35,13 +35,6 @@ import Foreign.CUDA.Driver.Stream                       ( Stream )
 import qualified Foreign.CUDA.Driver.Event              as Event
 
 
--- | Conditional execution of a monadic expression
---
-when :: Mode -> IO () -> IO ()
-when f s = do
-  yes <- queryFlag f
-  if yes then s else return ()
-
 -- | The opposite of 'when'
 --
 unless :: Mode -> IO () -> IO ()

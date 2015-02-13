@@ -24,10 +24,10 @@ module Data.Array.Accelerate.CUDA.Persistent (
 
 -- friends
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.FullList                   ( FullList )
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
-import qualified Data.Array.Accelerate.CUDA.FullList    as FL
+import qualified Data.Array.Accelerate.FullList         as FL
 
 -- libraries
 import Prelude                                          hiding ( lookup )
