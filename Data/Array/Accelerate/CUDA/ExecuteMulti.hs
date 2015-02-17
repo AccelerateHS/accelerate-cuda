@@ -27,7 +27,8 @@ import qualified Data.Array.Accelerate.CUDA.Execute.Event as E
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Data
 
-import Data.Array.Accelerate.Trafo  hiding (strengthen) 
+import Data.Array.Accelerate.Trafo  hiding (strengthen)
+import Data.Array.Accelerate.Trafo.Base
 -- import Data.Array.Accelerate.Trafo.Base hiding (inject) 
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.Analysis.Match
@@ -268,8 +269,8 @@ transferArrays alldevices devid dependencies env =
 
         if needArrays
           then do 
-            arrs' <- copyArrays arrs allContexts devid
-            evt <- liftIO $ E.create 
+            !arrs' <- copyArrays arrs allContexts devid
+            !evt <- liftIO $ E.create 
             return $ E.Apush env' (E.Async evt arrs') 
                
           else return (E.Apush env' dummyAsync)
@@ -284,7 +285,7 @@ transferArrays alldevices devid dependencies env =
 
 
 copyArrays :: forall t. Arrays t => Asyncs t -> A.Array Int Context -> DevID -> CUDA.CIO t
-copyArrays (Asyncs arrs) allContexts devid = toArr <$> copyArraysR (arrays (undefined :: t)) arrs
+copyArrays (Asyncs !arrs) allContexts devid = toArr <$> copyArraysR (arrays (undefined :: t)) arrs
   where
     copyArraysR :: ArraysR a -> AsyncsR a -> CUDA.CIO a 
     copyArraysR ArraysRunit A_Unit  = return ()
@@ -395,7 +396,10 @@ matchArraysR _ _
 runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
                        -> Env aenv 
                        -> SchedMonad (Asyncs arrs) 
-runDelayedOpenAccMulti = traverseAcc 
+runDelayedOpenAccMulti !acc !aenv =
+  do
+    liftIO $ debugMsg $ "runDelayedOpenAccMulti: "
+    traverseAcc acc aenv 
   where
     traverseAcc :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs
                 -> Env aenv
@@ -403,7 +407,7 @@ runDelayedOpenAccMulti = traverseAcc
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
     traverseAcc dacc@(Manifest !pacc) env =
       case pacc of
-        Use a -> a `seq` perform dacc env
+        -- Use a -> a `seq` perform dacc env
         
         Alet a b ->
           do res <- perform a env
@@ -519,7 +523,7 @@ runDelayedOpenAccMulti = traverseAcc
                -- wait on the done signal
                debugMsg $ "Waiting for device to report done." 
                Done <- takeMVar (devDoneMVar mydevstate)
-               registerAsFree st devid
+               !() <- registerAsFree st devid
                -- putMVar (devDoneMVar mydevstate) Done
                debugMsg $ "******************************************\n" ++
                           " Device Reported Done, adding to freeChan.\n" ++
@@ -533,7 +537,7 @@ runDelayedOpenAccMulti = traverseAcc
 -- will execute.
 deeplySeq :: forall arrs. ArraysR arrs -> arrs -> arrs 
 deeplySeq ArraysRunit         ()         = ()  
-deeplySeq (ArraysRpair a1 a2) (a,b)      = (a `seq` deeplySeq a1 a, a `seq` deeplySeq a2 b)
+deeplySeq (ArraysRpair a1 a2) (a,b)      = (deeplySeq a1 a, deeplySeq a2 b)
 deeplySeq ArraysRarray        a          = a `seq` a
 
 
@@ -754,7 +758,7 @@ asyncs a =
 -- Fill in an Async..
 -- Assumes the Async is empty! 
 putAsyncs :: forall arrs. Arrays arrs => DevID -> arrs -> Asyncs arrs -> IO ()
-putAsyncs devid a (Asyncs arrs) =
+putAsyncs devid a (Asyncs !arrs) =
   toArr <$> go (arrays (undefined :: arrs)) (fromArr a) arrs
   where
     go :: ArraysR a -> a -> AsyncsR a -> IO ()
@@ -785,7 +789,7 @@ collectAsyncs (Asyncs !arrs) =
         
         -- Wait for array to be computed 
         --(t,loc) <- liftIO $ waitAsync a
-        liftIO $ waitAsync a
+        --liftIO $ waitAsync a
         -- Take out and do not put back, we are done with this
         -- here 
         (t,loc) <- liftIO $ takeAsync a
@@ -803,3 +807,4 @@ collectAsyncs (Asyncs !arrs) =
 
 ------------------------------------------------------- 
 
+    
