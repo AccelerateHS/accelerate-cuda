@@ -219,7 +219,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute hiding (Async)
-import Data.Array.Accelerate.CUDA.ExecuteMulti 
+import Data.Array.Accelerate.CUDA.ExecuteMulti (runDelayedAccMulti) 
 
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug

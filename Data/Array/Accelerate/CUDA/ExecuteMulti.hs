@@ -13,10 +13,11 @@
 -- scheduling
 --
 module Data.Array.Accelerate.CUDA.ExecuteMulti
-       (  
-         runDelayedOpenAccMulti,
-         runDelayedAccMulti,
-       ) where
+       -- (  
+       --   runDelayedOpenAccMulti,
+       --   runDelayedAccMulti,
+       -- )
+       where
 
 import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj) 
 import qualified Data.Array.Accelerate.CUDA.State as CUDA 
@@ -60,18 +61,19 @@ import System.IO
 import System.IO.Unsafe
 
 debug :: Bool
-debug = False
+debug = True
 
+{-# NOINLINE debugLock #-} 
 debugLock :: MVar Integer 
-debugLock = unsafePerformIO $ newMVar 0 
+debugLock = unsafePerformIO $ keepAlive =<< newMVar 0 
 
 debugMsg :: String -> IO () 
 debugMsg str =
   when debug $ 
-  do
-    n <- takeMVar debugLock
-    hPutStrLn stderr $ show n ++ ": " ++ str
-    putMVar debugLock (n+1) 
+    modifyMVar_ debugLock $ \n ->
+      do 
+        hPutStrLn stderr $ show n ++ ": " ++ str
+        return (n+1)
 
 
 -- Datastructures for Gang of worker threads
@@ -100,9 +102,21 @@ instance Show (MVar a) where
 -- Each device is associated a worker thread
 -- that performs workloads passed to it from the
 -- Scheduler
+
+createDeviceThreads :: IO [(DevID,DeviceState)]
+createDeviceThreads  = do
+  devs <- enumerateDevices
+  let numDevs = L.length devs
+  debugMsg $ "createDeviceThreads: found " ++ show numDevs ++ " devices."
+  
+  devs' <- zipWithM createDeviceThread [0..] devs
+  
+  let assocList = zip [0..numDevs-1] devs'
+      
+  return assocList
+  
 createDeviceThread :: DevID -> CUDA.Device -> IO DeviceState
-createDeviceThread devid dev =
-  do
+createDeviceThread devid dev = do
     debugMsg $ "Creating context on device"
     ctxMVar <- newEmptyMVar 
     
@@ -133,37 +147,37 @@ createDeviceThread devid dev =
               case x of
                 ShutDown -> putMVar done Done >> return () 
                 Work w ->
-                  do debugMsg $ "Entering work loop" 
+                  do debugMsg $ "Entering work loop"
+                     -- w launches of a thread of its own! 
                      w
                      debugMsg $ "Exiting work loop"
+                     putMVar done Done
+                     deviceLoop done work
+                
 
-              debugMsg $ "Device reporting done"
-              putMVar done Done
-              deviceLoop done work 
-  
+
+
 
 -- Initialize a starting state
 -- ---------------------------
-initScheduler :: IO SchedState
-initScheduler = do
-  devs <- enumerateDevices
-  let numDevs = L.length devs
-  debugMsg $ "InitScheduler: found " ++ show numDevs ++ " devices."
-  
-   -- Create a device thread for each device 
-  devs' <- zipWithM createDeviceThread [0..] devs 
-  debugMsg $ "InitScheduler: Created device threads."
-  --
-    
-  let assocList = zip [0..numDevs-1] devs'
 
-  -- All devices start out free
+{- NOINLINE initScheduler #-} 
+initScheduler :: SchedState
+initScheduler = unsafePerformIO $ keepAlive =<< do
+  CUDA.initialise []
+  debugMsg $ "InitScheduler"
+
+  devs <- createDeviceThreads   
+  let numDevs = length devs 
+      devids  = L.map fst devs
+      
   free <- newChan
-  writeList2Chan free (L.map fst assocList) 
+  writeList2Chan free devids
+  debugMsg $ "Write " ++ show devids ++ " into Free devices chan!"
 
-  let st = SchedState (A.array (0,numDevs-1) assocList)
+  let st = SchedState (A.array (0,numDevs-1) devs)
                       free
-
+      
   debugMsg $ "InitScheduler: " ++ show st 
   
   return $ st
@@ -276,11 +290,13 @@ copyArrays (Asyncs arrs) allContexts devid = toArr <$> copyArraysR (arrays (unde
     copyArraysR ArraysRunit A_Unit  = return ()
     copyArraysR ArraysRarray (A_Array (Async a)) =
       do
+        liftIO $ debugMsg "copyArrays: taking mvar" 
         (arr,loc) <- liftIO $ takeMVar a 
         case (devid `S.member` loc) of 
            True ->
              do
                -- Array exists on device.
+               liftIO $ debugMsg "copyArrays: putting mvar" 
                liftIO $ putMVar a (arr,loc)
                return arr 
            False -> 
@@ -289,6 +305,7 @@ copyArrays (Asyncs arrs) allContexts devid = toArr <$> copyArraysR (arrays (unde
         
                 mallocArray arr
                 copyArrayPeer arr src arr dst
+                liftIO $ debugMsg "copyArrays: putting mvar" 
                 liftIO $ putMVar a (arr, S.insert devid loc)
                 return arr 
         
@@ -302,14 +319,13 @@ waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
 waitOnArrays Aempty _ = return ()
 waitOnArrays (Apush e arr) reqset =
   do
-    debugMsg $ "Waiting on arrays" 
     let needed = S.member (Idx_ ZeroIdx) reqset
         ns     = strengthen reqset 
     
     case needed of
-      True -> awaitAll arr 
+      True -> do awaitAll arr
+                 waitOnArrays e ns 
       False -> waitOnArrays e ns
-    debugMsg $ "All arrays arrived"
   where
     awaitAll :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
     awaitAll (Asyncs a) = go (arrays (undefined :: arrs)) a
@@ -320,19 +336,25 @@ waitOnArrays (Apush e arr) reqset =
       do go a1 b1
          go a2 b2
     go ArraysRarray        (A_Array a) =
-      waitAsync a >> return () 
-
+      waitAsync a >> return ()
+      
 -- Evaluate an PreOpenAcc or ExecAcc or something under the influence
 -- of the scheduler
 -- ------------------------------------------------------------------
+schedState :: SchedState 
+schedState = initScheduler
 
 runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
                    -> IO arrs
-runDelayedAccMulti acc =
+runDelayedAccMulti !acc =
   do
-    CUDA.initialise []
-    st <- initScheduler
-    flip runSched st $ collectAsyncs =<< runDelayedOpenAccMulti acc Aempty 
+    debugMsg $ "runDelayedAccMulti: "
+
+    b <- isEmptyChan (freeDevs schedState)
+    debugMsg $ "There is at least one device free: " ++ show (not  b)
+    
+    
+    flip runSched schedState $ collectAsyncs =<< runDelayedOpenAccMulti acc Aempty 
  
 
 -- Magic
@@ -379,12 +401,13 @@ runDelayedOpenAccMulti = traverseAcc
                 -> Env aenv
                 -> SchedMonad (Asyncs arrs)
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
-    traverseAcc dacc@(Manifest pacc) env =
+    traverseAcc dacc@(Manifest !pacc) env =
       case pacc of
+        Use a -> a `seq` perform dacc env
+        
         Alet a b ->
           do res <- perform a env
              traverseAcc b (env `Apush` res)
-
 
         Avar ix -> return $ prj ix env 
 
@@ -418,15 +441,18 @@ runDelayedOpenAccMulti = traverseAcc
     -- Register a device as being free.
     -- --------------------------------
     registerAsFree :: SchedState -> DevID -> IO () 
-    registerAsFree st dev = writeChan (freeDevs st) dev 
+    registerAsFree st dev =
+      do
+        debugMsg $ "***Putting " ++ show dev ++ " on free chan" 
+        writeChan (freeDevs st) dev 
+        debugMsg $ "***writeChan complete!" 
 
     -- This performs the main part of the scheduler work. 
     -- --------------------------------------------------
     perform :: forall aenv arrs. Arrays arrs =>  DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Asyncs arrs) 
     perform a env = do
-      --arrayOnTheWay <- liftIO $ newEmptyMVar
       arrayOnTheWay <- liftIO $ asyncs (undefined :: arrs)   
-      schedState <- ask
+      st <- ask
 
       -- Here! Fork of a thread that waits for all the
       -- arrays that "a" depends upon to be computed.
@@ -438,18 +464,31 @@ runDelayedOpenAccMulti = traverseAcc
              do
                 
                -- What arrays are needed to perform this piece of work 
-               let dependencies = arrayRefs a
+               let !dependencies = arrayRefs a
+               debugMsg $ "Waiting for: " ++ show (length (S.toList dependencies))
                -- Wait for those arrays to be computed     
                waitOnArrays env dependencies   
 
                -- Replace following code
                -- with a "getSuitableWorker" function 
                -- Wait for at least one free device.
-               devid <- liftIO $ readChan (freeDevs schedState)
+               debugMsg $ "Waiting for a free device"
+               devid <- liftIO $ readChan (freeDevs st) --schedState)
+
+               -- cant happen in the one device case 
+               -- b <- isEmptyChan (freeDevs st) -- schedState)
+               -- when (not b) $ 
+               --    debugMsg "***\n***\nWARNING CHAN IS NOT EMPTY!!!\n***\n***"
+               
                -- To get somewhere, grab head.
                     
                let mydevstate = alldevices A.! devid
-                   alldevices = deviceState schedState
+                   alldevices = deviceState st -- schedState
+
+               -- This device should be "done"
+               --debugMsg $ "Is the device offered on the channel free?" 
+               --liftIO $ takeMVar $ devDoneMVar mydevstate
+               --debugMsg $ "Device had the DONE flag" 
                          
                -- Send away work to the device
                debugMsg $ "Launching work on device: " ++ show devid
@@ -460,32 +499,44 @@ runDelayedOpenAccMulti = traverseAcc
                  do
                    -- Transfer all arrays to chosen device.
                    liftIO $ debugMsg $ "   Transfer arrays to device " ++ show devid
-                   aenv <- transferArrays alldevices devid dependencies env
+                   !aenv <- transferArrays alldevices devid dependencies env
                    -- Compile workload
                    liftIO $ debugMsg $ "   Compiling OpenAcc" 
-                   compiled <- compileOpenAcc a
+                   !compiled <- compileOpenAcc a
                    -- Execute workload in a fresh stream and wait for work to finish
                    liftIO $ debugMsg $ "   Executing work on stream"
-                   result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
+                   !result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
 
                    -- Update environment with the result and where it exists
                    liftIO $ debugMsg $ "   Updating environment with computed array" 
                    --liftIO $ putMVar arrayOnTheWay (result, S.singleton devid)
                    liftIO $ putAsyncs devid result arrayOnTheWay  
-                   -- Work is over! 
-                   return () 
+                   -- Work is over!
+                   -- liftIO $ putMVar (devDoneMVar mydevstate)  Done
+                   return ()
+                   -- DONE
 
                -- wait on the done signal
                debugMsg $ "Waiting for device to report done." 
                Done <- takeMVar (devDoneMVar mydevstate)
-               -- This device is now free
-               registerAsFree schedState devid
+               registerAsFree st devid
+               -- putMVar (devDoneMVar mydevstate) Done
+               debugMsg $ "******************************************\n" ++
+                          " Device Reported Done, adding to freeChan.\n" ++
+                          "******************************************" 
+                -- schedState devid
       return arrayOnTheWay
         
 
 -- Traverse a DelayedOpenAcc and figure out what arrays are being referenced
 -- Those arrays must be copied to the device where that DelayedOpenAcc
 -- will execute.
+deeplySeq :: forall arrs. ArraysR arrs -> arrs -> arrs 
+deeplySeq ArraysRunit         ()         = ()  
+deeplySeq (ArraysRpair a1 a2) (a,b)      = (a `seq` deeplySeq a1 a, a `seq` deeplySeq a2 b)
+deeplySeq ArraysRarray        a          = a `seq` a
+
+
 
 arrayRefs :: forall aenv arrs. DelayedOpenAcc aenv arrs -> S.Set (Idx_ aenv) 
 arrayRefs (Delayed extent index lin) =
@@ -494,8 +545,8 @@ arrayRefs (Delayed extent index lin) =
   travF lin 
 arrayRefs (Manifest pacc) =
   case pacc of
-    Use  _   -> S.empty
-    Unit _   -> S.empty
+    Use  a    -> (deeplySeq (arrays (undefined :: arrs)) a) `seq` S.empty
+    Unit !_   -> S.empty
     
     Avar ix -> addFree ix
     Alet a b -> arrayRefs a `S.union` (strengthen (arrayRefs b))
@@ -512,7 +563,7 @@ arrayRefs (Manifest pacc) =
                     arrayRefs t `S.union`
                     arrayRefs e
 
-    Aforeign _ _ _ -> $internalError "arrayRefs" "Aforeign"
+    Aforeign _ _ a -> arrayRefs a -- $internalError "arrayRefs" "Aforeign"
 
     Reshape s a -> travE s `S.union` arrayRefs a
     Replicate _ e a -> travE e `S.union` arrayRefs a
@@ -665,17 +716,19 @@ data Async t = Async (MVar (t, Set MemID))
 newEmptyAsync :: IO (Async t)
 newEmptyAsync = Async <$> newEmptyMVar 
 
-waitAsync :: Async t -> IO (t, Set MemID)
+waitAsync :: Async t -> IO ()
 waitAsync (Async tloc) =
-  do (t,loc) <- takeMVar tloc
-     putMVar tloc (t,loc)
-     return (t,loc) 
+  do
+     debugMsg "waitAsync: taking MVar (waiting for array)" 
+     --(t,loc) <- takeMVar tloc
+     withMVar tloc $ \ _ -> 
+       debugMsg "waitAsync: releasing MVar" 
+     --putMVar tloc (t,loc)
+     --return (t,loc) 
 
--- add a location to the set of where arrays exist
--- addLocation :: Async t -> MemID -> IO ()
--- addLocation (Async tloc) mid =
---   do (t,loc) <- takeMVar tloc
---      putMVar tloc (t, S.insert mid loc)  
+takeAsync :: Async t -> IO (t,Set MemID)
+takeAsync (Async tloc) = takeMVar tloc 
+
 
 data Asyncs a where
   Asyncs :: AsyncsR (ArrRepr a)
@@ -698,7 +751,8 @@ asyncs a =
     
 
 
--- Fill in an Async.. 
+-- Fill in an Async..
+-- Assumes the Async is empty! 
 putAsyncs :: forall arrs. Arrays arrs => DevID -> arrs -> Asyncs arrs -> IO ()
 putAsyncs devid a (Asyncs arrs) =
   toArr <$> go (arrays (undefined :: arrs)) (fromArr a) arrs
@@ -709,13 +763,17 @@ putAsyncs devid a (Asyncs arrs) =
       do go a1 b1 c1
          go a2 b2 c2
     go ArraysRarray        arr     (A_Array (Async a'))  =
-      do putMVar a' (arr,S.singleton devid)
-      
+      do
+         debugMsg "putAsyncs: adding array to env"
+         putMVar a' (arr,S.singleton devid)
+         debugMsg "putAsyncs: DONE!" 
 
 -- copy a collection of Async arrays back to host
 collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> SchedMonad arrs
 collectAsyncs (Asyncs !arrs) =
-  do arrs' <- collectR (arrays (undefined :: arrs)) arrs
+  do liftIO $ debugMsg "Collecting result arrays" 
+     !arrs' <- collectR (arrays (undefined :: arrs)) arrs
+     liftIO $ debugMsg "Collecting result arrays: DONE!"
      return $ toArr arrs'
   where
     collectR :: ArraysR a -> AsyncsR a -> SchedMonad a
@@ -726,14 +784,19 @@ collectAsyncs (Asyncs !arrs) =
         st <- ask
         
         -- Wait for array to be computed 
-        (t,loc) <- liftIO $ waitAsync a 
+        --(t,loc) <- liftIO $ waitAsync a
+        liftIO $ waitAsync a
+        -- Take out and do not put back, we are done with this
+        -- here 
+        (t,loc) <- liftIO $ takeAsync a
+        
         -- get min from set (because the min device is likely to the
         -- most capable device) 
         let devid = S.findMin loc
             ctx = getDeviceCtx st devid 
 
         -- Copy out from device 
-        liftIO $ CUDA.evalCUDA ctx $ peekArray t 
+        !() <- liftIO $ CUDA.evalCUDA ctx $ peekArray t 
         return t 
  
 
