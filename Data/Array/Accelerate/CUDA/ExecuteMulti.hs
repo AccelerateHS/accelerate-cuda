@@ -62,7 +62,7 @@ import System.IO
 import System.IO.Unsafe
 
 debug :: Bool
-debug = True
+debug = False 
 
 {-# NOINLINE debugLock #-} 
 debugLock :: MVar Integer 
@@ -537,8 +537,10 @@ runDelayedOpenAccMulti !acc !aenv =
 -- will execute.
 deeplySeq :: forall arrs. ArraysR arrs -> arrs -> arrs 
 deeplySeq ArraysRunit         ()         = ()  
-deeplySeq (ArraysRpair a1 a2) (a,b)      = (deeplySeq a1 a, deeplySeq a2 b)
-deeplySeq ArraysRarray        a          = a `seq` a
+deeplySeq (ArraysRpair a1 a2) (a,b)      = let !a' = deeplySeq a1 a
+                                               !b' = deeplySeq a2 b
+                                           in (a', b')
+deeplySeq ArraysRarray        !a         = a
 
 
 
