@@ -47,7 +47,8 @@ import Data.List                                                as L
 import Data.Ord
 import Data.Set                                                 as S
 import Data.Typeable
-import Data.Maybe 
+import Data.Maybe
+import Data.Map as M 
 
 -- import qualified Data.Array as A
 import qualified Data.Array.IArray as A 
@@ -175,14 +176,16 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   CUDA.initialise []
   debugMsg $ "InitScheduler"
 
-  -- it is possible to virtualize each device
-  -- 1 = No virtualization. 
-  devs <- createDeviceThreads 1
+  -- It is possible to virtualize each device. 
+  -- It is not implemented properly though.
+  -- We need to create one context per real device
+  -- and share between the virtual workers. 
+  devs <- createDeviceThreads 4
   let numDevs = length devs 
       devids  = L.map fst devs
       
   free <- newChan
-  writeList2Chan free [()| _ <- [0..numDevs-1]] -- devids
+  writeList2Chan free [()| _ <- [0..numDevs-1]] 
   debugMsg $ "Write " ++ show numDevs ++ " ()s into Free devices chan!"
 
   s_lock <- newMVar () 
@@ -207,7 +210,6 @@ data SchedState =
       -- this is a channel, for now. 
     , freeDevs     :: Chan ()
       -- as long as there are free devices, there are ()s on this chan. 
-
     , schedLock    :: MVar () 
     }
   deriving Show 
@@ -328,31 +330,85 @@ copyArrays (Asyncs !arrs) allContexts devid = toArr <$> copyArraysR (arrays (und
       do (,) <$> copyArraysR r1 arrs1
              <*> copyArraysR r2 arrs2 
  
-         
--- Wait for all arrays in the set to be computed.
-waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
-waitOnArrays Aempty _ = return ()
-waitOnArrays (Apush e arr) reqset =
-  do
-    let needed = S.member (Idx_ ZeroIdx) reqset
-        ns     = strengthen reqset 
-    
-    case needed of
-      True -> do awaitAll arr
-                 waitOnArrays e ns 
-      False -> waitOnArrays e ns
+
+-- Wait for arrays while computing a score for
+-- each device. A high score means more arrays
+-- are computed on that very device. 
+waitOnArrays :: Env aenv
+                -> S.Set (Idx_ aenv)
+                -> IO (M.Map MemID Int)
+waitOnArrays env s =
+  waitOnArrays' env s (M.empty) 
   where
-    awaitAll :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
-    awaitAll (Asyncs a) = go (arrays (undefined :: arrs)) a
+    waitOnArrays' :: Env aenv
+                  -> S.Set (Idx_ aenv)
+                  -> M.Map MemID Int
+                  -> IO (M.Map MemID Int)
+
+    waitOnArrays' Aempty _ sm = return sm 
+    waitOnArrays' (Apush e arr) reqset sm =
+      do
+        let needed = S.member (Idx_ ZeroIdx) reqset
+            ns     = strengthen reqset 
     
-    go :: ArraysR a -> AsyncsR a -> IO ()
-    go ArraysRunit         A_Unit = return ()
-    go (ArraysRpair a1 a2) (A_Pair b1 b2) =
-      do go a1 b1
-         go a2 b2
-    go ArraysRarray        (A_Array a) =
-      waitAsync a >> return ()
-      
+        case needed of
+          True -> do sm' <- awaitAll arr sm 
+                     waitOnArrays' e ns sm'
+          False -> waitOnArrays' e ns sm
+ 
+    awaitAll :: forall arrs. Arrays arrs
+             => Asyncs arrs -> M.Map MemID Int -> IO (M.Map MemID Int) 
+    awaitAll (Asyncs a) sm = go (arrays (undefined :: arrs)) a sm
+    
+    go :: ArraysR a -> AsyncsR a -> M.Map MemID Int -> IO (M.Map MemID Int) 
+    go ArraysRunit         A_Unit sm = return sm
+    go (ArraysRpair a1 a2) (A_Pair b1 b2) sm =
+      do sm1 <- go a1 b1 sm
+         go a2 b2 sm1 
+    go ArraysRarray        (A_Array a) sm =
+      do
+        loc <- waitAsyncLoc a
+        let elts = S.elems loc
+            sm' = incrementAll elts sm 
+        return sm' 
+    incrementAll [] sm = sm
+    incrementAll (x:xs) sm =
+      M.alter (\val ->
+                -- I Have a feeling there is a function for this
+                -- in the prelude 
+                case val of
+                  Nothing -> Just 1
+                  Just a -> Just (a + 1)) x sm 
+
+                  
+-- waitOnArrays :: Env aenv
+--              -> S.Set (Idx_ aenv)
+--              -> IO (M.Map MemID Int)
+
+-- waitOnArrays :: Env aenv -> S.Set (Idx_ aenv) -> IO ()
+-- waitOnArrays Aempty _ = return ()
+-- waitOnArrays (Apush e arr) reqset =
+--   do
+--     let needed = S.member (Idx_ ZeroIdx) reqset
+--         ns     = strengthen reqset 
+    
+--     case needed of
+--       True -> do awaitAll arr
+--                  waitOnArrays e ns 
+--       False -> waitOnArrays e ns
+--   where
+--     awaitAll :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
+--     awaitAll (Asyncs a) = go (arrays (undefined :: arrs)) a
+    
+--     go :: ArraysR a -> AsyncsR a -> IO ()
+--     go ArraysRunit         A_Unit = return ()
+--     go (ArraysRpair a1 a2) (A_Pair b1 b2) =
+--       do go a1 b1
+--          go a2 b2
+--     go ArraysRarray        (A_Array a) =
+--       waitAsync a >> return ()
+
+
 -- Evaluate an PreOpenAcc or ExecAcc or something under the influence
 -- of the scheduler
 -- ------------------------------------------------------------------
@@ -369,8 +425,10 @@ runDelayedAccMulti !acc =
     debugMsg $ "There is at least one device free: " ++ show (not  b)
     
     
-    runSched $ collectAsyncs =<< runDelayedOpenAccMulti acc Aempty 
- 
+    runSched $
+      collectAsyncs =<< runDelayedOpenAccMulti acc Aempty
+            --sillySched  
+            affinitySched
 
 -- Magic
 -- ----- 
@@ -404,13 +462,75 @@ matchArraysR (ArraysRpair s1 s2) (ArraysRpair t1 t2)
 matchArraysR _ _
   = Nothing
 
+------------------------------------------------------------
+-- Schedulers 
+
+type ArrayScore = M.Map MemID Int 
+
+type Scheduler = ArrayScore -> IO DeviceState
+
+
+-- A silly scheduler that performs no smarts 
+sillySched :: Scheduler 
+sillySched _ = 
+  withMVar (schedLock schedState) $ \_ ->
+  do
+    -- Do scheduler work here
+    -- Select suitable device
+    let alldevices = A.elems $ deviceState schedState
+        numdevs    = length alldevices
+                       
+    freedevs <- filterM (\x ->
+                          do m <- tryReadMVar (devDoneMVar x)
+                             return $ isJust m) alldevices
+    let mydev = head freedevs 
+
+    takeMVar (devDoneMVar mydev)
+    return mydev
+
+-- a scheduler that performs a minimum of smarts 
+affinitySched :: Scheduler
+affinitySched arrayScore =
+  withMVar (schedLock schedState)  $ \_ ->
+  do 
+    let alldevices = A.elems $ deviceState schedState
+        numdevs    = length alldevices
+                       
+    freedevs <- filterM (\x ->
+                          do m <- tryReadMVar (devDoneMVar x)
+                             return $ isJust m) alldevices
+    
+    case freedevs of
+      [] -> $internalError "affinitySched" "no free devices"
+      [x] -> takeMVar (devDoneMVar x) >> return x 
+      xs ->
+        let devScores' = [(x,fromMaybe 0 y) | x <- xs
+                         , let y = M.lookup (devID x) arrayScore]
+            devScores = reverse $ L.sortBy (\ (a,b) (c,d) -> b `compare` d) devScores'
+            device = fst $ head devScores
+        in
+         do
+           debugMsg $ "Device Scores: " ++ show (L.map (\ (x,y) -> (devID x,y)) devScores )
+
+           takeMVar (devDoneMVar device) >> return device  
+      
+
+-- Even smarter scheduler ?
+smartSched :: Scheduler
+smartSched = undefined 
+  
+
+
+
 
 -- This is the multirunner for DelayedOpenAcc
 -- ------------------------------------------
-runDelayedOpenAccMulti :: Arrays arrs => DelayedOpenAcc aenv arrs
-                       -> Env aenv 
+runDelayedOpenAccMulti :: Arrays arrs
+                       => DelayedOpenAcc aenv arrs
+                       -> Env aenv
+                       -> Scheduler
                        -> SchedMonad (Asyncs arrs) 
-runDelayedOpenAccMulti !acc !aenv =
+runDelayedOpenAccMulti !acc !aenv scheduler =
   do
     liftIO $ debugMsg $ "runDelayedOpenAccMulti: "
     traverseAcc acc aenv 
@@ -467,10 +587,9 @@ runDelayedOpenAccMulti !acc !aenv =
 
     -- This performs the main part of the scheduler work. 
     -- --------------------------------------------------
-    perform :: forall aenv arrs. Arrays arrs =>  DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Asyncs arrs) 
+    perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Asyncs arrs) 
     perform a env = do
       arrayOnTheWay <- liftIO $ asyncs (undefined :: arrs)   
-      --st <- ask
 
       -- Here! Fork of a thread that waits for all the
       -- arrays that "a" depends upon to be computed.
@@ -485,32 +604,21 @@ runDelayedOpenAccMulti !acc !aenv =
                let !dependencies = arrayRefs a
                debugMsg $ "Waiting for: " ++ show (length (S.toList dependencies))
                -- Wait for those arrays to be computed     
-               waitOnArrays env dependencies   
+               arrayScore <- waitOnArrays env dependencies   
 
                -- Replace following code
                -- with a "getSuitableWorker" function 
                -- Wait for at least one free device.
                debugMsg $ "Waiting for a free device"
-               () <- liftIO $ readChan (freeDevs schedState) --schedState)
+               () <- liftIO $ readChan (freeDevs schedState) --schedState
+               
                -- If there is a () here, this means
-               -- I have reserved one device. 
+               -- I have reserved one device.
+               -- But there can still be many to select from. 
                debugMsg $ "There is at least one free device, proceed!"
-               -- To get somewhere, grab head.
-               mydevstate <- withMVar (schedLock schedState) $ \_ ->
-                 do
-                   -- Do scheduler work here
-                   -- Select suitable device
-                   let alldevices = A.elems $ deviceState schedState
-                       numdevs    = length alldevices
-                       
-                   freedevs <- filterM (\x ->
-                                         do m <- tryReadMVar (devDoneMVar x)
-                                            return $ isJust m) alldevices
-                   let mydev = head freedevs -- should be something
 
-                   takeMVar (devDoneMVar mydev)
-                   return mydev
-                   
+               mydevstate <- scheduler arrayScore 
+               
                -- We still need this info for copies 
                let alldevices = deviceState schedState
                    devid      = devID mydevstate 
@@ -755,16 +863,17 @@ data Async t = Async (MVar (t, Set MemID))
 newEmptyAsync :: IO (Async t)
 newEmptyAsync = Async <$> newEmptyMVar 
 
+-- wait on an Async 
 waitAsync :: Async t -> IO ()
-waitAsync (Async tloc) =
-  do
-     debugMsg "waitAsync: taking MVar (waiting for array)" 
-     --(t,loc) <- takeMVar tloc
-     withMVar tloc $ \ _ -> 
-       debugMsg "waitAsync: releasing MVar" 
-     --putMVar tloc (t,loc)
-     --return (t,loc) 
+waitAsync a =
+  waitAsyncLoc a >> return ()  
 
+-- wait on an Async and provide its location data 
+waitAsyncLoc :: Async t -> IO (Set MemID)
+waitAsyncLoc (Async tloc) =
+  withMVar tloc $ \ (t,loc) ->
+    return loc
+    
 takeAsync :: Async t -> IO (t,Set MemID)
 takeAsync (Async tloc) = takeMVar tloc 
 
@@ -837,8 +946,6 @@ collectAsyncs (Asyncs !arrs) =
         -- Copy out from device 
         !() <- liftIO $ CUDA.evalCUDA ctx $ peekArray t 
         return t 
- 
-
 
 ------------------------------------------------------- 
 
