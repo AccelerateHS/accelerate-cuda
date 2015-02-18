@@ -175,8 +175,9 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   CUDA.initialise []
   debugMsg $ "InitScheduler"
 
-  -- it is possible to virtualize each device 
-  devs <- createDeviceThreads 4 
+  -- it is possible to virtualize each device
+  -- 1 = No virtualization. 
+  devs <- createDeviceThreads 1
   let numDevs = length devs 
       devids  = L.map fst devs
       
@@ -495,7 +496,7 @@ runDelayedOpenAccMulti !acc !aenv =
                -- I have reserved one device. 
                debugMsg $ "There is at least one free device, proceed!"
                -- To get somewhere, grab head.
-               mydevstate <- -- withMVar (schedLock schedState) $ \_ ->
+               mydevstate <- withMVar (schedLock schedState) $ \_ ->
                  do
                    -- Do scheduler work here
                    -- Select suitable device
