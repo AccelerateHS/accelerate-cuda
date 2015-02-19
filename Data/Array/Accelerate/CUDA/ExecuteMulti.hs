@@ -422,8 +422,8 @@ runDelayedAccMulti !acc scheduler =
   do
     debugMsg $ "runDelayedAccMulti: "
 
-    b <- isEmptyChan (freeDevs schedState)
-    debugMsg $ "There is at least one device free: " ++ show (not  b)
+    --b <- isEmptyChan (freeDevs schedState)
+    --debugMsg $ "There is at least one device free: " ++ show (not  b)
     
     
     runSched $
