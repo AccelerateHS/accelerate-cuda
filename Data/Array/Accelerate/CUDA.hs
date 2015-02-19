@@ -219,7 +219,9 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute hiding (Async)
-import Data.Array.Accelerate.CUDA.ExecuteMulti (runDelayedAccMulti) 
+import Data.Array.Accelerate.CUDA.ExecuteMulti (runDelayedAccMulti
+                                               , affinitySched
+                                               , sillySched ) 
 
 #if ACCELERATE_DEBUG
 import Data.Array.Accelerate.Debug
@@ -245,7 +247,7 @@ runMulti :: Arrays a =>  Acc a -> a
 runMulti a = unsafePerformIO $ execute
   where
     !acc    = convertAccWith config a
-    execute = runDelayedAccMulti acc 
+    execute = runDelayedAccMulti acc affinitySched
 
 -- | As 'run', but allow the computation to continue running in a thread and
 -- return immediately without waiting for the result. The status of the

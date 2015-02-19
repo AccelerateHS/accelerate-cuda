@@ -180,7 +180,7 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   -- It is not implemented properly though.
   -- We need to create one context per real device
   -- and share between the virtual workers. 
-  devs <- createDeviceThreads 4
+  devs <- createDeviceThreads 1
   let numDevs = length devs 
       devids  = L.map fst devs
       
@@ -416,8 +416,9 @@ schedState :: SchedState
 schedState = initScheduler
 
 runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
+                   -> Scheduler 
                    -> IO arrs
-runDelayedAccMulti !acc =
+runDelayedAccMulti !acc scheduler =
   do
     debugMsg $ "runDelayedAccMulti: "
 
@@ -426,9 +427,7 @@ runDelayedAccMulti !acc =
     
     
     runSched $
-      collectAsyncs =<< runDelayedOpenAccMulti acc Aempty
-            --sillySched  
-            affinitySched
+      collectAsyncs =<< runDelayedOpenAccMulti acc Aempty scheduler 
 
 -- Magic
 -- ----- 
