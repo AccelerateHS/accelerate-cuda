@@ -64,7 +64,7 @@ import System.IO
 import System.IO.Unsafe
 
 debug :: Bool
-debug = True  
+debug = False
 
 {-# NOINLINE debugLock #-} 
 debugLock :: MVar Integer 
