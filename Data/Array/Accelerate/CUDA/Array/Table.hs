@@ -88,9 +88,9 @@ instance RemoteMemory CRM where
 
   castPtr _ = CUDA.castDevPtr
 
-  totalMem = ReaderT . const $ fst <$> CUDA.getMemInfo
+  totalMem = ReaderT . const $ snd <$> CUDA.getMemInfo
 
-  availableMem = ReaderT . const $ snd <$> CUDA.getMemInfo
+  availableMem = ReaderT . const $ fst <$> CUDA.getMemInfo
 
   chunkSize = return 1024
 
