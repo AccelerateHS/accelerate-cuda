@@ -9,6 +9,7 @@
 {-# LANGUAGE TypeFamilies             #-}
 {-# LANGUAGE FlexibleInstances        #-}
 {-# LANGUAGE ImpredicativeTypes       #-}
+{-# LANGUAGE ViewPatterns             #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# OPTIONS_GHC -fno-warn-orphans        #-}
 -- |
@@ -211,12 +212,13 @@ runProgram hndl fun input output = do
           shbuf <- liftIO $ mallocArray (P.length sh')
           liftIO $ pokeArray shbuf (map fromIntegral sh')
 
-          dptrs <- devicePtrsToWordPtrs adata <$> devicePtrsOfArrayData adata
-          pbuf  <- liftIO $ mallocArray (P.length dptrs)
-          liftIO $ pokeArray pbuf dptrs
+          withDevicePtrs adata Nothing $ \dptrs -> do
+            let wptrs = devicePtrsToWordPtrs adata dptrs
+            pbuf  <- liftIO $ mallocArray (P.length wptrs)
+            liftIO $ pokeArray pbuf wptrs
 
-          sa <- liftIO $ newStablePtr (EArray a)
-          return (shbuf, pbuf, sa)
+            sa <- liftIO $ newStablePtr (EArray a)
+            return (shbuf, pbuf, sa)
 
     marshalOut (ArraysRpair aR1 aR2) (x,y) ptr = do
       ptr' <- marshalOut aR1 x ptr

@@ -21,7 +21,9 @@
 module Data.Array.Accelerate.CUDA.Array.Table (
 
   -- Tables for host/device memory associations
-  MemoryTable, new, lookup, malloc, free, insertUnmanaged, reclaim
+  MemoryTable, new, lookup, malloc, free, insertUnmanaged, reclaim,
+
+  CRM, ContextId, contextId
 
 ) where
 
@@ -113,7 +115,10 @@ malloc !ctx !ref !ad !n = do
    case IM.lookup (contextId ctx) ct of
            Nothing  -> trace "malloc/context not found" $ insertContext ctx ct
            Just mt -> return (ct, mt)
-  blocking $ MT.malloc mt ad n
+  mp <- blocking $ MT.malloc mt ad n :: IO (Maybe (DevicePtr b))
+  case mp of
+    Nothing -> throwIO (ExitCode OutOfMemory)
+    Just p  -> return p
 
 -- Explicitly free an array in the MemoryTable. Has the same properties as
 -- `Data.Array.Accelerate.Array.Memory.Table.free`

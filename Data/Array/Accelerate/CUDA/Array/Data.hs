@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE TypeFamilies        #-}
 {-# LANGUAGE TypeOperators       #-}
 -- |
@@ -28,7 +29,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
-  devicePtrsOfArrayData, advancePtrsOfArrayData,
+  withDevicePtrs, advancePtrsOfArrayData,
   devicePtrsFromList, devicePtrsToWordPtrs,
 
   -- * Garbage collection
@@ -43,6 +44,7 @@ import Control.Applicative
 import Control.Monad.Reader                             ( asks )
 import Control.Monad.State                              ( gets )
 import Control.Monad.Trans                              ( liftIO )
+import Control.Monad.Trans.Cont
 import Foreign.C.Types
 import Foreign.Ptr
 
@@ -54,7 +56,9 @@ import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt,
 import Data.Array.Accelerate.Array.Representation       ( size, SliceIndex )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
-import Data.Array.Accelerate.CUDA.Array.Table
+import Data.Array.Accelerate.CUDA.Array.Cache
+import Data.Array.Accelerate.CUDA.Persistent            ( KernelTable )
+import Data.Array.Accelerate.CUDA.Execute.Stream        ( Reservoir )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Driver.Stream             as CUDA
@@ -85,6 +89,14 @@ run f = do
   ctx    <- asks activeContext
   mt     <- gets memoryTable
   liftIO $! f ctx mt
+
+run' :: (Context -> MemoryTable -> KernelTable -> Reservoir -> IO a) -> CIO a
+run' f = do
+  ctx    <- asks activeContext
+  mt     <- gets memoryTable
+  kt     <- gets kernelTable
+  rsv    <- gets streamReservoir
+  liftIO $! f ctx mt kt rsv
 
 -- CPP hackery to generate the cases where we dispatch to the worker function handling
 -- elementary types.
@@ -444,61 +456,71 @@ marshalDevicePtrs :: ArrayElt e => ArrayData e -> Prim.DevicePtrs e -> [CUDA.Fun
 marshalDevicePtrs !adata ptrs = map (CUDA.VArg . CUDA.wordPtrToDevPtr) $ devicePtrsToWordPtrs adata ptrs
 
 -- |Wrap the device pointers corresponding to a host-side array into arguments
--- that can be passed to a kernel upon invocation.
+-- that can be passed to a kernel upon invocation and call the
+-- supplied continuation. Any asynchronous CUDA functions called by the
+-- continuation must be in the same stream as given by the 2nd argument.
 --
-marshalArrayData :: ArrayElt e => ArrayData e -> CIO [CUDA.FunParam]
-marshalArrayData !adata = run doMarshal
+marshalArrayData :: ArrayElt e => ArrayData e -> Maybe CUDA.Stream -> ([CUDA.FunParam] -> CIO b) -> CIO b
+marshalArrayData !adata ms f = run' doMarshal
   where
-    doMarshal !ctx !mt = marshalR arrayElt adata
+    doMarshal !ctx !mt !kt !rsv = runContT (marshalR arrayElt adata) (evalCUDAState ctx mt kt rsv . f)
       where
-        marshalR :: ArrayEltR e -> ArrayData e -> IO [CUDA.FunParam]
+        marshalR :: ArrayEltR e -> ArrayData e -> ContT b IO [CUDA.FunParam]
         marshalR ArrayEltRunit             _  = return []
         marshalR (ArrayEltRpair aeR1 aeR2) ad = (++) <$> marshalR aeR1 (fst ad)
                                                      <*> marshalR aeR2 (snd ad)
-        marshalR aer                       ad = return <$> marshalPrim aer ctx mt ad
+        marshalR aer                       ad = do
+          param <- ContT $ marshalPrim aer ctx mt ad ms
+          return [param]
         --
-        marshalPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> IO CUDA.FunParam
+        marshalPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Maybe CUDA.Stream -> (CUDA.FunParam -> IO b) -> IO b
         mkPrimDispatch(marshalPrim,Prim.marshalArrayData)
 
 
 -- |Bind the device memory arrays to the given texture reference(s), setting
--- appropriate type. The arrays are bound, and the list of textures thereby
--- consumed, in projection index order --- i.e. right-to-left
+-- appropriate type, and call the supplied continuation. The arrays are bound,
+-- and the list of textures thereby consumed, in projection index order
+-- --- i.e. right-to-left
+-- The textures should only be considered bound during the execution of the
+-- continuation. Any asynchronous CUDA functions called by the continuation
+-- must be in the same stream as given by the 4th argument.
 --
-marshalTextureData :: ArrayElt e => ArrayData e -> Int -> [CUDA.Texture] -> CIO ()
-marshalTextureData !adata !n !texs = run doMarshal
+marshalTextureData :: ArrayElt e => ArrayData e -> Int -> [CUDA.Texture] -> Maybe CUDA.Stream -> ([CUDA.Texture] -> CIO b) -> CIO b
+marshalTextureData !adata !n !texs ms f = run' doMarshal
   where
-    doMarshal !ctx !mt = marshalR arrayElt adata texs >> return ()
+    doMarshal !ctx !mt !kt !rsv = runContT (marshalR arrayElt adata texs) (evalCUDAState ctx mt kt rsv . \(_,ts) -> f ts)
       where
-        marshalR :: ArrayEltR e -> ArrayData e -> [CUDA.Texture] -> IO Int
-        marshalR ArrayEltRunit             _  _ = return 0
+        marshalR :: ArrayEltR e -> ArrayData e -> [CUDA.Texture] -> ContT b IO (Int, [CUDA.Texture])
+        marshalR ArrayEltRunit             _  _ = return (0, [])
         marshalR (ArrayEltRpair aeR1 aeR2) ad t
-          = do r <- marshalR aeR2 (snd ad) t
-               l <- marshalR aeR1 (fst ad) (drop r t)
-               return (l + r)
+          = do (r, rs) <- marshalR aeR2 (snd ad) t
+               (l, ls) <- marshalR aeR1 (fst ad) (drop r t)
+               return (l + r, ls ++ rs)
         marshalR aer                       ad t
-          = do marshalPrim aer ctx mt ad n (head t)
-               return 1
+          = do param <- ContT $ marshalPrim aer ctx mt ad n (head t) ms
+               return (1, [param])
         --
-        marshalPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> CUDA.Texture -> IO ()
+        marshalPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> CUDA.Texture -> Maybe CUDA.Stream -> (CUDA.Texture -> IO b) -> IO b
         mkPrimDispatch(marshalPrim,Prim.marshalTextureData)
 
 
--- |Raw device pointers associated with a host-side array
+-- | Perform an operation using the device pointers of the given array. Any
+-- asynchronous CUDA functions called by the supplied continuation must be in
+-- the same stream as given by the second argument.
 --
-devicePtrsOfArrayData :: ArrayElt e => ArrayData e -> CIO (Prim.DevicePtrs e)
-devicePtrsOfArrayData !adata = run ptrs
+withDevicePtrs :: ArrayElt e => ArrayData e -> Maybe CUDA.Stream -> (Prim.DevicePtrs e -> CIO b) -> CIO b
+withDevicePtrs !adata ms f = run' ptrs
   where
-    ptrs !ctx !mt = ptrsR arrayElt adata
+    ptrs !ctx !mt !kt !rsv = runContT (ptrsR arrayElt adata) (evalCUDAState ctx mt kt rsv . f)
       where
-        ptrsR :: ArrayEltR e -> ArrayData e -> IO (Prim.DevicePtrs e)
+        ptrsR :: ArrayEltR e -> ArrayData e -> ContT b IO (Prim.DevicePtrs e)
         ptrsR ArrayEltRunit             _  = return ()
         ptrsR (ArrayEltRpair aeR1 aeR2) ad = (,) <$> ptrsR aeR1 (fst ad)
                                                  <*> ptrsR aeR2 (snd ad)
-        ptrsR aer                       ad = ptrsPrim aer ctx mt ad
+        ptrsR aer                       ad = ContT $ ptrsPrim aer ctx mt ad ms
         --
-        ptrsPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> IO (Prim.DevicePtrs e)
-        mkPrimDispatch(ptrsPrim,Prim.devicePtrsOfArrayData)
+        ptrsPrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Maybe CUDA.Stream -> (Prim.DevicePtrs e -> IO b) -> IO b
+        mkPrimDispatch(ptrsPrim,Prim.withDevicePtrs)
 
 
 -- |Advance a set of device pointers by the given number of elements each

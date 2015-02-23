@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -26,7 +27,7 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
-  devicePtrsOfArrayData, advancePtrsOfArrayData
+  withDevicePtrs, advancePtrsOfArrayData
 
 ) where
 
@@ -34,8 +35,6 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 import Prelude                                          hiding ( lookup )
 import Data.Int
 import Data.Word
-import Data.Maybe
-import Data.Functor
 import Data.Typeable
 import Control.Monad
 import Language.Haskell.TH
@@ -52,9 +51,10 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.Array.Memory               ( PrimElt )
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Array.Slice          ( TransferDesc(..), blocksOf )
-import Data.Array.Accelerate.CUDA.Array.Table
+import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc(..), blocksOf )
+import Data.Array.Accelerate.CUDA.Array.Cache
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 
@@ -157,7 +157,7 @@ $( runQ [d| instance TextureData CULong where format _ = (CUDA.Word32, sizeOf (u
 -- release any inaccessible arrays and try again.
 --
 mallocArray
-    :: forall e a. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e
@@ -166,10 +166,10 @@ mallocArray
 mallocArray !ctx !mt !ad !n0 = do
   let !n        = 1 `max` n0
       !bytes    = n * sizeOf (undefined :: a)
-  exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+  exists <- contains ctx mt ad
   unless exists $ do
     message $ "mallocArray: " ++ showBytes bytes
-    _ <- malloc ctx mt ad n     :: IO (CUDA.DevicePtr a)
+    malloc ctx mt ad False n     :: IO ()
     return ()
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
@@ -177,7 +177,7 @@ mallocArray !ctx !mt !ad !n0 = do
 -- array is shared on the heap, we do not need to do anything.
 --
 useArray
-    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e
@@ -187,11 +187,13 @@ useArray !ctx !mt !ad !n0 =
   let src    = ptrsOfArrayData ad
       !n     = 1 `max` n0
       !bytes = n * sizeOf (undefined :: a)
+
+      run dst = transfer "useArray/malloc" bytes $ CUDA.pokeArray n src dst
   in do
-    exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+    exists <- contains ctx mt ad
     unless exists $ do
-      dst <- malloc ctx mt ad n
-      transfer "useArray/malloc" bytes $ CUDA.pokeArray n src dst
+      malloc ctx mt ad True n
+      withDevicePtrs ctx mt ad Nothing run
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
 -- device and upload an existing array. This is specialised because if the host
@@ -208,18 +210,15 @@ useArraySlice
 useArraySlice !ctx !mt !ad_host !ad_dev !tdesc =
   let src    = ptrsOfArrayData ad_host
       k      = sizeOf (undefined :: a)
-  in do
-    maybe_dst <- lookup ctx mt ad_dev :: IO (Maybe (CUDA.DevicePtr a))
-    case maybe_dst of
-      Just dst ->
+      run dst =
         sequence_
           [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
           | (src_offset, dst_offset, size) <- blocksOf tdesc]
-      Nothing ->
-        do dst <- malloc ctx mt ad_dev (k * nblocks tdesc * blocksize tdesc) :: IO (CUDA.DevicePtr a)
-           sequence_
-             [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
-             | (src_offset, dst_offset, size) <- blocksOf tdesc]
+  in do
+    exists <- contains ctx mt ad_dev
+    unless exists $ do
+      malloc ctx mt ad_dev True (k * nblocks tdesc * blocksize tdesc)
+      withDevicePtrs ctx mt ad_dev Nothing run
 
 
 useArrayAsync
@@ -234,11 +233,13 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
   let src    = CUDA.HostPtr (ptrsOfArrayData ad)
       !n     = 1 `max` n0
       !bytes = n * sizeOf (undefined :: a)
+
+      run dst = transfer "useArray/malloc" bytes $ CUDA.pokeArrayAsync n src dst ms
   in do
-    exists <- isJust <$> (lookup ctx mt ad :: IO (Maybe (CUDA.DevicePtr a)))
+    exists <- contains ctx mt ad
     unless exists $ do
-      dst <- malloc ctx mt ad n
-      transfer "useArrayAsync/malloc" bytes $ CUDA.pokeArrayAsync n src dst ms
+      malloc ctx mt ad True n
+      withDevicePtrs ctx mt ad ms run
 
 
 useDevicePtrs
@@ -261,7 +262,7 @@ useDevicePtrs !ctx !mt !ptr !n0 =
 -- Read a single element from an array at the given row-major index
 --
 indexArray
-    :: forall e a. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e
@@ -269,7 +270,7 @@ indexArray
     -> IO a
 indexArray !ctx !mt !ad !i =
   alloca                            $ \dst ->
-  devicePtrsOfArrayData ctx mt ad >>= \src -> do
+  withDevicePtrs ctx mt ad Nothing $ \src -> do
     message $ "indexArray: " ++ showBytes (sizeOf (undefined::a))
     CUDA.peekArray 1 (src `CUDA.advanceDevPtr` i) dst
     peek dst
@@ -279,21 +280,21 @@ indexArray !ctx !mt !ad !i =
 -- respect to the host, but will never overlap kernel execution.
 --
 copyArray
-    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e              -- source array
     -> ArrayData e              -- destination array
     -> Int                      -- number of array elements
     -> IO ()
-copyArray !ctx !mt !from !to !n = do
-  src <- devicePtrsOfArrayData ctx mt from
-  dst <- devicePtrsOfArrayData ctx mt to
-  transfer "copyArray" (n * sizeOf (undefined :: b)) $
+copyArray !ctx !mt !from !to !n =
+  withDevicePtrs ctx mt from Nothing $ \src ->
+  withDevicePtrs ctx mt to Nothing $ \dst -> do
+  transfer "copyArray" (n * sizeOf (undefined :: a)) $
     CUDA.copyArray n src dst
 
 copyArrayAsync
-    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e              -- source array
@@ -301,40 +302,40 @@ copyArrayAsync
     -> Int                      -- number of array elements
     -> Maybe CUDA.Stream
     -> IO ()
-copyArrayAsync !ctx !mt !from !to !n !mst = do
-  src <- devicePtrsOfArrayData ctx mt from
-  dst <- devicePtrsOfArrayData ctx mt to
-  transfer "copyArrayAsync" (n * sizeOf (undefined :: b)) $
-    CUDA.copyArrayAsync n src dst mst
+copyArrayAsync !ctx !mt !from !to !n !mst =
+  withDevicePtrs ctx mt from Nothing$ \src ->
+  withDevicePtrs ctx mt to Nothing $ \dst -> do
+    transfer "copyArrayAsync" (n * sizeOf (undefined :: a)) $
+      CUDA.copyArrayAsync n src dst mst
 
 -- Copy data between two device arrays that exist in different contexts and/or
 -- devices.
 --
 copyArrayPeer
-    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => MemoryTable
     -> ArrayData e -> Context   -- source array and context
     -> ArrayData e -> Context   -- destination array and context
     -> Int                      -- number of array elements
     -> IO ()
-copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n = do
-  src <- devicePtrsOfArrayData ctxSrc mt from
-  dst <- devicePtrsOfArrayData ctxDst mt to
-  transfer "copyArrayPeer" (n * sizeOf (undefined :: b)) $
+copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n =
+  withDevicePtrs ctxSrc mt from Nothing $ \src ->
+  withDevicePtrs ctxDst mt to Nothing $ \dst -> do
+  transfer "copyArrayPeer" (n * sizeOf (undefined :: a)) $
     CUDA.copyArrayPeer n src (deviceContext ctxSrc) dst (deviceContext ctxDst)
 
 copyArrayPeerAsync
-    :: forall e a b. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr b, Typeable a, Typeable b, Typeable e, Storable b)
+    :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => MemoryTable
     -> ArrayData e -> Context   -- source array and context
     -> ArrayData e -> Context   -- destination array and context
     -> Int                      -- number of array elements
     -> Maybe CUDA.Stream
     -> IO ()
-copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st = do
-  src <- devicePtrsOfArrayData ctxSrc mt from
-  dst <- devicePtrsOfArrayData ctxDst mt to
-  transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: b)) $
+copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st =
+  withDevicePtrs ctxSrc mt from st $ \src ->
+  withDevicePtrs ctxDst mt to st $ \dst -> do
+  transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: a)) $
     CUDA.copyArrayPeerAsync n src (deviceContext ctxSrc) dst (deviceContext ctxDst) st
 
 
@@ -348,7 +349,7 @@ peekArray
     -> Int
     -> IO ()
 peekArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \src ->
+  withDevicePtrs ctx mt ad Nothing $ \src ->
     transfer "peekArray" (n * sizeOf (undefined :: a)) $
       CUDA.peekArray n src (ptrsOfArrayData ad)
 
@@ -361,7 +362,7 @@ peekArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 peekArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \src ->
+  withDevicePtrs ctx mt ad st $ \src ->
     transfer "peekArrayAsync" (n * sizeOf (undefined :: a)) $
       CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) st
 
@@ -376,7 +377,7 @@ pokeArray
     -> Int
     -> IO ()
 pokeArray !ctx !mt !ad !n =
-  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+  withDevicePtrs ctx mt ad Nothing $ \dst ->
     transfer "pokeArray: " (n * sizeOf (undefined :: a)) $
       CUDA.pokeArray n (ptrsOfArrayData ad) dst
 
@@ -389,7 +390,7 @@ pokeArrayAsync
     -> Maybe CUDA.Stream
     -> IO ()
 pokeArrayAsync !ctx !mt !ad !n !st =
-  devicePtrsOfArrayData ctx mt ad >>= \dst ->
+  withDevicePtrs ctx mt ad st $ \dst ->
     transfer "pokeArrayAsync: " (n * sizeOf (undefined :: a)) $
       CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
@@ -405,49 +406,63 @@ marshalDevicePtrs !_ !ptr = CUDA.VArg ptr
 
 
 -- Wrap a device pointer corresponding corresponding to a host-side array into
--- arguments that can be passed to a kernel upon invocation
+-- arguments that can be passed to a kernel upon invocation and call the
+-- supplied continuation. Any asynchronous CUDA functions called by the
+-- continuation must be in the same stream as given by the 4th argument.
 --
 marshalArrayData
-    :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable b, Typeable e)
+    :: (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e
-    -> IO CUDA.FunParam
-marshalArrayData !ctx !mt !ad = marshalDevicePtrs ad <$> devicePtrsOfArrayData ctx mt ad
+    -> Maybe CUDA.Stream
+    -> (CUDA.FunParam -> IO b)
+    -> IO b
+marshalArrayData !ctx !mt !ad ms run = withDevicePtrs ctx mt ad ms (run . marshalDevicePtrs ad)
 
 
--- Bind device memory to the given texture reference, setting appropriate type
+-- Bind device memory to the given texture reference, setting appropriate type,
+-- and call the supplied continuation. The texture should only be considered
+-- bound during the execution of the continuation. Any asynchronous CUDA
+-- functions called by the continuation must be in the same stream as given by
+-- the 6th argument.
 --
 marshalTextureData
-    :: forall a e. (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr a, Typeable a, Typeable e, Storable a, TextureData a)
+    :: forall a e b. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a, TextureData a)
     => Context
     -> MemoryTable
     -> ArrayData e              -- host array
     -> Int                      -- number of elements
     -> CUDA.Texture             -- texture reference to bind array to
-    -> IO ()
-marshalTextureData !ctx !mt !ad !n !tex =
+    -> Maybe CUDA.Stream
+    -> (CUDA.Texture -> IO b)
+    -> IO b
+marshalTextureData !ctx !mt !ad !n !tex ms run =
   let (fmt, c) = format (undefined :: a)
-  in  devicePtrsOfArrayData ctx mt ad >>= \ptr -> do
+  in  withDevicePtrs ctx mt ad ms $ \ptr -> do
         CUDA.setFormat tex fmt c
         CUDA.bind tex ptr (fromIntegral $ n * sizeOf (undefined :: a))
+        run tex
 
-
--- Lookup the device memory associated with our host array
+-- Perform an operation using the device pointer of the given array. Any
+-- asynchronous CUDA functions called by the supplied continuation must be in
+-- the same stream as given by the 4th argument.
 --
-devicePtrsOfArrayData
-    :: (ArrayElt e, DevicePtrs e ~ CUDA.DevicePtr b, Typeable e, Typeable b)
+withDevicePtrs
+    :: (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
     => Context
     -> MemoryTable
     -> ArrayData e
-    -> IO (DevicePtrs e)
-devicePtrsOfArrayData !ctx !mt !ad = do
-  mv <- lookup ctx mt ad
-  case mv of
-    Just v  -> return v
+    -> Maybe (CUDA.Stream)
+    -> (DevicePtrs e -> IO b)
+    -> IO b
+withDevicePtrs !ctx !mt !ad run ms = do
+  mb <- withRemote ctx mt ad ms run
+  case mb of
+    Just b  -> return b
     Nothing -> do
       sn <- makeStableName ad
-      $internalError "devicePtrsOfArrayData" $ "lost device memory #" ++ show (hashStableName sn)
+      $internalError "withDevicePtrs" $ "lost device memory #" ++ show (hashStableName sn)
 
 
 -- Advance device pointers by a given number of elements

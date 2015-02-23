@@ -20,7 +20,7 @@
 module Data.Array.Accelerate.CUDA.State (
 
   -- Evaluating computations
-  CIO, Context, evalCUDA,
+  CIO, Context, evalCUDA, evalCUDAState,
 
   -- Querying execution state
   defaultContext, deviceProperties, activeContext, kernelTable, memoryTable, streamReservoir,
@@ -32,7 +32,7 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, dump_gc )
 import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
-import Data.Array.Accelerate.CUDA.Array.Table           as MT ( MemoryTable, new )
+import Data.Array.Accelerate.CUDA.Array.Cache           as MT ( MemoryTable, new )
 import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
@@ -88,6 +88,14 @@ evalCUDA !ctx !acc =
     teardown    = pop >> performGC
     action      = evalStateT (runReaderT (runCIO acc) ctx) theState
 
+-- |Evaluate a CUDA array computation with the specific state. Exceptions are
+-- not caught.
+--
+-- RCE: This is unfortunately hacky, but necessary to stop device pointers
+-- leaking.
+evalCUDAState :: Context -> MemoryTable -> KernelTable -> Reservoir -> CIO a -> IO a
+evalCUDAState ctx mt kt rsv acc = evalStateT (runReaderT (runCIO acc) ctx)
+                                             (State mt kt rsv)
 
 -- Top-level mutable state
 -- -----------------------

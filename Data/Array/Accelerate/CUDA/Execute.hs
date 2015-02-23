@@ -64,6 +64,7 @@ import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
 import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
+import Control.Monad.Trans.Cont                                 ( ContT(..), evalContT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
@@ -325,32 +326,32 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
     scanOp :: Elt e => Bool -> (Z :. Int) -> CIO (Vector e)
     scanOp !left !(Z :. numElements) = do
       arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
-      out                       <- devicePtrsOfArrayData adata
-      let (!body, !sum)
-            | left      = (out, advancePtrsOfArrayData adata numElements out)
-            | otherwise = (advancePtrsOfArrayData adata 1 out, out)
-      --
-      scanCore numElements arr body sum
-      return arr
+      withDevicePtrs adata (Just stream) $ \out -> do
+        let (!body, !sum)
+              | left      = (out, advancePtrsOfArrayData adata numElements out)
+              | otherwise = (advancePtrsOfArrayData adata 1 out, out)
+        --
+        scanCore numElements arr body sum
+        return arr
 
     scan1Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e)
     scan1Op !(Z :. numElements) = do
       arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
-      body                      <- devicePtrsOfArrayData adata
-      let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
-      --
-      scanCore numElements arr body sum
-      return (Array ((),numElements) adata)
+      withDevicePtrs adata (Just stream) $ \body -> do
+        let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
+        --
+        scanCore numElements arr body sum
+        return (Array ((),numElements) adata)
 
     scan'Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e, Scalar e)
     scan'Op !(Z :. numElements) = do
       vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
       sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
-      d_vec                     <- devicePtrsOfArrayData ad_vec
-      d_sum                     <- devicePtrsOfArrayData ad_sum
-      --
-      scanCore numElements vec d_vec d_sum
-      return (vec, sum)
+      withDevicePtrs ad_vec (Just stream) $ \d_vec ->
+        withDevicePtrs ad_sum (Just stream) $ \d_sum -> do
+          --
+          scanCore numElements vec d_vec d_sum
+          return (vec, sum)
 
     scanCore
         :: forall e. Elt e
@@ -391,12 +392,12 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
       out               <- allocateArray sh'
       Array _ locks     <- allocateArray sh'            :: CIO (Array sh' Int32)
-      ((), d_locks)     <- devicePtrsOfArrayData locks  :: CIO ((), CUDA.DevicePtr Int32)
+      withDevicePtrs locks (Just stream) $ \((),d_locks) -> do
 
-      liftIO $ CUDA.memsetAsync d_locks n' 0 (Just stream)      -- TLM: overlap these two operations?
-      copyArrayAsync dfs out (Just stream)
-      execute kernel gamma aenv (size sh) (out, d_locks) stream
-      return out
+        liftIO $ CUDA.memsetAsync d_locks n' 0 (Just stream)      -- TLM: overlap these two operations?
+        copyArrayAsync dfs out (Just stream)
+        execute kernel gamma aenv (size sh) (out, d_locks) stream
+        return out
 
     -- Stencil operations. NOTE: the arguments to 'namesOfArray' must be the
     -- same as those given in the function 'mkStencil[2]'.
@@ -408,9 +409,10 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       dev       <- asks deviceProperties
 
       if computeCapability dev < Compute 2 0
-         then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr >>
-              execute kernel gamma aenv (size sh) (out, sh) stream
+         then marshalAccTex (namesOfArray "Stencil" (undefined :: a)) kernel arr (Just stream) $
+                execute kernel gamma aenv (size sh) (out, sh) stream
          else execute kernel gamma aenv (size sh) (out, arr) stream
+      execute kernel gamma aenv (size sh) (out, arr) stream
       --
       return out
 
@@ -428,10 +430,11 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
           dev   <- asks deviceProperties
 
           if computeCapability dev < Compute 2 0
-             then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) op arr1 >>
-                  marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) op arr2 >>
+             then marshalAccTex (namesOfArray "Stencil1" (undefined :: a)) op arr1 (Just stream) $
+                  marshalAccTex (namesOfArray "Stencil2" (undefined :: b)) op arr2 (Just stream) $
                   execute op gamma aenv (size sh) (out, sh1,  sh2) stream
              else execute op gamma aenv (size sh) (out, arr1, arr2) stream
+          execute op gamma aenv (size sh) (out, arr1, arr2) stream
           --
           return out
 
@@ -764,7 +767,7 @@ marshalSlice' :: SliceIndex slix sl co dim
 marshalSlice' SliceNil () = return []
 marshalSlice' (SliceAll sl)   (sh, ()) = marshalSlice' sl sh
 marshalSlice' (SliceFixed sl) (sh, n)  =
-  do x  <- marshal n
+  do x  <- evalContT $ marshal n Nothing
      xs <- marshalSlice' sl sh
      return (xs ++ x)
 
@@ -776,42 +779,42 @@ marshalSlice slix = marshalSlice' slix . fromElt
 -- Data which can be marshalled as function arguments to a kernel invocation.
 --
 class Marshalable a where
-  marshal :: a -> CIO [CUDA.FunParam]
+  marshal :: a -> Maybe Stream -> ContT b CIO [CUDA.FunParam]
 
 instance Marshalable () where
-  marshal () = return []
+  marshal () _ = return []
 
 instance Marshalable CUDA.FunParam where
-  marshal !x = return [x]
+  marshal !x _ = return [x]
 
 instance ArrayElt e => Marshalable (ArrayData e) where
-  marshal !ad = marshalArrayData ad
+  marshal !ad ms = ContT $ marshalArrayData ad ms
 
 instance Shape sh => Marshalable sh where
-  marshal !sh = marshal (reverse (shapeToList sh))
+  marshal !sh ms = marshal (reverse (shapeToList sh)) ms
 
 instance Marshalable a => Marshalable [a] where
-  marshal = concatMapM marshal
+  marshal xs ms = concatMapM (flip marshal ms) xs
 
 instance (Marshalable sh, Elt e) => Marshalable (Array sh e) where
-  marshal !(Array sh ad) = (++) <$> marshal (toElt sh :: sh) <*> marshal ad
+  marshal !(Array sh ad) ms = (++) <$> marshal (toElt sh :: sh) ms <*> marshal ad ms
 
 instance (Marshalable a, Marshalable b) => Marshalable (a, b) where
-  marshal (!a, !b) = (++) <$> marshal a <*> marshal b
+  marshal (!a, !b) ms = (++) <$> marshal a ms <*> marshal b ms
 
 instance (Marshalable a, Marshalable b, Marshalable c) => Marshalable (a, b, c) where
-  marshal (!a, !b, !c)
-    = concat <$> sequence [marshal a, marshal b, marshal c]
+  marshal (!a, !b, !c) ms
+    = concat <$> sequence [marshal a ms, marshal b ms, marshal c ms]
 
 instance (Marshalable a, Marshalable b, Marshalable c, Marshalable d)
       => Marshalable (a, b, c, d) where
-  marshal (!a, !b, !c, !d)
-    = concat <$> sequence [marshal a, marshal b, marshal c, marshal d]
+  marshal (!a, !b, !c, !d) ms
+    = concat <$> sequence [marshal a ms, marshal b ms, marshal c ms, marshal d ms]
 
 
 #define primMarshalable(ty)                                                    \
 instance Marshalable (ty) where {                                              \
-  marshal !x = return [CUDA.VArg x] }
+  marshal !x _ = return [CUDA.VArg x] }
 
 primMarshalable(Int)
 primMarshalable(Int8)
@@ -845,21 +848,23 @@ primMarshalable(CUDA.DevicePtr a)
 -- as to use the larger available caches.
 --
 
-marshalAccEnvTex :: AccKernel a -> Aval aenv -> Gamma aenv -> Stream -> CIO [CUDA.FunParam]
+marshalAccEnvTex :: AccKernel a -> Aval aenv -> Gamma aenv -> Stream -> ContT b CIO [CUDA.FunParam]
 marshalAccEnvTex !kernel !aenv (Gamma !gamma) !stream
   = flip concatMapM (Map.toList gamma)
   $ \(Idx_ !(idx :: Idx aenv (Array sh e)), i) ->
         do arr <- after stream (aprj idx aenv)
-           marshalAccTex (namesOfArray (groupOfInt i) (undefined :: e)) kernel arr
-           marshal (shape arr)
+           ContT $ \f -> marshalAccTex (namesOfArray (groupOfInt i) (undefined :: e)) kernel arr (Just stream) (f ())
+           marshal (shape arr) (Just stream)
 
-marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> CIO ()
-marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata)
-  = marshalTextureData adata (R.size sh) =<< liftIO (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
+marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> Maybe Stream -> CIO b -> CIO b
+marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata) ms run
+  = do
+      texs <- liftIO (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
+      marshalTextureData adata (R.size sh) texs ms (const run)
 
-marshalAccEnvArg :: Aval aenv -> Gamma aenv -> Stream -> CIO [CUDA.FunParam]
+marshalAccEnvArg :: Aval aenv -> Gamma aenv -> Stream -> ContT b CIO [CUDA.FunParam]
 marshalAccEnvArg !aenv (Gamma !gamma) !stream
-  = concatMapM (\(Idx_ !idx) -> marshal =<< after stream (aprj idx aenv)) (Map.keys gamma)
+  = concatMapM (\(Idx_ !idx) -> flip marshal (Just stream) =<< after stream (aprj idx aenv)) (Map.keys gamma)
 
 
 -- A lazier version of 'Control.Monad.sequence'
@@ -894,13 +899,13 @@ arguments :: Marshalable args
           -> Gamma aenv
           -> args
           -> Stream
-          -> CIO [CUDA.FunParam]
+          -> ContT b CIO [CUDA.FunParam]
 arguments !kernel !aenv !gamma !a !stream = do
   dev <- asks deviceProperties
   let marshaller | computeCapability dev < Compute 2 0   = marshalAccEnvTex kernel
                  | otherwise                             = marshalAccEnvArg
   --
-  (++) <$> marshaller aenv gamma stream <*> marshal a
+  (++) <$> marshaller aenv gamma stream <*> marshal a (Just stream)
 
 
 -- Link the binary object implementing the computation, configure the kernel
@@ -915,7 +920,7 @@ execute :: Marshalable args
         -> args                         -- arguments to marshal to the kernel function
         -> Stream                       -- Compute stream to execute in
         -> CIO ()
-execute !kernel !gamma !aenv !n !a !stream = do
+execute !kernel !gamma !aenv !n !a !stream = evalContT $ do
   args  <- arguments kernel aenv gamma a stream
   liftIO $ launch kernel (configure kernel n) args stream
 

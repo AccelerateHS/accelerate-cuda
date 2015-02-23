@@ -44,7 +44,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
 
   -- * Manipulating arrays
   DevicePtrs,
-  devicePtrsOfArray,
+  withDevicePtrs,
   indexArray,
   useArray,  useArrayAsync,
   peekArray, peekArrayAsync,
@@ -61,13 +61,15 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Array.Data
+import Data.Array.Accelerate.CUDA.Array.Data            hiding ( withDevicePtrs )
+import qualified Data.Array.Accelerate.CUDA.Array.Data  as D
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
 import Data.Array.Accelerate.CUDA.Execute.Stream        ( Stream )
 
 import Data.Typeable
 import Control.Exception                                ( bracket_ )
 import Control.Monad.Trans                              ( liftIO )
+import qualified Foreign.CUDA.Driver.Stream             as CUDA
 
 
 -- CUDA backend representation of foreign functions
@@ -131,10 +133,11 @@ canExecuteExp ff
 -- User facing utility functions
 -- -----------------------------
 
--- |Get the raw CUDA device pointers associated with an array
+-- |Get the raw CUDA device pointers associated with an array and call the given
+-- continuation.
 --
-devicePtrsOfArray :: Array sh e -> CIO (DevicePtrs (EltRepr e))
-devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
+withDevicePtrs :: Array sh e -> Maybe CUDA.Stream -> (DevicePtrs (EltRepr e) -> CIO b) -> CIO b
+withDevicePtrs (Array _ adata) = D.withDevicePtrs adata
 
 -- |Run an IO action within the given Acclerate context
 --
