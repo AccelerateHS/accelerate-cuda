@@ -422,6 +422,7 @@ config =  Phase
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
   , vectoriseSequences     = True
+  , enableAccFission       = True 
   }
 
 

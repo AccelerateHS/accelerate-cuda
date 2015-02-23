@@ -64,33 +64,8 @@ import System.IO
 import System.IO.Unsafe
 import System.Environment 
 
-{-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:140:5: Warning:
-    Defined but not used: ‘tid’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:203:7: Warning:
-    Defined but not used: ‘devids’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:406:21: Warning:
-    Defined but not used: ‘xs’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:505:9: Warning:
-    Defined but not used: ‘numdevs’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:521:9: Warning:
-    Defined but not used: ‘numdevs’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:533:48: Warning:
-    Defined but not used: ‘a’
-
-Data/Array/Accelerate/CUDA/ExecuteMulti.hs:533:54: Warning:
-    Defined but not used: ‘c’
-
--} 
-
-
 debug :: Bool
-debug = False
+debug = False 
 
 {-# NOINLINE debugLock #-} 
 debugLock :: MVar Integer 
@@ -104,6 +79,14 @@ debugMsg str =
         hPutStrLn stderr $ show n ++ ": " ++ str
         return (n+1)
 
+debugMsg_ :: String -> IO () 
+debugMsg_ str =
+  when (not debug) $ 
+    modifyMVar_ debugLock $ \n ->
+      do 
+        hPutStrLn stderr $ show n ++ ": " ++ str
+        return (n+1)
+
 
 -- Datastructures for Gang of worker threads
 -- One thread per participating device
@@ -112,10 +95,10 @@ data Done = Done -- Free to accept work
 data Work = ShutDown
           | Work (IO ()) 
 
-data DeviceState = DeviceState { devCtx      :: Context
-                               , devDoneMVar :: MVar Done
-                               , devWorkMVar :: MVar Work
-                               , devID       :: DevID
+data DeviceState = DeviceState { devCtx      :: !Context
+                               , devDoneMVar :: !(MVar Done)
+                               , devWorkMVar :: !(MVar Work)
+                               , devID       :: !DevID
                                }
                    deriving Show
 
@@ -143,9 +126,9 @@ createDeviceThreads use_devices n  = do
       numDevs = L.length devs
   
       
-  debugMsg $ "createDeviceThreads: found " ++ show numRealDevs ++
-             " real devices.\n" ++
-             "    Creating " ++ show numDevs ++ " devices after virtualization" 
+  debugMsg $ "createDeviceThreads: found " ++  -- show numRealDevs ++
+             " real devices.\n"  -- ++
+             -- "    Creating " ++ show numDevs ++ " devices after virtualization" 
   
   devs' <- zipWithM createDeviceThread [0..] devs
   
@@ -164,7 +147,7 @@ createDeviceThread devid dev = do
     debugMsg $ "Forking device work thread" 
     _ <- runInBoundThread $ forkOn devid $
            do
-             ctx <- create dev contextFlags
+             !ctx <- create dev contextFlags
              putMVar ctxMVar ctx 
              -- Bind the created context to this thread
              -- I assume that means operations within
@@ -189,9 +172,6 @@ createDeviceThread devid dev = do
                      -- w launches of a thread of its own! 
                      w
                      debugMsg $ "Exiting work loop"
-                     liftIO $ putMVar done Done
-                     liftIO $ registerAsFree schedState 
-                   
                      deviceLoop done work
                 
 -- Register a device as being free.
@@ -199,9 +179,9 @@ createDeviceThread devid dev = do
 registerAsFree :: SchedState  -> IO () 
 registerAsFree st =
   do
-    debugMsg $ "***Putting  () on free chan" 
+    -- debugMsg $ "***Putting  () on free chan" 
     writeChan (freeDevs st) () 
-    debugMsg $ "***writeChan complete!" 
+    -- debugMsg $ "***writeChan complete!" 
 
 
 
@@ -229,7 +209,7 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
       
   free <- newChan
   writeList2Chan free [()| _ <- [0..numDevs-1]] 
-  debugMsg $ "Write " ++ show numDevs ++ " ()s into Free devices chan!"
+  debugMsg $ "" -- "Write " ++ show numDevs ++ " ()s into Free devices chan!"
 
   s_lock <- newMVar () 
 
@@ -237,7 +217,7 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
                       free
                       s_lock 
       
-  debugMsg $ "InitScheduler: " ++ show st 
+  debugMsg $ "InitScheduler: " -- ++ show st 
   
   return $ st
   where
@@ -253,11 +233,11 @@ type MemID  = Int
 
 data SchedState =
   SchedState {
-      deviceState  :: A.Array Int DeviceState
+      deviceState  :: !(A.Array Int DeviceState)
       -- this is a channel, for now. 
-    , freeDevs     :: Chan ()
+    , freeDevs     :: !(Chan ())
       -- as long as there are free devices, there are ()s on this chan. 
-    , schedLock    :: MVar () 
+    , schedLock    :: !(MVar ())
     }
   deriving Show 
 
@@ -477,6 +457,7 @@ runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
                    -> IO arrs
 runDelayedAccMulti !acc scheduler =
   do
+    schedState `seq` return () 
     debugMsg $ "runDelayedAccMulti: "
     collectAsyncs =<< runDelayedOpenAccMulti acc Aempty scheduler 
 
@@ -560,7 +541,7 @@ affinitySched arrayScore =
             device = fst $ head devScores
         in
          do
-           debugMsg $ "Device Scores: " ++ show (L.map (\ (x,y) -> (devID x,y)) devScores )
+--           debugMsg $ "Device Scores: " ++ show (L.map (\ (x,y) -> (devID x,y)) devScores )
 
            takeMVar (devDoneMVar device) >> return device  
       
@@ -640,7 +621,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                 
                -- What arrays are needed to perform this piece of work 
                let !dependencies = arrayRefs a
-               debugMsg $ "Waiting for: " ++ show (length (S.toList dependencies))
+               debugMsg $ "" -- "Waiting for: " ++ show (length (S.toList dependencies))
                -- Wait for those arrays to be computed     
                arrayScore <- waitOnArrays env dependencies   
 
@@ -670,14 +651,14 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                --debugMsg $ "Device had the DONE flag" 
                          
                -- Send away work to the device
-               debugMsg $ "Launching work on device: " ++ show devid
+               debugMsg $ "" -- "Launching work on device: " ++ show devid
                liftIO $ putMVar (devWorkMVar mydevstate) $
                  Work $
                  CUDA.evalCUDA (devCtx mydevstate) $
                  -- We are now in CIO 
                  do
                    -- Transfer all arrays to chosen device.
-                   liftIO $ debugMsg $ "   Transfer arrays to device: " ++ show devid
+                   liftIO $ debugMsg $ "" -- "   Transfer arrays to device: " ++ show devid
                    !exec_env <- transferArrays alldevices devid dependencies env
                    -- Compile workload
                    liftIO $ debugMsg $ "   Compiling OpenAcc" 
@@ -693,7 +674,10 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                    -- Work is over!
 
                    -- Do this here for now!
-                   liftIO $ debugMsg $ "   Work is done, Write devDone and add to ready queue" 
+                   liftIO $ debugMsg $ "   Work is done, Write devDone and add to ready queue"
+                   liftIO $ putMVar (devDoneMVar mydevstate) Done
+                   liftIO $ registerAsFree schedState 
+                 
                    --return ()
                    -- DONE
 
@@ -948,9 +932,9 @@ putAsyncs devid a (Asyncs !arrs) =
          go a2 b2 c2
     go ArraysRarray        arr     (A_Array (Async a'))  =
       do
-         debugMsg "putAsyncs: adding array to env"
+         --debugMsg "putAsyncs: adding array to env"
          putMVar a' (arr,S.singleton devid)
-         debugMsg "putAsyncs: DONE!" 
+         --debugMsg "putAsyncs: DONE!" 
 
 -- copy a collection of Async arrays back to host
 collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
@@ -965,14 +949,9 @@ collectAsyncs (Asyncs !arrs) =
     collectR (ArraysRpair a1 a2) (A_Pair a b)   = (,) <$> collectR a1 a <*> collectR a2 b
     collectR ArraysRarray        (A_Array a)    =
       do
-        --st <- ask
-        
-        -- Wait for array to be computed 
-        --(t,loc) <- liftIO $ waitAsync a
-        --liftIO $ waitAsync a
         -- Take out and do not put back, we are done with this
         -- here 
-        (t,loc) <- liftIO $ takeAsync a
+        !(t,loc) <- liftIO $ takeAsync a
         
         -- get min from set (because the min device is likely to the
         -- most capable device) 
