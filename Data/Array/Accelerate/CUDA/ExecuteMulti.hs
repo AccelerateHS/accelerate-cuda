@@ -64,6 +64,31 @@ import System.IO
 import System.IO.Unsafe
 import System.Environment 
 
+{-
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:140:5: Warning:
+    Defined but not used: ‘tid’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:203:7: Warning:
+    Defined but not used: ‘devids’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:406:21: Warning:
+    Defined but not used: ‘xs’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:505:9: Warning:
+    Defined but not used: ‘numdevs’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:521:9: Warning:
+    Defined but not used: ‘numdevs’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:533:48: Warning:
+    Defined but not used: ‘a’
+
+Data/Array/Accelerate/CUDA/ExecuteMulti.hs:533:54: Warning:
+    Defined but not used: ‘c’
+
+-} 
+
+
 debug :: Bool
 debug = False
 
@@ -137,7 +162,7 @@ createDeviceThread devid dev = do
     done <- newMVar Done 
 
     debugMsg $ "Forking device work thread" 
-    tid <- runInBoundThread $ forkOn devid $
+    _ <- runInBoundThread $ forkOn devid $
            do
              ctx <- create dev contextFlags
              putMVar ctxMVar ctx 
@@ -200,7 +225,7 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   -- and share between the virtual workers. 
   devs <- createDeviceThreads use_devices 1
   let numDevs = length devs 
-      devids  = L.map fst devs
+      --devids  = L.map fst devs
       
   free <- newChan
   writeList2Chan free [()| _ <- [0..numDevs-1]] 
@@ -404,12 +429,13 @@ waitOnArrays env s =
         return sm' 
     incrementAll [] sm = sm
     incrementAll (x:xs) sm =
-      M.alter (\val ->
-                -- I Have a feeling there is a function for this
-                -- in the prelude 
-                case val of
-                  Nothing -> Just 1
-                  Just a -> Just (a + 1)) x sm 
+      let sm' = M.alter (\val ->
+                          -- I Have a feeling there is a function for this
+                          -- in the prelude 
+                          case val of
+                            Nothing -> Just 1
+                            Just a -> Just (a + 1)) x sm
+      in  incrementAll xs sm'
 
                   
 -- waitOnArrays :: Env aenv
