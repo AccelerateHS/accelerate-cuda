@@ -164,8 +164,19 @@ createDeviceThread devid dev = do
                      -- w launches of a thread of its own! 
                      w
                      debugMsg $ "Exiting work loop"
+                     liftIO $ putMVar done Done
+                     liftIO $ registerAsFree schedState 
+                   
                      deviceLoop done work
                 
+-- Register a device as being free.
+-- --------------------------------
+registerAsFree :: SchedState  -> IO () 
+registerAsFree st =
+  do
+    debugMsg $ "***Putting  () on free chan" 
+    writeChan (freeDevs st) () 
+    debugMsg $ "***writeChan complete!" 
 
 
 
@@ -586,16 +597,6 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
         go _ _
           = $internalError "travT" "unexpected case"
 
-
-    -- Register a device as being free.
-    -- --------------------------------
-    registerAsFree :: SchedState  -> IO () 
-    registerAsFree st =
-      do
-        debugMsg $ "***Putting  () on free chan" 
-        writeChan (freeDevs st) () 
-        debugMsg $ "***writeChan complete!" 
-
     -- This performs the main part of the scheduler work. 
     -- --------------------------------------------------
     perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> IO (Asyncs arrs) 
@@ -667,9 +668,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
 
                    -- Do this here for now!
                    liftIO $ debugMsg $ "   Work is done, Write devDone and add to ready queue" 
-                   liftIO $ putMVar (devDoneMVar mydevstate) Done
-                   liftIO $ registerAsFree schedState 
-                   return ()
+                   --return ()
                    -- DONE
 
                -- wait on the done signal
