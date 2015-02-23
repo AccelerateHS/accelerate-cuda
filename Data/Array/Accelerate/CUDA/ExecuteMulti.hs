@@ -528,14 +528,14 @@ sillySched _ =
     -- Do scheduler work here
     -- Select suitable device
     let alldevices = A.elems $ deviceState schedState
-        numdevs    = length alldevices
+        -- numdevs    = length alldevices
                        
     freedevs <- filterM (\x ->
                           do m <- tryReadMVar (devDoneMVar x)
                              return $ isJust m) alldevices
     let mydev = head freedevs 
 
-    takeMVar (devDoneMVar mydev)
+    Done <- takeMVar (devDoneMVar mydev)
     return mydev
 
 -- a scheduler that performs a minimum of smarts 
@@ -544,7 +544,7 @@ affinitySched arrayScore =
   withMVar (schedLock schedState)  $ \_ ->
   do 
     let alldevices = A.elems $ deviceState schedState
-        numdevs    = length alldevices
+        -- numdevs    = length alldevices
                        
     freedevs <- filterM (\x ->
                           do m <- tryReadMVar (devDoneMVar x)
@@ -556,7 +556,7 @@ affinitySched arrayScore =
       xs ->
         let devScores' = [(x,fromMaybe 0 y) | x <- xs
                          , let y = M.lookup (devID x) arrayScore]
-            devScores = reverse $ L.sortBy (\ (a,b) (c,d) -> b `compare` d) devScores'
+            devScores = reverse $ L.sortBy (\ (_,b) (_,d) -> b `compare` d) devScores'
             device = fst $ head devScores
         in
          do
@@ -607,7 +607,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
           => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)
           -> Env aenv
           -> IO (Asyncs arrs)
-    travT tup aenv = Asyncs <$> go (arrays (undefined::arrs)) tup
+    travT tup env = Asyncs <$> go (arrays (undefined::arrs)) tup
       where
         go :: ArraysR a -> Atuple (DelayedOpenAcc aenv) atup -> IO (AsyncsR a)
         go ArraysRunit NilAtup
@@ -616,7 +616,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
         go (ArraysRpair ar2 ar1) (SnocAtup a2 (a1 :: DelayedOpenAcc aenv a1))
           | Just REFL <- matchArraysR ar1 (arrays (undefined :: a1))
           = do
-               Asyncs a1' <- traverseAcc a1 aenv
+               Asyncs a1' <- traverseAcc a1 env
                a2'        <- go ar2 a2
                return      $ A_Pair a2' a1'
 
@@ -678,13 +678,13 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                  do
                    -- Transfer all arrays to chosen device.
                    liftIO $ debugMsg $ "   Transfer arrays to device: " ++ show devid
-                   !aenv <- transferArrays alldevices devid dependencies env
+                   !exec_env <- transferArrays alldevices devid dependencies env
                    -- Compile workload
                    liftIO $ debugMsg $ "   Compiling OpenAcc" 
                    !compiled <- compileOpenAcc a
                    -- Execute workload in a fresh stream and wait for work to finish
                    liftIO $ debugMsg $ "   Executing work on stream"
-                   !result <- E.streaming (E.executeOpenAcc compiled aenv) E.waitForIt
+                   !result <- E.streaming (E.executeOpenAcc compiled exec_env) E.waitForIt
 
                    -- Update environment with the result and where it exists
                    liftIO $ debugMsg $ "   Updating environment with computed array" 
@@ -907,7 +907,7 @@ waitAsync a =
 -- wait on an Async and provide its location data 
 waitAsyncLoc :: Async t -> IO (Set MemID)
 waitAsyncLoc (Async tloc) =
-  withMVar tloc $ \ (t,loc) ->
+  withMVar tloc $ \ (_,loc) ->
     return loc
     
 takeAsync :: Async t -> IO (t,Set MemID)
