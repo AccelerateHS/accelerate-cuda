@@ -62,6 +62,7 @@ import Control.Concurrent
 
 import System.IO 
 import System.IO.Unsafe
+import System.Environment 
 
 debug :: Bool
 debug = False
@@ -106,9 +107,11 @@ instance Show (MVar a) where
 -- that performs workloads passed to it from the
 -- Scheduler
 
-createDeviceThreads :: Int -> IO [(DevID,DeviceState)]
-createDeviceThreads n  = do
-  realdevs <- enumerateDevices
+createDeviceThreads :: Maybe [Int] -> Int -> IO [(DevID,DeviceState)]
+createDeviceThreads use_devices n  = do
+  --realdevs <- enumerateDevices
+  realdevs <- selectDevices use_devices 
+  
   let numRealDevs = L.length realdevs
       -- virtualized devices 
       devs = concatMap (replicate n) realdevs
@@ -176,11 +179,15 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   CUDA.initialise []
   debugMsg $ "InitScheduler"
 
+  var <- lookupEnv "MULTI_USE_DEVICES"
+
+  let use_devices = parseDevs var  
+  
   -- It is possible to virtualize each device. 
   -- It is not implemented properly though.
   -- We need to create one context per real device
   -- and share between the virtual workers. 
-  devs <- createDeviceThreads 1
+  devs <- createDeviceThreads use_devices 1
   let numDevs = length devs 
       devids  = L.map fst devs
       
@@ -197,6 +204,10 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   debugMsg $ "InitScheduler: " ++ show st 
   
   return $ st
+  where
+    parseDevs :: Maybe String -> Maybe [Int]
+    parseDevs Nothing = Nothing
+    parseDevs (Just xs) = Just $ L.map read $ L.words xs 
 
 
 -- Scheduler related datatypes
@@ -221,9 +232,9 @@ getDeviceCtx st devid = devCtx $ deviceState st A.! devid
 -- Need some way of keeping track of actual devices.  What identifies
 -- these devices ?  
 -- ------------------------------------------------------------------
-enumerateDevices :: IO [(CUDA.Device)]
-enumerateDevices = do
-  devices    <- mapM CUDA.device . enumFromTo 0 . subtract 1 =<< CUDA.count
+enumerateDevices :: [Int] -> IO [(CUDA.Device)]
+enumerateDevices use_devices = do
+  devices    <- mapM CUDA.device use_devices 
   properties <- mapM CUDA.props devices
   return . L.map fst . sortBy (flip cmp `on` snd) $ zip devices properties 
   where
@@ -232,6 +243,15 @@ enumerateDevices = do
     cmp x y
       | compute x == compute y  = comparing flops   x y
       | otherwise               = comparing compute x y
+                                  
+selectDevices :: Maybe [Int] -> IO [(CUDA.Device)]
+selectDevices use_devices =
+  do num_devices <- CUDA.count 
+     let all_devices = [0..num_devices-1] 
+     case use_devices of
+       Nothing -> enumerateDevices all_devices
+       Just devs -> enumerateDevices devs 
+                                  
 
 -- What flags to use ?
 contextFlags :: [CUDA.ContextFlag]
@@ -239,15 +259,15 @@ contextFlags = [CUDA.SchedAuto]
 
 -- at any point along the traversal of the AST the executeOpenAccMulti
 -- function will be under the influence of the SchedState
-newtype SchedMonad a = SchedMonad (IO a)
-          deriving ( -- MonadReader SchedState
-                     Monad
-                   , MonadIO
-                   , Functor 
-                   , Applicative )
+-- newtype SchedMonad a = SchedMonad (IO a)
+--           deriving ( -- MonadReader SchedState
+--                      Monad
+--                    , MonadIO
+--                    , Functor 
+--                    , Applicative )
 
-runSched :: SchedMonad a -> IO a
-runSched (SchedMonad m) = m
+-- runSched :: SchedMonad a -> IO a
+-- runSched (SchedMonad m) = m
   
 
 -- Environments and operations thereupon
@@ -421,13 +441,7 @@ runDelayedAccMulti :: Arrays arrs => DelayedAcc arrs
 runDelayedAccMulti !acc scheduler =
   do
     debugMsg $ "runDelayedAccMulti: "
-
-    --b <- isEmptyChan (freeDevs schedState)
-    --debugMsg $ "There is at least one device free: " ++ show (not  b)
-    
-    
-    runSched $
-      collectAsyncs =<< runDelayedOpenAccMulti acc Aempty scheduler 
+    collectAsyncs =<< runDelayedOpenAccMulti acc Aempty scheduler 
 
 -- Magic
 -- ----- 
@@ -520,23 +534,21 @@ smartSched = undefined
   
 
 
-
-
 -- This is the multirunner for DelayedOpenAcc
 -- ------------------------------------------
 runDelayedOpenAccMulti :: Arrays arrs
                        => DelayedOpenAcc aenv arrs
                        -> Env aenv
                        -> Scheduler
-                       -> SchedMonad (Asyncs arrs) 
+                       -> IO (Asyncs arrs) 
 runDelayedOpenAccMulti !acc !aenv scheduler =
   do
-    liftIO $ debugMsg $ "runDelayedOpenAccMulti: "
+    debugMsg $ "runDelayedOpenAccMulti: "
     traverseAcc acc aenv 
   where
     traverseAcc :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs
                 -> Env aenv
-                -> SchedMonad (Asyncs arrs)
+                -> IO (Asyncs arrs)
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
     traverseAcc dacc@(Manifest !pacc) env =
       case pacc of
@@ -557,10 +569,10 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
     travT :: forall aenv arrs. (Arrays arrs, IsAtuple arrs)
           => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)
           -> Env aenv
-          -> SchedMonad (Asyncs arrs)
+          -> IO (Asyncs arrs)
     travT tup aenv = Asyncs <$> go (arrays (undefined::arrs)) tup
       where
-        go :: ArraysR a -> Atuple (DelayedOpenAcc aenv) atup -> SchedMonad (AsyncsR a)
+        go :: ArraysR a -> Atuple (DelayedOpenAcc aenv) atup -> IO (AsyncsR a)
         go ArraysRunit NilAtup
           = return A_Unit
 
@@ -586,9 +598,9 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
 
     -- This performs the main part of the scheduler work. 
     -- --------------------------------------------------
-    perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> SchedMonad (Asyncs arrs) 
+    perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> IO (Asyncs arrs) 
     perform a env = do
-      arrayOnTheWay <- liftIO $ asyncs (undefined :: arrs)   
+      arrayOnTheWay <- asyncs (undefined :: arrs)   
 
       -- Here! Fork of a thread that waits for all the
       -- arrays that "a" depends upon to be computed.
@@ -596,7 +608,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
       -- This is before deciding what device to use.
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
-      _ <- liftIO $ runInBoundThread $ forkIO $
+      _ <- runInBoundThread $ forkIO $
              do
                 
                -- What arrays are needed to perform this piece of work 
@@ -609,7 +621,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                -- with a "getSuitableWorker" function 
                -- Wait for at least one free device.
                debugMsg $ "Waiting for a free device"
-               () <- liftIO $ readChan (freeDevs schedState) --schedState
+               () <- readChan (freeDevs schedState) --schedState
                
                -- If there is a () here, this means
                -- I have reserved one device.
@@ -916,14 +928,14 @@ putAsyncs devid a (Asyncs !arrs) =
          debugMsg "putAsyncs: DONE!" 
 
 -- copy a collection of Async arrays back to host
-collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> SchedMonad arrs
+collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
 collectAsyncs (Asyncs !arrs) =
   do liftIO $ debugMsg "Collecting result arrays" 
      !arrs' <- collectR (arrays (undefined :: arrs)) arrs
      liftIO $ debugMsg "Collecting result arrays: DONE!"
      return $ toArr arrs'
   where
-    collectR :: ArraysR a -> AsyncsR a -> SchedMonad a
+    collectR :: ArraysR a -> AsyncsR a -> IO a
     collectR ArraysRunit         A_Unit         = return () 
     collectR (ArraysRpair a1 a2) (A_Pair a b)   = (,) <$> collectR a1 a <*> collectR a2 b
     collectR ArraysRarray        (A_Array a)    =
