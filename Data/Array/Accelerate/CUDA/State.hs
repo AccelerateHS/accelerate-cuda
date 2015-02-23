@@ -43,7 +43,6 @@ import Control.Exception                                ( catch, bracket_ )
 import Control.Monad.Trans                              ( MonadIO )
 import Control.Monad.Reader                             ( MonadReader, ReaderT(..), runReaderT )
 import Control.Monad.State.Strict                       ( MonadState, StateT(..), evalStateT )
-import System.Mem                                       ( performGC )
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -85,7 +84,7 @@ evalCUDA !ctx !acc =
   \e -> $internalError "unhandled" (show (e :: CUDAException))
   where
     setup       = push ctx
-    teardown    = pop >> performGC
+    teardown    = pop
     action      = evalStateT (runReaderT (runCIO acc) ctx) theState
 
 -- |Evaluate a CUDA array computation with the specific state. Exceptions are
