@@ -196,8 +196,9 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   debugMsg $ "InitScheduler"
 
   var <- lookupEnv "MULTI_USE_DEVICES"
-
-  let use_devices = parseDevs var  
+  let use_devices = parseDevs var
+  hPutStrLn stderr $ "MULTI_USE_DEVICES: "  ++ show var
+  hPutStrLn stderr $ "Devices to use: " ++ show use_devices
   
   -- It is possible to virtualize each device. 
   -- It is not implemented properly though.
