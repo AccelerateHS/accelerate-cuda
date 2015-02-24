@@ -224,6 +224,7 @@ initScheduler = unsafePerformIO $ keepAlive =<< do
   where
     parseDevs :: Maybe String -> Maybe [Int]
     parseDevs Nothing = Nothing
+    parseDevs (Just []) = Nothing 
     parseDevs (Just xs) = Just $ L.map read $ L.words xs 
 
 
