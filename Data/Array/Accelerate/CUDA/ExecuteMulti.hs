@@ -636,7 +636,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                                                  
                -- Send away work to the device
                debugMsg $ "" -- "Launching work on device: " ++ show devid
-               liftIO $ putMVar (devWorkMVar mydevstate) $
+               putMVar (devWorkMVar mydevstate) $
                  Work $ 
                  CUDA.evalCUDA (devCtx mydevstate) $
                  -- We are now in CIO 
@@ -937,9 +937,9 @@ putAsyncs devid a (Asyncs !arrs) =
 -- copy a collection of Async arrays back to host
 collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
 collectAsyncs (Asyncs !arrs) =
-  do liftIO $ debugMsg "Collecting result arrays" 
+  do debugMsg "Collecting result arrays" 
      !arrs' <- collectR (arrays (undefined :: arrs)) arrs
-     liftIO $ debugMsg "Collecting result arrays: DONE!"
+     debugMsg "Collecting result arrays: DONE!"
      return $ toArr arrs'
   where
     collectR :: ArraysR a -> AsyncsR a -> IO a
@@ -949,7 +949,7 @@ collectAsyncs (Asyncs !arrs) =
       do
         -- Take out and do not put back, we are done with this
         -- here 
-        !(t,loc) <- liftIO $ takeAsync a
+        !(t,loc) <- takeAsync a
         
         -- get min from set (because the min device is likely to the
         -- most capable device) 
@@ -957,7 +957,7 @@ collectAsyncs (Asyncs !arrs) =
             ctx = getDeviceCtx schedState devid 
 
         -- Copy out from device 
-        !() <- liftIO $ CUDA.evalCUDA ctx $ peekArray t 
+        CUDA.evalCUDA ctx $ peekArray t 
         return t 
 
 ------------------------------------------------------- 
