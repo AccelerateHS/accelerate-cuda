@@ -23,6 +23,7 @@ import Data.Array.Accelerate.CUDA.AST hiding (Idx_, prj)
 import qualified Data.Array.Accelerate.CUDA.State as CUDA 
 import Data.Array.Accelerate.CUDA.Compile
 import qualified Data.Array.Accelerate.CUDA.Execute as E
+import Data.Array.Accelerate.CUDA.Execute.Stream (Stream)
 import qualified Data.Array.Accelerate.CUDA.Execute.Event as E 
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Data
@@ -170,7 +171,7 @@ createDeviceThread devid dev = do
                 Work w ->
                   do debugMsg $ "Entering work loop"
                      -- w launches of a thread of its own! 
-                     w
+                     w  
                      debugMsg $ "Exiting work loop"
                      deviceLoop done work
                 
@@ -275,19 +276,7 @@ selectDevices use_devices =
 contextFlags :: [CUDA.ContextFlag]
 contextFlags = [CUDA.SchedAuto]
 
--- at any point along the traversal of the AST the executeOpenAccMulti
--- function will be under the influence of the SchedState
--- newtype SchedMonad a = SchedMonad (IO a)
---           deriving ( -- MonadReader SchedState
---                      Monad
---                    , MonadIO
---                    , Functor 
---                    , Applicative )
-
--- runSched :: SchedMonad a -> IO a
--- runSched (SchedMonad m) = m
   
-
 -- Environments and operations thereupon
 -- -------------------------------------
 -- Environment augmented with information about where arrays exist.
@@ -307,23 +296,24 @@ transferArrays :: forall aenv.
                -> DevID 
                -> S.Set (Idx_ aenv)
                -> Env aenv
+               -> Stream 
                -> CUDA.CIO (E.Aval aenv) 
-transferArrays alldevices devid dependencies env =
-  trav env dependencies 
+transferArrays alldevices devid dependencies env stream =
+  trav env dependencies stream 
   where
     allContexts = A.amap devCtx alldevices
     -- myContext   = allContexts A.! devid
     
-    trav :: Env aenv' -> S.Set (Idx_ aenv') -> CUDA.CIO (E.Aval aenv')
-    trav Aempty _ = return E.Aempty
-    trav (Apush e arrs) reqset =
+    trav :: Env aenv' -> S.Set (Idx_ aenv') -> Stream -> CUDA.CIO (E.Aval aenv')
+    trav Aempty _ _ = return E.Aempty
+    trav (Apush e arrs) reqset stream =
       do
         let (needArrays,newset) = isNeeded reqset 
-        env' <- trav e newset
+        env' <- trav e newset stream
 
         if needArrays
           then do 
-            !arrs' <- copyArrays arrs allContexts devid
+            !arrs' <- copyArrays arrs allContexts devid stream
             !evt <- liftIO $ E.create 
             return $ E.Apush env' (E.Async evt arrs') 
                
@@ -338,12 +328,12 @@ transferArrays alldevices devid dependencies env =
       in (needed, strengthen s) 
 
 
-copyArrays :: forall t. Arrays t => Asyncs t -> A.Array Int Context -> DevID -> CUDA.CIO t
-copyArrays (Asyncs !arrs) allContexts devid = toArr <$> copyArraysR (arrays (undefined :: t)) arrs
+copyArrays :: forall t. Arrays t => Asyncs t -> A.Array Int Context -> DevID -> Stream -> CUDA.CIO t
+copyArrays (Asyncs !arrs) allContexts devid stream = toArr <$> copyArraysR (arrays (undefined :: t)) arrs stream 
   where
-    copyArraysR :: ArraysR a -> AsyncsR a -> CUDA.CIO a 
-    copyArraysR ArraysRunit A_Unit  = return ()
-    copyArraysR ArraysRarray (A_Array (Async a)) =
+    copyArraysR :: ArraysR a -> AsyncsR a -> Stream -> CUDA.CIO a 
+    copyArraysR ArraysRunit A_Unit  stream = return ()
+    copyArraysR ArraysRarray (A_Array (Async a)) stream =
       do
         liftIO $ debugMsg "copyArrays: taking mvar" 
         (arr,loc) <- liftIO $ takeMVar a 
@@ -356,17 +346,17 @@ copyArrays (Asyncs !arrs) allContexts devid = toArr <$> copyArraysR (arrays (und
                return arr 
            False -> 
              do let src = allContexts A.! (S.findMin loc) 
-                    dst = allContexts A.! devid 
-        
+                    dst = allContexts A.! devid
+
                 mallocArray arr
-                copyArrayPeer arr src arr dst
+                copyArrayPeerAsync arr src arr dst (Just stream)
                 liftIO $ debugMsg "copyArrays: putting mvar" 
                 liftIO $ putMVar a (arr, S.insert devid loc)
                 return arr 
         
-    copyArraysR (ArraysRpair r1 r2) (A_Pair arrs1 arrs2) =
-      do (,) <$> copyArraysR r1 arrs1
-             <*> copyArraysR r2 arrs2 
+    copyArraysR (ArraysRpair r1 r2) (A_Pair arrs1 arrs2) stream =
+      do (,) <$> copyArraysR r1 arrs1 stream
+             <*> copyArraysR r2 arrs2 stream 
  
 
 -- Wait for arrays while computing a score for
@@ -505,9 +495,12 @@ type Scheduler = ArrayScore -> IO DeviceState
 
 -- A silly scheduler that performs no smarts 
 sillySched :: Scheduler 
-sillySched _ = 
+sillySched _ = do
+  -- wait for at least one free device 
+  () <- readChan (freeDevs schedState) --schedState
+  
   withMVar (schedLock schedState) $ \_ ->
-  do
+   do
     -- Do scheduler work here
     -- Select suitable device
     let alldevices = A.elems $ deviceState schedState
@@ -523,9 +516,12 @@ sillySched _ =
 
 -- a scheduler that performs a minimum of smarts 
 affinitySched :: Scheduler
-affinitySched arrayScore =
+affinitySched arrayScore = do
+  -- wait for at least one free device 
+  () <- readChan (freeDevs schedState) --schedState
+
   withMVar (schedLock schedState)  $ \_ ->
-  do 
+   do 
     let alldevices = A.elems $ deviceState schedState
         -- numdevs    = length alldevices
                        
@@ -539,6 +535,7 @@ affinitySched arrayScore =
       xs ->
         let devScores' = [(x,fromMaybe 0 y) | x <- xs
                          , let y = M.lookup (devID x) arrayScore]
+            -- use `on` here 
             devScores = reverse $ L.sortBy (\ (_,b) (_,d) -> b `compare` d) devScores'
             device = fst $ head devScores
         in
@@ -627,47 +624,46 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                -- Wait for those arrays to be computed     
                arrayScore <- waitOnArrays env dependencies   
 
-               -- Replace following code
-               -- with a "getSuitableWorker" function 
                -- Wait for at least one free device.
                debugMsg $ "Waiting for a free device"
-               () <- readChan (freeDevs schedState) --schedState
-               
-               -- If there is a () here, this means
-               -- I have reserved one device.
-               -- But there can still be many to select from. 
-               debugMsg $ "There is at least one free device, proceed!"
 
+               -- Let scheduler do its job
                mydevstate <- scheduler arrayScore 
                
                -- We still need this info for copies 
                let alldevices = deviceState schedState
                    devid      = devID mydevstate 
-                        
---               let mydevstate = alldevices A.! devid
---                   alldevices = deviceState st -- schedState
-
-               -- This device should be "done"
-               --debugMsg $ "Is the device offered on the channel free?" 
-               --liftIO $ takeMVar $ devDoneMVar mydevstate
-               --debugMsg $ "Device had the DONE flag" 
-                         
+                                                 
                -- Send away work to the device
                debugMsg $ "" -- "Launching work on device: " ++ show devid
                liftIO $ putMVar (devWorkMVar mydevstate) $
-                 Work $
+                 Work $ 
                  CUDA.evalCUDA (devCtx mydevstate) $
                  -- We are now in CIO 
                  do
                    -- Transfer all arrays to chosen device.
-                   liftIO $ debugMsg $ "" -- "   Transfer arrays to device: " ++ show devid
-                   !exec_env <- transferArrays alldevices devid dependencies env
+                   -- liftIO $ debugMsg $ "" -- "   Transfer arrays to device: " ++ show devid
+                   -- !exec_env <- transferArrays alldevices devid dependencies env
                    -- Compile workload
-                   liftIO $ debugMsg $ "   Compiling OpenAcc" 
-                   !compiled <- compileOpenAcc a
+                   -- liftIO $ debugMsg $ "   Compiling OpenAcc" 
+                   
                    -- Execute workload in a fresh stream and wait for work to finish
                    liftIO $ debugMsg $ "   Executing work on stream"
-                   !result <- E.streaming (E.executeOpenAcc compiled exec_env) E.waitForIt
+                   !result <- E.streaming
+                              (\stream ->
+                                do
+                                  !exec_env <- transferArrays alldevices devid dependencies env stream
+                                  !compiled <- compileOpenAcc a
+                                  E.executeOpenAcc compiled exec_env stream) E.waitForIt
+
+                   -- liftIO $ debugMsg $ "" -- "   Transfer arrays to device: " ++ show devid
+                   -- !exec_env <- transferArrays alldevices devid dependencies env
+                   -- -- Compile workload
+                   -- liftIO $ debugMsg $ "   Compiling OpenAcc" 
+                   -- !compiled <- compileOpenAcc a
+                   -- -- Execute workload in a fresh stream and wait for work to finish
+                   -- liftIO $ debugMsg $ "   Executing work on stream"
+                   -- !result <- E.streaming (E.executeOpenAcc compiled exec_env) E.waitForIt
 
                    -- Update environment with the result and where it exists
                    liftIO $ debugMsg $ "   Updating environment with computed array" 
@@ -966,4 +962,3 @@ collectAsyncs (Asyncs !arrs) =
 
 ------------------------------------------------------- 
 
-    
