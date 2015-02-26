@@ -944,6 +944,19 @@ putAsyncs devid a (Asyncs !arrs) =
          putMVar a' (arr,S.singleton devid)
          --debugMsg "putAsyncs: DONE!" 
 
+
+
+data Arrived a where
+  Arrived :: ArrivedR (ArrRepr a)
+          -> Arrived a 
+
+data family ArrivedR :: * -> * 
+data instance ArrivedR ()            = Ar_Unit
+data instance ArrivedR (Array sh e)  = Ar_Array (Array sh e, Set MemID)
+data instance ArrivedR (a,b)         = Ar_Pair  (ArrivedR a) (ArrivedR b)
+
+
+
 {-# NOINLINE awaitAsyncs #-} 
 awaitAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
 awaitAsyncs (Asyncs !arrs) =
@@ -955,13 +968,33 @@ awaitAsyncs (Asyncs !arrs) =
     go ArraysRarray        (A_Array a)   =
       do 
         waitAsync a
+        
+{-# NOINLINE awaitAsyncs' #-} 
+awaitAsyncs' :: forall arrs. Arrays arrs => Asyncs arrs -> IO (Arrived arrs)
+awaitAsyncs' (Asyncs !arrs) =
+  do arrs' <- go (arrays (undefined :: arrs)) arrs
+     return $ Arrived  arrs' 
+  where
+    go :: ArraysR a -> AsyncsR a -> IO (ArrivedR a)
+    go ArraysRunit          A_Unit       = return Ar_Unit
+    go (ArraysRpair a1 a2) (A_Pair a b)  =
+      do
+        !a' <- go a1 a
+        !b' <- go a2 b
+        return  $ Ar_Pair a' b' 
+    go ArraysRarray        (A_Array a)   =
+      do
+        !a' <- waitAsyncTLoc a
+        return (Ar_Array a')
+
 
 collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
 collectAsyncs a@(Asyncs !arrs) =
   do
-    awaitAsyncs a 
+    !here <- awaitAsyncs' a
+    --awaitAsyncs a 
     waitAllDevices
-    arrs' <- collectAsyncs' a -- arrs 
+    arrs' <- collectAsyncs''  here -- a -- arrs 
     releaseAllDevices
     return arrs' 
   where
@@ -1000,6 +1033,41 @@ collectAsyncs' (Asyncs !arrs) =
         -- here 
         -- !(t,loc) <- takeAsync a
         !(t,loc) <- takeAsync a 
+        -- get min from set (because the min device is likely to the
+        -- most capable device) 
+        let devid = S.findMin loc
+            dev = (deviceState schedState) A.! devid 
+            ctx = getDeviceCtx schedState devid 
+            
+        -- Copy out from device
+        Done <- takeMVar (devDoneMVar dev)
+        putMVar (devWorkMVar dev) $ Work $ \ () ->
+          do  
+            CUDA.evalCUDA ctx $ peekArray t
+            putMVar (devDoneMVar dev) Done 
+        -- Wait for copy to complete
+        Done <- takeMVar (devDoneMVar dev)
+        -- After completion the device is still free
+        putMVar (devDoneMVar dev) Done 
+        return t 
+
+
+collectAsyncs'' :: forall arrs. Arrays arrs => Arrived arrs -> IO arrs
+collectAsyncs'' (Arrived !arrs) =
+  do debugMsg "Collecting result arrays" 
+     !arrs' <- collectR (arrays (undefined :: arrs)) arrs
+     debugMsg "Collecting result arrays: DONE!"
+     return $ toArr arrs'
+  where
+    collectR :: ArraysR a -> ArrivedR a -> IO a
+    collectR ArraysRunit         Ar_Unit         = return () 
+    collectR (ArraysRpair a1 a2) (Ar_Pair a b)   = (,) <$> collectR a1 a <*> collectR a2 b
+    collectR ArraysRarray        (Ar_Array (t,loc))    =
+      do
+        -- Take out and do not put back, we are done with this
+        -- here 
+        -- !(t,loc) <- takeAsync a
+        -- !(t,loc) <- takeAsync a 
         -- get min from set (because the min device is likely to the
         -- most capable device) 
         let devid = S.findMin loc
