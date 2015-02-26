@@ -320,7 +320,7 @@ transferArrays alldevices devid dependencies env stream =
           else return (E.Apush env' dummyAsync)
           
     dummyAsync :: E.Async t
-    dummyAsync = E.Async (CUDA.Event nullPtr) undefined
+    dummyAsync = E.Async (CUDA.Event nullPtr) (error "You area looking at the wrong place in the env")
     
     isNeeded :: Arrays t => S.Set (Idx_ (aenv',t)) -> (Bool,S.Set (Idx_ aenv'))
     isNeeded s =
@@ -569,7 +569,8 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
     traverseAcc Delayed{} _ = $internalError "runDelayedOpenAccMulti" "unexpected delayed array"
     traverseAcc dacc@(Manifest !pacc) env =
       case pacc of
-        -- Use a -> a `seq` perform dacc env
+
+        Use a -> a `seq` perform dacc env
         
         Alet a b ->
           do res <- perform a env
@@ -883,12 +884,14 @@ data Async t = Async (MVar (t, Set MemID))
 newEmptyAsync :: IO (Async t)
 newEmptyAsync = Async <$> newEmptyMVar 
 
--- wait on an Async 
+-- wait on an Async
+{-# NOINLINE waitAsync #-}
 waitAsync :: Async t -> IO ()
 waitAsync a =
   waitAsyncLoc a >> return ()  
 
--- wait on an Async and provide its location data 
+-- wait on an Async and provide its location data
+{-# NOINLINE waitAsyncLoc #-}
 waitAsyncLoc :: Async t -> IO (Set MemID)
 waitAsyncLoc (Async tloc) =
   withMVar tloc $ \ (_,loc) ->
@@ -941,9 +944,48 @@ putAsyncs devid a (Asyncs !arrs) =
          putMVar a' (arr,S.singleton devid)
          --debugMsg "putAsyncs: DONE!" 
 
--- copy a collection of Async arrays back to host
+{-# NOINLINE awaitAsyncs #-} 
+awaitAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
+awaitAsyncs (Asyncs !arrs) =
+  go (arrays (undefined :: arrs)) arrs
+  where
+    go :: ArraysR a -> AsyncsR a -> IO ()
+    go ArraysRunit          A_Unit       = return ()
+    go (ArraysRpair a1 a2) (A_Pair a b)  = go a1 a >> go a2 b
+    go ArraysRarray        (A_Array a)   =
+      do 
+        waitAsync a
+
 collectAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
-collectAsyncs (Asyncs !arrs) =
+collectAsyncs a@(Asyncs !arrs) =
+  do
+    awaitAsyncs a 
+    waitAllDevices
+    arrs' <- collectAsyncs' a -- arrs 
+    releaseAllDevices
+    return arrs' 
+  where
+    numDevs = L.length $ A.elems (deviceState schedState)
+    
+    waitAllDevices :: IO ()
+    waitAllDevices =
+      forM_ [0..numDevs-1] $ \ _ ->
+        readChan (freeDevs schedState)
+        
+           
+
+    releaseAllDevices :: IO ()
+    releaseAllDevices =
+      forM_ [0..numDevs-1] $ \ _ ->
+        writeChan (freeDevs schedState) () 
+
+      
+
+    
+
+-- copy a collection of Async arrays back to host
+collectAsyncs' :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
+collectAsyncs' (Asyncs !arrs) =
   do debugMsg "Collecting result arrays" 
      !arrs' <- collectR (arrays (undefined :: arrs)) arrs
      debugMsg "Collecting result arrays: DONE!"
@@ -961,10 +1003,20 @@ collectAsyncs (Asyncs !arrs) =
         -- get min from set (because the min device is likely to the
         -- most capable device) 
         let devid = S.findMin loc
+            dev = (deviceState schedState) A.! devid 
             ctx = getDeviceCtx schedState devid 
-
-        -- Copy out from device 
-        CUDA.evalCUDA ctx $ peekArray t >> return t 
+            
+        -- Copy out from device
+        Done <- takeMVar (devDoneMVar dev)
+        putMVar (devWorkMVar dev) $ Work $ \ () ->
+          do  
+            CUDA.evalCUDA ctx $ peekArray t
+            putMVar (devDoneMVar dev) Done 
+        -- Wait for copy to complete
+        Done <- takeMVar (devDoneMVar dev)
+        -- After completion the device is still free
+        putMVar (devDoneMVar dev) Done 
+        return t 
 
 ------------------------------------------------------- 
 
