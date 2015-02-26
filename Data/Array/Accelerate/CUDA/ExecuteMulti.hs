@@ -94,7 +94,7 @@ debugMsg_ str =
 -- -----------------------------------------
 data Done = Done -- Free to accept work  
 data Work = ShutDown
-          | Work (IO ()) 
+          | Work (() -> IO ()) 
 
 data DeviceState = DeviceState { devCtx      :: !Context
                                , devDoneMVar :: !(MVar Done)
@@ -171,7 +171,7 @@ createDeviceThread devid dev = do
                 Work w ->
                   do debugMsg $ "Entering work loop"
                      -- w launches of a thread of its own! 
-                     w  
+                     w () 
                      debugMsg $ "Exiting work loop"
                      deviceLoop done work
                 
@@ -615,20 +615,21 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
       -- This is before deciding what device to use.
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
-      _ <- runInBoundThread $ forkIO $
+      -- _ <- runInBoundThread $ forkIO $
+      _ <- forkOn 2 $ 
              do
                 
                -- What arrays are needed to perform this piece of work 
                let !dependencies = arrayRefs a
                debugMsg $ "" -- "Waiting for: " ++ show (length (S.toList dependencies))
                -- Wait for those arrays to be computed     
-               arrayScore <- waitOnArrays env dependencies   
+               !arrayScore <- waitOnArrays env dependencies   
 
                -- Wait for at least one free device.
                debugMsg $ "Waiting for a free device"
 
                -- Let scheduler do its job
-               mydevstate <- scheduler arrayScore 
+               !mydevstate <- scheduler arrayScore 
                
                -- We still need this info for copies 
                let alldevices = deviceState schedState
@@ -637,7 +638,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                -- Send away work to the device
                debugMsg $ "" -- "Launching work on device: " ++ show devid
                putMVar (devWorkMVar mydevstate) $
-                 Work $ 
+                 Work $ \ () ->  
                  CUDA.evalCUDA (devCtx mydevstate) $
                  -- We are now in CIO 
                  do
@@ -891,7 +892,12 @@ waitAsyncLoc :: Async t -> IO (Set MemID)
 waitAsyncLoc (Async tloc) =
   withMVar tloc $ \ (_,loc) ->
     return loc
-    
+
+waitAsyncTLoc :: Async t -> IO (t,Set MemID)
+waitAsyncTLoc (Async tloc) =
+  withMVar tloc $ \ (t,loc) ->
+    return (t,loc)
+
 takeAsync :: Async t -> IO (t,Set MemID)
 takeAsync (Async tloc) = takeMVar tloc 
 
@@ -921,14 +927,14 @@ asyncs a =
 -- Assumes the Async is empty! 
 putAsyncs :: forall arrs. Arrays arrs => DevID -> arrs -> Asyncs arrs -> IO ()
 putAsyncs devid a (Asyncs !arrs) =
-  toArr <$> go (arrays (undefined :: arrs)) (fromArr a) arrs
+  go (arrays (undefined :: arrs)) (fromArr a) arrs
   where
     go :: ArraysR a -> a -> AsyncsR a -> IO ()
     go ArraysRunit         ()     A_Unit    = return ()
     go (ArraysRpair a1 a2) (b1,b2) (A_Pair c1 c2) = 
       do go a1 b1 c1
          go a2 b2 c2
-    go ArraysRarray        arr     (A_Array (Async a'))  =
+    go ArraysRarray        !arr     (A_Array (Async a'))  =
       do
          --debugMsg "putAsyncs: adding array to env"
          putMVar a' (arr,S.singleton devid)
@@ -949,16 +955,15 @@ collectAsyncs (Asyncs !arrs) =
       do
         -- Take out and do not put back, we are done with this
         -- here 
-        !(t,loc) <- takeAsync a
-        
+        -- !(t,loc) <- takeAsync a
+        !(t,loc) <- waitAsyncTLoc a 
         -- get min from set (because the min device is likely to the
         -- most capable device) 
         let devid = S.findMin loc
             ctx = getDeviceCtx schedState devid 
 
         -- Copy out from device 
-        CUDA.evalCUDA ctx $ peekArray t 
-        return t 
+        CUDA.evalCUDA ctx $ peekArray t >> return t 
 
 ------------------------------------------------------- 
 
