@@ -541,8 +541,8 @@ affinitySched arrayScore = do
         in
          do
 --           debugMsg $ "Device Scores: " ++ show (L.map (\ (x,y) -> (devID x,y)) devScores )
-
-           takeMVar (devDoneMVar device) >> return device  
+            Done <- takeMVar (devDoneMVar device)
+            return device  
       
 
 -- Even smarter scheduler ?
@@ -607,7 +607,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
     -- --------------------------------------------------
     perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> IO (Asyncs arrs) 
     perform a env = do
-      arrayOnTheWay <- asyncs (undefined :: arrs)   
+      !arrayOnTheWay <- asyncs (undefined :: arrs)   
 
       -- Here! Fork of a thread that waits for all the
       -- arrays that "a" depends upon to be computed.
@@ -616,7 +616,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
       -- _ <- runInBoundThread $ forkIO $
-      _ <- forkOn 2 $ 
+      _ <- runInBoundThread $ forkIO $  
              do
                 
                -- What arrays are needed to perform this piece of work 
@@ -689,6 +689,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                --           " Device Reported Done, adding to freeChan.\n" ++
                --           "******************************************" 
                 -- schedState devid
+
       return arrayOnTheWay
         
 
@@ -956,7 +957,7 @@ collectAsyncs (Asyncs !arrs) =
         -- Take out and do not put back, we are done with this
         -- here 
         -- !(t,loc) <- takeAsync a
-        !(t,loc) <- waitAsyncTLoc a 
+        !(t,loc) <- takeAsync a 
         -- get min from set (because the min device is likely to the
         -- most capable device) 
         let devid = S.findMin loc
