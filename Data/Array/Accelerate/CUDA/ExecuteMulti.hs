@@ -617,7 +617,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
       -- Here, spawn off a worker thread ,that is not tied to a device
       -- it is tied to the Work!
       -- _ <- runInBoundThread $ forkIO $
-      _ <- runInBoundThread $ forkIO $  
+      _ <- forkIO $  
              do
                 
                -- What arrays are needed to perform this piece of work 
@@ -640,7 +640,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
                debugMsg $ "" -- "Launching work on device: " ++ show devid
                putMVar (devWorkMVar mydevstate) $
                  Work $ \ () ->  
-                 CUDA.evalCUDA (devCtx mydevstate) $
+                 CUDA.evalCUDA' (devCtx mydevstate) $
                  -- We are now in CIO 
                  do
                    -- Transfer all arrays to chosen device.
@@ -1043,7 +1043,7 @@ collectAsyncs' (Asyncs !arrs) =
         Done <- takeMVar (devDoneMVar dev)
         putMVar (devWorkMVar dev) $ Work $ \ () ->
           do  
-            CUDA.evalCUDA ctx $ peekArray t
+            CUDA.evalCUDA' ctx $ peekArray t
             putMVar (devDoneMVar dev) Done 
         -- Wait for copy to complete
         Done <- takeMVar (devDoneMVar dev)
@@ -1078,7 +1078,7 @@ collectAsyncs'' (Arrived !arrs) =
         Done <- takeMVar (devDoneMVar dev)
         putMVar (devWorkMVar dev) $ Work $ \ () ->
           do  
-            CUDA.evalCUDA ctx $ peekArray t
+            CUDA.evalCUDA' ctx $ peekArray t
             putMVar (devDoneMVar dev) Done 
         -- Wait for copy to complete
         Done <- takeMVar (devDoneMVar dev)

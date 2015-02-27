@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.State (
   defaultContext, deviceProperties, activeContext, kernelTable, memoryTable, streamReservoir,
 
   -- BJS: Exported
-  theState, 
+  theState, evalCUDA'
 ) where
 
 -- friends
@@ -88,6 +88,17 @@ evalCUDA !ctx !acc =
   where
     setup       = push ctx
     teardown    = pop >> performGC
+    action      = evalStateT (runReaderT (runCIO acc) ctx) theState
+
+{-# NOINLINE evalCUDA' #-}
+evalCUDA' :: Context -> CIO a -> IO a
+evalCUDA' !ctx !acc =
+  runInBoundThread (bracket_ setup teardown action)
+  `catch`
+  \e -> $internalError "unhandled" (show (e :: CUDAException))
+  where
+    setup       = push ctx
+    teardown    = pop 
     action      = evalStateT (runReaderT (runCIO acc) ctx) theState
 
 
