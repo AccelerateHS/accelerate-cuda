@@ -13,8 +13,7 @@
 
 module Data.Array.Accelerate.CUDA.Analysis.Launch (
 
-  launchConfig, determineOccupancy,
-  launchConfigSimple, determineOccupancySimple
+  launchConfig, determineOccupancy
 
 ) where
 
@@ -55,19 +54,6 @@ launchConfig (Manifest acc) dev occ =
   in
   (cta, \n -> maxGrid `min` gridSize dev acc n cta, smem)
 
-launchConfigSimple
-    :: CUDA.DeviceProperties    -- the device being executed on
-    -> CUDA.Occupancy           -- kernel occupancy information
-    -> ( Int                    -- block size
-       , Int -> Int             -- number of blocks for input problem size (grid)
-       , Int )                  -- shared memory (bytes)
-launchConfigSimple dev occ =
-  let cta       = CUDA.activeThreads occ `div` CUDA.activeThreadBlocks occ
-      maxGrid   = CUDA.multiProcessorCount dev * CUDA.activeThreadBlocks occ
-      smem      = 0
-  in
-  (cta, \n -> maxGrid `min` gridSizeSimple dev n cta, smem)
-
 
 -- |
 -- Determine maximal occupancy statistics for the given kernel / device
@@ -86,18 +72,6 @@ determineOccupancy (Manifest acc) dev fn maxBlock = do
   return . snd  $  blockSize dev acc maxBlock registers (\threads -> static_smem + dynamic_smem threads)
   where
     dynamic_smem = sharedMem dev acc
-
-determineOccupancySimple
-    :: CUDA.DeviceProperties
-    -> CUDA.Fun                 -- corresponding __global__ entry function
-    -> Int                      -- maximum number of threads per block
-    -> IO CUDA.Occupancy
-determineOccupancySimple dev fn maxBlock = do
-  registers     <- CUDA.requires fn CUDA.NumRegs
-  static_smem   <- CUDA.requires fn CUDA.SharedSizeBytes        -- static memory only
-  return . snd  $  blockSizeSimple dev maxBlock registers (\threads -> static_smem + dynamic_smem threads)
-  where
-    dynamic_smem _ = 0
 
 
 -- |
@@ -127,17 +101,6 @@ blockSize dev acc lim regs smem =
       Scanr1 _ _        -> CUDA.incWarp
       _                 -> CUDA.decWarp
 
-blockSizeSimple
-    :: CUDA.DeviceProperties
-    -> Int                      -- maximum number of threads per block
-    -> Int                      -- number of registers used
-    -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
-    -> (Int, CUDA.Occupancy)
-blockSizeSimple dev lim regs smem =
-  CUDA.optimalBlockSizeBy dev (filter (<= lim) . strategy) (const regs) smem
-  where
-    strategy = CUDA.decWarp
-
 -- |
 -- Determine the number of blocks of the given size necessary to process the
 -- given array expression. This should understand things like #elements per
@@ -152,23 +115,14 @@ blockSizeSimple dev lim regs smem =
 --          for 1D reductions this is the total number of elements
 --
 gridSize :: CUDA.DeviceProperties -> PreOpenAcc DelayedOpenAcc aenv a -> Int -> Int -> Int
-gridSize p acc@(FoldSeg _ _ _ _) size cta = split acc (size * CUDA.warpSize p) cta
-gridSize p acc@(Fold1Seg _ _ _)  size cta = split acc (size * CUDA.warpSize p) cta
-gridSize _ acc@(Fold _ _ _)      size cta = if preAccDim delayedDim acc == 0 then split acc size cta else max 1 size
-gridSize _ acc@(Fold1 _ _)       size cta = if preAccDim delayedDim acc == 0 then split acc size cta else max 1 size
-gridSize _ acc                   size cta = split acc size cta
+gridSize p (FoldSeg _ _ _ _) size cta = split (size * CUDA.warpSize p) cta
+gridSize p (Fold1Seg _ _ _)  size cta = split (size * CUDA.warpSize p) cta
+gridSize _ acc@(Fold _ _ _)  size cta = if preAccDim delayedDim acc == 0 then split size cta else max 1 size
+gridSize _ acc@(Fold1 _ _)   size cta = if preAccDim delayedDim acc == 0 then split size cta else max 1 size
+gridSize _ _                 size cta = split size cta
 
-gridSizeSimple :: CUDA.DeviceProperties -> Int -> Int -> Int
-gridSizeSimple _ size cta = splitSimple size cta
-
-split :: acc aenv a -> Int -> Int -> Int
-split acc size cta = (size `between` eltsPerThread acc) `between` cta
-  where
-    between arr n   = 1 `max` ((n + arr - 1) `div` n)
-    eltsPerThread _ = 1
-
-splitSimple :: Int -> Int -> Int
-splitSimple size cta = (size `between` eltsPerThread) `between` cta
+split :: Int -> Int -> Int
+split size cta = (size `between` eltsPerThread) `between` cta
   where
     between arr n   = 1 `max` ((n + arr - 1) `div` n)
     eltsPerThread   = 1

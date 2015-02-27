@@ -24,6 +24,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 ) where
 
 -- friends
+import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
@@ -345,11 +346,22 @@ compileOpenSeq l =
             -- In the case of converting an array that has not already been copied
             -- to device memory, we are smart and treat it specially.
             Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix])
-            _                -> do
+            _   -> do
               (free1, acc') <- travA acc
               let gamma = makeEnvMap free1
               dev <- asks deviceProperties
-              kernel <- build1Simple (codegenToSeq slix dev acc gamma)
+              -- The the array computation passed to 'toSeq' needs to be treated
+              -- specially. We don't want the entire array to be made manifest
+              -- if we can help it. In the event it is a delayed array, we make
+              -- the subarrays manifest one at a time and feed them to the 'Seq'
+              -- computation.
+              --
+              -- For the purposes of device configuration and launching, this can
+              -- be seen to work like 'Slice', even though in reality it
+              -- resembles a delayed 'Slice'.
+              let acc'' = Manifest (Slice slix acc (Const (zeroSlice slix) :: DelayedExp aenv slix))
+
+              kernel <- build1 acc'' (codegenToSeq slix dev acc gamma)
               return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
         StreamIn xs -> return $ ExecStreamIn xs
         MapSeq f x -> do
@@ -393,6 +405,11 @@ compileOpenSeq l =
     travF (Body b)  = liftA Body <$> travE b
     travF (Lam  f)  = liftA Lam  <$> travF f
 
+    zeroSlice :: SliceIndex slix sl co sh -> slix
+    zeroSlice SliceNil = ()
+    zeroSlice (SliceFixed sl) = (zeroSlice sl, 0)
+    zeroSlice (SliceAll sl)   = (zeroSlice sl, ())
+
 
 -- Applicative
 -- -----------
@@ -426,41 +443,6 @@ build1 acc code = do
         f <- CUDA.getFun m entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
         o <- determineOccupancy acc dev f l
-        D.when D.dump_cc (stats entry f o)
-        return (m,f,o)
-  --
-  return $ AccKernel entry fun mdl occ cta smem blocks
-  where
-    stats name fn occ = do
-      regs      <- CUDA.requires fn CUDA.NumRegs
-      smem      <- CUDA.requires fn CUDA.SharedSizeBytes
-      cmem      <- CUDA.requires fn CUDA.ConstSizeBytes
-      lmem      <- CUDA.requires fn CUDA.LocalSizeBytes
-      let msg1  = "entry function '" ++ name ++ "' used "
-                  ++ shows regs " registers, "  ++ shows smem " bytes smem, "
-                  ++ shows lmem " bytes lmem, " ++ shows cmem " bytes cmem"
-          msg2  = "multiprocessor occupancy " ++ showFFloat (Just 1) (CUDA.occupancy100 occ) "% : "
-                  ++ shows (CUDA.activeThreads occ)      " threads over "
-                  ++ shows (CUDA.activeWarps occ)        " warps in "
-                  ++ shows (CUDA.activeThreadBlocks occ) " blocks"
-      --
-      -- make sure kernel/stats are printed together. Use 'intercalate' rather
-      -- than 'unlines' to avoid a trailing newline.
-      --
-      message   $ intercalate "\n      ... " [msg1, msg2]
-
-build1Simple :: CUTranslSkel aenv a -> CIO (AccKernel a)
-build1Simple code = do
-  context       <- asks activeContext
-  let dev       =  deviceProperties context
-  table         <- gets kernelTable
-  (entry,key)   <- compile table dev code
-  let (cta,blocks,smem) = launchConfigSimple dev occ
-      (mdl,fun,occ)     = unsafePerformIO $ do
-        m <- link context table key
-        f <- CUDA.getFun m entry
-        l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
-        o <- determineOccupancySimple dev f l
         D.when D.dump_cc (stats entry f o)
         return (m,f,o)
   --
