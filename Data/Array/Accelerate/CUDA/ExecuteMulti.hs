@@ -87,7 +87,9 @@ debugMsg_ str =
       do 
         hPutStrLn stderr $ show n ++ ": " ++ str
         return (n+1)
-
+        
+-- debug undefineds
+undefined_ = error "UNDEFINED IS TOUCHED IN MULTIBACKEND" 
 
 -- Datastructures for Gang of worker threads
 -- One thread per participating device
@@ -329,7 +331,7 @@ transferArrays alldevices devid dependencies env stream =
 
 
 copyArrays :: forall t. Arrays t => Asyncs t -> A.Array Int Context -> DevID -> Stream -> CUDA.CIO t
-copyArrays (Asyncs !arrs) allContexts devid stream = toArr <$> copyArraysR (arrays (undefined :: t)) arrs stream 
+copyArrays (Asyncs !arrs) allContexts devid stream = toArr <$> copyArraysR (arrays (undefined_ :: t)) arrs stream 
   where
     copyArraysR :: ArraysR a -> AsyncsR a -> Stream -> CUDA.CIO a 
     copyArraysR ArraysRunit A_Unit  stream = return ()
@@ -386,7 +388,7 @@ waitOnArrays env s =
  
     awaitAll :: forall arrs. Arrays arrs
              => Asyncs arrs -> M.Map MemID Int -> IO (M.Map MemID Int) 
-    awaitAll (Asyncs a) sm = go (arrays (undefined :: arrs)) a sm
+    awaitAll (Asyncs a) sm = go (arrays (undefined_ :: arrs)) a sm
     
     go :: ArraysR a -> AsyncsR a -> M.Map MemID Int -> IO (M.Map MemID Int) 
     go ArraysRunit         A_Unit sm = return sm
@@ -427,7 +429,7 @@ waitOnArrays env s =
 --       False -> waitOnArrays e ns
 --   where
 --     awaitAll :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
---     awaitAll (Asyncs a) = go (arrays (undefined :: arrs)) a
+--     awaitAll (Asyncs a) = go (arrays (undefined_ :: arrs)) a
     
 --     go :: ArraysR a -> AsyncsR a -> IO ()
 --     go ArraysRunit         A_Unit = return ()
@@ -461,8 +463,8 @@ matchArrayType
     -> Array sh2 e2 {- dummy -}
     -> Maybe (Array sh1 e1 :=: Array sh2 e2)
 matchArrayType _ _ -- a1 a2
-  | Just REFL <- matchTupleType (eltType (undefined::sh1)) (eltType (undefined::sh2))
-  , Just REFL <- matchTupleType (eltType (undefined::e1))  (eltType (undefined::e2))
+  | Just REFL <- matchTupleType (eltType (undefined_::sh1)) (eltType (undefined_::sh2))
+  , Just REFL <- matchTupleType (eltType (undefined_::e1))  (eltType (undefined_::e2))
   = gcast REFL
 
 matchArrayType _ _
@@ -474,7 +476,7 @@ matchArraysR ArraysRunit ArraysRunit
   = Just REFL
 
 matchArraysR (ArraysRarray :: ArraysR s) (ArraysRarray :: ArraysR t)
-  | Just REFL <- matchArrayType (undefined::s) (undefined::t)
+  | Just REFL <- matchArrayType (undefined_::s) (undefined_::t)
   = Just REFL
 
 matchArraysR (ArraysRpair s1 s2) (ArraysRpair t1 t2)
@@ -547,7 +549,7 @@ affinitySched arrayScore = do
 
 -- Even smarter scheduler ?
 smartSched :: Scheduler
-smartSched = undefined 
+smartSched = undefined_ 
   
 
 
@@ -588,14 +590,14 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
           => Atuple (DelayedOpenAcc aenv) (TupleRepr arrs)
           -> Env aenv
           -> IO (Asyncs arrs)
-    travT tup env = Asyncs <$> go (arrays (undefined::arrs)) tup
+    travT tup env = Asyncs <$> go (arrays (undefined_::arrs)) tup
       where
         go :: ArraysR a -> Atuple (DelayedOpenAcc aenv) atup -> IO (AsyncsR a)
         go ArraysRunit NilAtup
           = return A_Unit
 
         go (ArraysRpair ar2 ar1) (SnocAtup a2 (a1 :: DelayedOpenAcc aenv a1))
-          | Just REFL <- matchArraysR ar1 (arrays (undefined :: a1))
+          | Just REFL <- matchArraysR ar1 (arrays (undefined_ :: a1))
           = do
                Asyncs a1' <- traverseAcc a1 env
                a2'        <- go ar2 a2
@@ -608,7 +610,7 @@ runDelayedOpenAccMulti !acc !aenv scheduler =
     -- --------------------------------------------------
     perform :: forall aenv arrs. Arrays arrs => DelayedOpenAcc aenv arrs -> Env aenv -> IO (Asyncs arrs) 
     perform a env = do
-      !arrayOnTheWay <- asyncs (undefined :: arrs)   
+      !arrayOnTheWay <- asyncs (undefined_ :: arrs)   
 
       -- Here! Fork of a thread that waits for all the
       -- arrays that "a" depends upon to be computed.
@@ -713,7 +715,7 @@ arrayRefs (Delayed extent index lin) =
   travF lin 
 arrayRefs (Manifest pacc) =
   case pacc of
-    Use  a    -> (deeplySeq (arrays (undefined :: arrs)) a) `seq` S.empty
+    Use  a    -> (deeplySeq (arrays (undefined_ :: arrs)) a) `seq` S.empty
     Unit !_   -> S.empty
     
     Avar ix -> addFree ix
@@ -931,7 +933,7 @@ asyncs a =
 -- Assumes the Async is empty! 
 putAsyncs :: forall arrs. Arrays arrs => DevID -> arrs -> Asyncs arrs -> IO ()
 putAsyncs devid a (Asyncs !arrs) =
-  go (arrays (undefined :: arrs)) (fromArr a) arrs
+  go (arrays (undefined_ :: arrs)) (fromArr a) arrs
   where
     go :: ArraysR a -> a -> AsyncsR a -> IO ()
     go ArraysRunit         ()     A_Unit    = return ()
@@ -960,7 +962,7 @@ data instance ArrivedR (a,b)         = Ar_Pair  (ArrivedR a) (ArrivedR b)
 {-# NOINLINE awaitAsyncs #-} 
 awaitAsyncs :: forall arrs. Arrays arrs => Asyncs arrs -> IO ()
 awaitAsyncs (Asyncs !arrs) =
-  go (arrays (undefined :: arrs)) arrs
+  go (arrays (undefined_ :: arrs)) arrs
   where
     go :: ArraysR a -> AsyncsR a -> IO ()
     go ArraysRunit          A_Unit       = return ()
@@ -972,7 +974,7 @@ awaitAsyncs (Asyncs !arrs) =
 {-# NOINLINE awaitAsyncs' #-} 
 awaitAsyncs' :: forall arrs. Arrays arrs => Asyncs arrs -> IO (Arrived arrs)
 awaitAsyncs' (Asyncs !arrs) =
-  do arrs' <- go (arrays (undefined :: arrs)) arrs
+  do arrs' <- go (arrays (undefined_ :: arrs)) arrs
      return $ Arrived  arrs' 
   where
     go :: ArraysR a -> AsyncsR a -> IO (ArrivedR a)
@@ -1020,7 +1022,7 @@ collectAsyncs a@(Asyncs !arrs) =
 collectAsyncs' :: forall arrs. Arrays arrs => Asyncs arrs -> IO arrs
 collectAsyncs' (Asyncs !arrs) =
   do debugMsg "Collecting result arrays" 
-     !arrs' <- collectR (arrays (undefined :: arrs)) arrs
+     !arrs' <- collectR (arrays (undefined_ :: arrs)) arrs
      debugMsg "Collecting result arrays: DONE!"
      return $ toArr arrs'
   where
@@ -1055,7 +1057,7 @@ collectAsyncs' (Asyncs !arrs) =
 collectAsyncs'' :: forall arrs. Arrays arrs => Arrived arrs -> IO arrs
 collectAsyncs'' (Arrived !arrs) =
   do debugMsg "Collecting result arrays" 
-     !arrs' <- collectR (arrays (undefined :: arrs)) arrs
+     !arrs' <- collectR (arrays (undefined_ :: arrs)) arrs
      debugMsg "Collecting result arrays: DONE!"
      return $ toArr arrs'
   where
