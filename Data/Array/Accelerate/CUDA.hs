@@ -262,9 +262,10 @@ runAsync a
 -- expression. See the CUDA C Programming Guide (G.1) for more information.
 --
 runWith :: Arrays a => Context -> Acc a -> a
-runWith ctx a
-  = unsafePerformIO
-  $ evaluate (runAsyncWith ctx a) >>= wait
+runWith ctx a = unsafePerformIO execute
+  where
+    !acc    = convertAccWith config a
+    execute = evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
 
 
 -- | As 'runWith', but execute asynchronously. Be sure not to destroy the context,
