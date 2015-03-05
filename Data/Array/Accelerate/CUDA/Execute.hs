@@ -392,7 +392,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
       out               <- allocateArray sh'
       Array _ locks     <- allocateArray sh'            :: CIO (Array sh' Int32)
-      withDevicePtrs locks (Just stream) $ \((),d_locks) -> do
+      withDevicePtrs locks (Just stream) $ \d_locks -> do
 
         liftIO $ CUDA.memsetAsync d_locks n' 0 (Just stream)      -- TLM: overlap these two operations?
         copyArrayAsync dfs out (Just stream)

@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE NoImplicitPrelude   #-}
+{-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}

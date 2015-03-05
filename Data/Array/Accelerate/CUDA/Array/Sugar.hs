@@ -16,6 +16,8 @@ module Data.Array.Accelerate.CUDA.Array.Sugar (
 
 ) where
 
+import Control.Monad.Trans
+
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.Array.Sugar                hiding (newArray, allocateArray)
@@ -37,7 +39,7 @@ newArray sh f =
 --
 allocateArray :: (Shape dim, Elt e) => dim -> CIO (Array dim e)
 allocateArray sh = do
-  arr <- fmap Sugar.allocateArray (return sh)
+  arr <- liftIO $ Sugar.allocateArray sh
   mallocArray arr
   return arr
 
