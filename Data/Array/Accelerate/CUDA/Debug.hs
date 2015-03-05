@@ -35,14 +35,6 @@ import Foreign.CUDA.Driver.Stream                       ( Stream )
 import qualified Foreign.CUDA.Driver.Event              as Event
 
 
--- | The opposite of 'when'
---
-unless :: Mode -> IO () -> IO ()
-unless f s = do
-  yes <- queryFlag f
-  if yes then return () else s
-
-
 -- | Execute an action and time the results. The second argument specifies how
 -- to format the output string given elapsed GPU and CPU time respectively
 --
