@@ -56,10 +56,14 @@ import qualified Data.Array.Accelerate.Array.Memory.Cache       as MC
 -- that remote pointers can be re-used, something that would not be true for
 -- pointers allocated under different contexts.
 --
-type MemoryTable = MVar (IntMap (MC.MemoryCache DevicePtr Event))
+type MemoryTable = MVar (IntMap (MC.MemoryCache DevicePtr (Maybe Event)))
 
-instance MC.Task Event where
-  isDone = Event.query
+instance MC.Task (Maybe Event) where
+  isDone Nothing  = return True
+  isDone (Just e) = Event.query e
+
+  destroy Nothing  = return ()
+  destroy (Just e) = Event.destroy e
 
 -- Create a MemoryTable.
 --
@@ -78,12 +82,12 @@ withRemote ctx ref ad run ms = do
       streaming ms $ MC.withRemote mc ad run'
   where
     run' p = do
-      c <- run p
-      event <-
-       case ms of
-        Nothing -> create
-        Just s  -> waypoint s
-      return (event, c)
+      c  <- run p
+      case ms of
+        Nothing -> return (Nothing, c)
+        Just s  -> do
+          e <- waypoint s
+          return (Just e, c)
 
 -- Check if the table has an entry for the given array.
 --
@@ -125,7 +129,7 @@ insertUnmanaged !ctx !ref !arr !ptr = do
            Just mt -> return (ct, mt)
   blocking $ MC.insertUnmanaged mt arr ptr
 
-insertContext :: Context -> IntMap (MC.MemoryCache DevicePtr Event) -> CRM (IntMap (MC.MemoryCache DevicePtr Event), MC.MemoryCache DevicePtr Event)
+insertContext :: Context -> IntMap (MC.MemoryCache DevicePtr (Maybe Event)) -> CRM (IntMap (MC.MemoryCache DevicePtr (Maybe Event)), MC.MemoryCache DevicePtr (Maybe Event))
 insertContext ctx ct = do
    mt <- MC.new (\p -> bracket_ (push ctx) pop (CUDA.free p))
    return (IM.insert (contextId ctx) mt ct, mt)
