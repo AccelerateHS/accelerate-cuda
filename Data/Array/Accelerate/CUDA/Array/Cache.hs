@@ -110,7 +110,7 @@ malloc !ctx !ref !ad !frozen !n = do
 
 -- Explicitly free an array in the MemoryCache. Has the same properties as
 -- `Data.Array.Accelerate.Array.Memory.Cache.free`
-free :: Typeable a => Context -> MemoryTable -> ArrayData a -> IO ()
+free :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO ()
 free !ctx !ref !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> message "free/context not found"

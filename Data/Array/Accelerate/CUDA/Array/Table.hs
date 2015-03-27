@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE InstanceSigs        #-}
@@ -44,7 +45,7 @@ import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.IntMap.Strict                             as IM
 
 import Data.Array.Accelerate.Array.Data                         ( ArrayData, ptrsOfArrayData )
-import Data.Array.Accelerate.Array.Memory                       ( RemoteMemory )
+import Data.Array.Accelerate.Array.Memory                       ( RemoteMemory, PrimElt )
 import Data.Array.Accelerate.CUDA.Context                       ( Context, deviceContext, push, pop )
 import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -100,7 +101,7 @@ new = trace "initialise CUDA memory table" $ newMVar IM.empty
 
 -- Look for the device pointer corresponding to a given host-side array.
 --
-lookup :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
+lookup :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO (Maybe (DevicePtr b))
 lookup !ctx !ref !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> trace "lookup/context not found" $ return Nothing
@@ -109,7 +110,7 @@ lookup !ctx !ref !arr = withMVar ref $ \ct ->
 
 -- Allocate a new device array to be associated with the given host-side array.
 -- Has the same properties as `Data.Array.Accelerate.Array.Memory.Table.malloc`
-malloc :: forall a b. (Typeable a, Typeable b, Storable b) => Context -> MemoryTable -> ArrayData a -> Int -> IO (DevicePtr b)
+malloc :: forall a b. PrimElt a b => Context -> MemoryTable -> ArrayData a -> Int -> IO (DevicePtr b)
 malloc !ctx !ref !ad !n = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
@@ -122,7 +123,7 @@ malloc !ctx !ref !ad !n = do
 
 -- Explicitly free an array in the MemoryTable. Has the same properties as
 -- `Data.Array.Accelerate.Array.Memory.Table.free`
-free :: Typeable a => Context -> MemoryTable -> ArrayData a -> IO ()
+free :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO ()
 free !ctx !ref !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> message "free/context not found"
@@ -133,7 +134,7 @@ free !ctx !ref !arr = withMVar ref $ \ct ->
 -- not allocated by accelerate. The device memory will NOT be freed when the host
 -- array is garbage collected.
 --
-insertUnmanaged :: (Typeable a, Typeable b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
+insertUnmanaged :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
 insertUnmanaged !ctx !ref !arr !ptr = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
