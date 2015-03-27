@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs           #-}
+{-# LANGUAGE PatternGuards   #-}
 {-# LANGUAGE QuasiQuotes     #-}
 {-# LANGUAGE TemplateHaskell #-}
 -- |
