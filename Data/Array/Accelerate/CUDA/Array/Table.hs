@@ -30,6 +30,7 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 
 import Prelude                                                  hiding ( lookup )
 import Data.Functor
+import Data.Proxy
 import Data.IntMap.Strict                                       ( IntMap )
 import Data.Typeable                                            ( Typeable )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, modifyMVar )
@@ -127,7 +128,7 @@ free :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO ()
 free !ctx !ref !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> message "free/context not found"
-    Just mt -> MT.free mt arr
+    Just mt -> MT.free (Proxy :: Proxy CRM) mt arr
 
 
 -- Record an association between a host-side array and a device memory area that was
