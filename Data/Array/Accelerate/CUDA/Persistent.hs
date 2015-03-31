@@ -117,7 +117,7 @@ lookup context (KT !kt_ref !pt_ref) !key = withMVar kt_ref $ \kt -> do
         cubin   <- (</>) <$> cacheDirectory <*> pure (cacheFilePath key)
         bin     <- BS.readFile cubin
         !mdl    <- CUDA.loadData bin
-        let obj  = KernelObject bin (FL.singleton (deviceContext context) mdl)
+        let obj  = KernelObject bin (FL.singleton (foreignContext context) mdl)
         addFinalizer mdl (module_finalizer (weakContext context) key mdl)
         HT.insert kt key obj
         return  $! Just obj
@@ -137,13 +137,13 @@ insert (KT !kt_ref !_) !key !val = withMVar kt_ref $ \kt -> HT.insert kt key val
 
 -- Unload a kernel module from the specified context
 --
-module_finalizer :: Weak CUDA.Context -> KernelKey -> CUDA.Module -> IO ()
+module_finalizer :: Weak ForeignContext -> KernelKey -> CUDA.Module -> IO ()
 module_finalizer weak_ctx key mdl = do
   mc <- deRefWeak weak_ctx
   case mc of
     Nothing     -> D.traceIO D.dump_gc ("gc: finalise module/dead context: " ++ cacheFilePath key)
-    Just ctx    -> D.traceIO D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
-                >> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)
+    Just fctx   -> D.traceIO D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
+                >> withForeignContext fctx (\ctx -> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl))
 
 
 -- Local cache -----------------------------------------------------------------
@@ -183,7 +183,7 @@ data KernelEntry
   -- re-link into the current context.
   --
   | KernelObject {-# UNPACK #-} !ByteString
-                 {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
+                 {-# UNPACK #-} !(FullList ForeignContext CUDA.Module)
 
 
 -- Persistent cache ------------------------------------------------------------

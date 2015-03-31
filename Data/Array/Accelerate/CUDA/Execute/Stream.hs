@@ -18,7 +18,7 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
+import Data.Array.Accelerate.CUDA.Context                       ( Context(..), ForeignContext, withForeignContext )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
 import Data.Array.Accelerate.FullList                           ( FullList(..) )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
@@ -97,8 +97,8 @@ new = do
 --
 {-# INLINE create #-}
 create :: Context -> Reservoir -> IO Stream
-create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
-  let key = deviceContext ctx
+create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl ->
+  withForeignContext (foreignContext ctx) $ \key -> do
   --
   ms    <- HT.lookup tbl key
   case ms of
@@ -119,7 +119,7 @@ create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
 -- pending operations in the stream have completed.
 --
 {-# INLINE destroy #-}
-destroy :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
+destroy :: Weak ForeignContext -> Weak RSV -> Stream -> IO ()
 destroy !weak_ctx !weak_rsv !stream = do
   -- Wait for all preceding operations submitted to the stream to complete. Not
   -- necessary because of the setup of 'streaming'.
@@ -131,7 +131,7 @@ destroy !weak_ctx !weak_rsv !stream = do
   mc <- deRefWeak weak_ctx
   case mc of
     Nothing       -> message ("finalise/dead context " ++ showStream stream)
-    Just ctx      -> do
+    Just fctx     -> withForeignContext fctx $ \ctx -> do
       --
       mr <- deRefWeak weak_rsv
       case mr of

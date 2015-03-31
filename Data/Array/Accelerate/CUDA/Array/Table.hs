@@ -47,7 +47,7 @@ import qualified Data.IntMap.Strict                             as IM
 
 import Data.Array.Accelerate.Array.Data                         ( ArrayData, ptrsOfArrayData )
 import Data.Array.Accelerate.Array.Memory                       ( RemoteMemory, PrimElt )
-import Data.Array.Accelerate.CUDA.Context                       ( Context, deviceContext, push, pop )
+import Data.Array.Accelerate.CUDA.Context                       ( Context, foreignContext, unsafeDeviceContext, push, pop )
 import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.Array.Memory             as M
@@ -164,7 +164,7 @@ reclaim ref = withMVar ref (blocking . mapM_ MT.reclaim . IM.elems)
 {-# INLINE contextId #-}
 contextId :: Context -> ContextId
 contextId !ctx =
-  let CUDA.Context !p   = deviceContext ctx
+  let CUDA.Context !p = unsafeDeviceContext (foreignContext ctx)
   in fromIntegral (ptrToIntPtr p)
 
 {-# INLINE sizeOfPtr #-}

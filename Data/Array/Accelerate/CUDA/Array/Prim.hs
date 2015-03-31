@@ -320,9 +320,11 @@ copyArrayPeer
     -> IO ()
 copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n =
   withDevicePtrs ctxSrc mt from Nothing $ \src ->
-  withDevicePtrs ctxDst mt to Nothing $ \dst -> do
+  withDevicePtrs ctxDst mt to Nothing $ \dst ->
+  withForeignContext (foreignContext ctxSrc) $ \dctxSrc ->
+  withForeignContext (foreignContext ctxDst) $ \dctxDst -> do
   transfer "copyArrayPeer" (n * sizeOf (undefined :: a)) $
-    CUDA.copyArrayPeer n src (deviceContext ctxSrc) dst (deviceContext ctxDst)
+    CUDA.copyArrayPeer n src dctxSrc dst dctxDst
 
 copyArrayPeerAsync
     :: forall e a. (PrimElt e a, DevicePtrs e ~ CUDA.DevicePtr a)
@@ -334,9 +336,11 @@ copyArrayPeerAsync
     -> IO ()
 copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st =
   withDevicePtrs ctxSrc mt from st $ \src ->
-  withDevicePtrs ctxDst mt to st $ \dst -> do
-  transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: a)) $
-    CUDA.copyArrayPeerAsync n src (deviceContext ctxSrc) dst (deviceContext ctxDst) st
+  withDevicePtrs ctxDst mt to st   $ \dst ->
+  withForeignContext (foreignContext ctxSrc) $ \dctxSrc ->
+  withForeignContext (foreignContext ctxDst) $ \dctxDst ->
+    transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: a)) $
+    CUDA.copyArrayPeerAsync n src dctxSrc dst dctxDst st
 
 
 -- Copy data from the device into the associated Accelerate host-side array

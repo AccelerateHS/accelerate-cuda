@@ -1,4 +1,5 @@
 {-# LANGUAGE MagicHash     #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE ViewPatterns  #-}
 -- |
@@ -18,23 +19,29 @@ module Data.Array.Accelerate.CUDA.Context (
 
   -- An execution context
   Context(..), create, push, pop, destroy,
-  keepAlive, fromDeviceContext
+  keepAlive, fromDeviceContext, ForeignContext,
+  withForeignContext, unsafeDeviceContext
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Analysis.Device
+import Data.Array.Accelerate.Error
 
 -- system
 import Data.Function                                    ( on )
 import Control.Exception                                ( bracket_ )
 import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Monad                                    ( when )
-import GHC.Exts                                         ( Ptr(..), mkWeak# )
+import GHC.Exts                                         ( mkWeak# )
 import GHC.Base                                         ( IO(..) )
 import GHC.Weak                                         ( Weak(..) )
+import GHC.ForeignPtr                                   ( ForeignPtr(..), ForeignPtrContents(..), touchForeignPtr, unsafeForeignPtrToPtr )
+import GHC.IORef                                        ( IORef(..) )
+import GHC.STRef                                        ( STRef(..) )
 import Text.PrettyPrint
+import Foreign.ForeignPtr                               ( withForeignPtr, newForeignPtr_ )
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
 import qualified Foreign.CUDA.Driver.Context            as CUDA
 
@@ -42,21 +49,37 @@ import qualified Foreign.CUDA.Driver.Context            as CUDA
 -- | The execution context
 --
 data Context = Context {
-    deviceProperties    :: {-# UNPACK #-} !CUDA.DeviceProperties,       -- information on hardware resources
-    deviceContext       :: {-# UNPACK #-} !CUDA.Context,                -- device execution context
-    weakContext         :: {-# UNPACK #-} !(Weak CUDA.Context)          -- weak pointer to the context (for memory management)
+    deviceProperties    :: {-# UNPACK #-} !CUDA.DeviceProperties,    -- information on hardware resources
+    foreignContext      :: {-# UNPACK #-} !ForeignContext,           -- device execution context
+    weakContext         :: {-# UNPACK #-} !(Weak ForeignContext)     -- weak pointer to the context (for memory management)
   }
 
 instance Eq Context where
-  (==) = (==) `on` deviceContext
+  (==) = (==) `on` foreignContext
 
+-- | The device execution context that will automatically be destroyed when no
+-- longer referenced.
+--
+type ForeignContext = ForeignPtr ()
+
+-- | Access the context from within a foreign context while keeping it alive.
+--
+withForeignContext :: ForeignContext -> (CUDA.Context -> IO a) -> IO a
+withForeignContext fctx f = withForeignPtr fctx (f . CUDA.Context)
+
+-- | Get the context from within a ForeignContext. This is unsafe because, if
+-- there are no references to the ForeignContext, it can potentially be
+-- destroyed.
+unsafeDeviceContext :: ForeignContext -> CUDA.Context
+unsafeDeviceContext = CUDA.Context . unsafeForeignPtrToPtr
 
 -- | Create a new CUDA context associated with the calling thread
 --
 create :: CUDA.Device -> [CUDA.ContextFlag] -> IO Context
 create dev flags = do
-  ctx                    <- CUDA.create dev flags >> CUDA.pop >>= keepAlive
+  ctx                    <- CUDA.create dev flags >> CUDA.pop
   actx@(Context prp _ _) <- fromDeviceContext dev ctx
+  _                      <- keepAlive actx
 
   -- Generated code does not take particular advantage of shared memory, so
   -- for devices that support it use those banks as an L1 cache instead.
@@ -75,20 +98,21 @@ create dev flags = do
 fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
 fromDeviceContext dev ctx = do
   prp           <- CUDA.props dev
-  weak          <- mkWeakContext ctx $ do
+  cuctx         <- newForeignPtr_ (CUDA.useContext ctx)
+  weak          <- mkWeakContext cuctx $ do
     traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
     CUDA.destroy ctx
   traceIO dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
 
-  return $! Context prp ctx weak
+  return $! Context prp cuctx weak
 
 -- | Destroy the specified context. This will fail if the context is more than
 -- single attachment.
 --
 {-# INLINE destroy #-}
 destroy :: Context -> IO ()
-destroy (deviceContext -> ctx) = do
-  traceIO dump_gc ("gc: destroy context: #" ++ show (CUDA.useContext ctx))
+destroy (foreignContext -> fctx) = withForeignContext fctx $ \ctx -> do
+  traceIO dump_gc ("gc: destroy context: #" ++ show ctx)
   CUDA.destroy ctx
 
 
@@ -97,7 +121,7 @@ destroy (deviceContext -> ctx) = do
 --
 {-# INLINE push #-}
 push :: Context -> IO ()
-push (deviceContext -> ctx) = do
+push (foreignContext -> fctx) = withForeignContext fctx $ \ctx -> do
   traceIO dump_gc ("gc: push context: #" ++ show (CUDA.useContext ctx))
   CUDA.push ctx
 
@@ -112,13 +136,13 @@ pop = do
 
 
 -- Make a weak pointer to a CUDA context. We need to be careful to put the
--- finaliser on the underlying pointer, rather than the box around it as
--- 'mkWeak' will do, because unpacking the context will cause the finaliser to
--- fire prematurely.
+-- finaliser on a primitive type. Unfortunately we can't create a Weak pointer
+-- from a foreign pointer without descending into GHC primitives.
 --
-mkWeakContext :: CUDA.Context -> IO () -> IO (Weak CUDA.Context)
-mkWeakContext c@(CUDA.Context (Ptr c#)) f = IO $ \s ->
-  case mkWeak# c# c f s of (# s', w #) -> (# s', Weak w #)
+mkWeakContext :: ForeignContext -> IO () -> IO (Weak ForeignContext)
+mkWeakContext c@(ForeignPtr _ (PlainForeignPtr (IORef (STRef mv)))) f = IO $ \s ->
+  case mkWeak# mv c f s of (# s', w #) -> (# s', Weak w #)
+mkWeakContext (ForeignPtr _ _) _ = $internalError "mkWeakContext" "ForeignPtr internals have changed"
 
 
 -- Make sure the GC knows that we want to keep this thing alive past the end of
