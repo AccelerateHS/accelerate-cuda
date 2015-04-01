@@ -32,7 +32,6 @@ import Prelude                                                  hiding ( lookup 
 import Data.Functor
 import Data.Proxy
 import Data.IntMap.Strict                                       ( IntMap )
-import Data.Typeable                                            ( Typeable )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, modifyMVar )
 import Control.Exception                                        ( catch, throwIO, bracket_ )
 import Control.Monad.IO.Class                                   ( MonadIO, liftIO )
