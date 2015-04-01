@@ -50,6 +50,7 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 
 -- friends
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Lifetime                   ( withLifetime )
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Memory               ( PrimElt )
 import Data.Array.Accelerate.CUDA.Context
@@ -321,8 +322,8 @@ copyArrayPeer
 copyArrayPeer !mt !from !ctxSrc !to !ctxDst !n =
   withDevicePtrs ctxSrc mt from Nothing $ \src ->
   withDevicePtrs ctxDst mt to Nothing $ \dst ->
-  withForeignContext (foreignContext ctxSrc) $ \dctxSrc ->
-  withForeignContext (foreignContext ctxDst) $ \dctxDst -> do
+  withLifetime (deviceContext ctxSrc) $ \dctxSrc ->
+  withLifetime (deviceContext ctxDst) $ \dctxDst -> do
   transfer "copyArrayPeer" (n * sizeOf (undefined :: a)) $
     CUDA.copyArrayPeer n src dctxSrc dst dctxDst
 
@@ -337,8 +338,8 @@ copyArrayPeerAsync
 copyArrayPeerAsync !mt !from !ctxSrc !to !ctxDst !n !st =
   withDevicePtrs ctxSrc mt from st $ \src ->
   withDevicePtrs ctxDst mt to st   $ \dst ->
-  withForeignContext (foreignContext ctxSrc) $ \dctxSrc ->
-  withForeignContext (foreignContext ctxDst) $ \dctxDst ->
+  withLifetime (deviceContext ctxSrc) $ \dctxSrc ->
+  withLifetime (deviceContext ctxDst) $ \dctxDst ->
     transfer "copyArrayPeerAsync" (n * sizeOf (undefined :: a)) $
     CUDA.copyArrayPeerAsync n src dctxSrc dst dctxDst st
 

@@ -61,7 +61,7 @@ import Data.Array.Accelerate.CUDA                       ( run1With )
 import Data.Array.Accelerate.CUDA.Array.Sugar           hiding ( shape, size )
 import Data.Array.Accelerate.CUDA.Array.Data            hiding ( pokeArray, peekArray, mallocArray )
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.Context               hiding ( ForeignContext )
+import Data.Array.Accelerate.CUDA.Context
 
 -- |A handle foreign code can use to call accelerate functions.
 type AccHandle = StablePtr Context

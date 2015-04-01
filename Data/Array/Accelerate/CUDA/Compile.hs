@@ -474,7 +474,7 @@ build1 acc code = do
 link :: Context -> KernelTable -> KernelKey -> IO CUDA.Module
 link context table key =
   let intErr    = $internalError "link" "missing kernel entry"
-      ctx       = foreignContext context
+      ctx       = deviceContext context
       weak_ctx  = weakContext context
   in do
     entry       <- fromMaybe intErr `fmap` KT.lookup context table key

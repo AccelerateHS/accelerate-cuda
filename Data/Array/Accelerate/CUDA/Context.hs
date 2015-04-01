@@ -19,29 +19,22 @@ module Data.Array.Accelerate.CUDA.Context (
 
   -- An execution context
   Context(..), create, push, pop, destroy,
-  keepAlive, fromDeviceContext, ForeignContext,
-  withForeignContext, unsafeDeviceContext
+  keepAlive, fromDeviceContext,
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, verbose, dump_gc, showFFloatSIBase )
 import Data.Array.Accelerate.CUDA.Analysis.Device
-import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Lifetime
 
 -- system
 import Data.Function                                    ( on )
 import Control.Exception                                ( bracket_ )
 import Control.Concurrent                               ( forkIO, threadDelay )
 import Control.Monad                                    ( when )
-import GHC.Exts                                         ( mkWeak# )
-import GHC.Base                                         ( IO(..) )
-import GHC.Weak                                         ( Weak(..) )
-import GHC.ForeignPtr                                   ( ForeignPtr(..), ForeignPtrContents(..), touchForeignPtr, unsafeForeignPtrToPtr )
-import GHC.IORef                                        ( IORef(..) )
-import GHC.STRef                                        ( STRef(..) )
+import System.Mem.Weak                                  ( Weak )
 import Text.PrettyPrint
-import Foreign.ForeignPtr                               ( withForeignPtr, newForeignPtr_ )
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
 import qualified Foreign.CUDA.Driver.Context            as CUDA
 
@@ -49,29 +42,13 @@ import qualified Foreign.CUDA.Driver.Context            as CUDA
 -- | The execution context
 --
 data Context = Context {
-    deviceProperties    :: {-# UNPACK #-} !CUDA.DeviceProperties,    -- information on hardware resources
-    foreignContext      :: {-# UNPACK #-} !ForeignContext,           -- device execution context
-    weakContext         :: {-# UNPACK #-} !(Weak ForeignContext)     -- weak pointer to the context (for memory management)
+    deviceProperties    :: {-# UNPACK #-} !CUDA.DeviceProperties,         -- information on hardware resources
+    deviceContext       :: {-# UNPACK #-} !(Lifetime CUDA.Context),       -- device execution context
+    weakContext         :: {-# UNPACK #-} !(Weak (Lifetime CUDA.Context)) -- weak pointer to the context (for memory management)
   }
 
 instance Eq Context where
-  (==) = (==) `on` foreignContext
-
--- | The device execution context that will automatically be destroyed when no
--- longer referenced.
---
-type ForeignContext = ForeignPtr ()
-
--- | Access the context from within a foreign context while keeping it alive.
---
-withForeignContext :: ForeignContext -> (CUDA.Context -> IO a) -> IO a
-withForeignContext fctx f = withForeignPtr fctx (f . CUDA.Context)
-
--- | Get the context from within a ForeignContext. This is unsafe because, if
--- there are no references to the ForeignContext, it can potentially be
--- destroyed.
-unsafeDeviceContext :: ForeignContext -> CUDA.Context
-unsafeDeviceContext = CUDA.Context . unsafeForeignPtrToPtr
+  (==) = (==) `on` deviceContext
 
 -- | Create a new CUDA context associated with the calling thread
 --
@@ -98,22 +75,21 @@ create dev flags = do
 fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
 fromDeviceContext dev ctx = do
   prp           <- CUDA.props dev
-  cuctx         <- newForeignPtr_ (CUDA.useContext ctx)
-  weak          <- mkWeakContext cuctx $ do
+  lctx          <- newLifetime ctx
+  addFinalizer lctx $ do
     traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
     CUDA.destroy ctx
+  weak          <- mkWeakPtr lctx
   traceIO dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
 
-  return $! Context prp cuctx weak
+  return $! Context prp lctx weak
 
 -- | Destroy the specified context. This will fail if the context is more than
 -- single attachment.
 --
 {-# INLINE destroy #-}
 destroy :: Context -> IO ()
-destroy (foreignContext -> fctx) = withForeignContext fctx $ \ctx -> do
-  traceIO dump_gc ("gc: destroy context: #" ++ show ctx)
-  CUDA.destroy ctx
+destroy (deviceContext -> ctx) = finalize ctx
 
 
 -- | Push the given context onto the CPU's thread stack of current contexts. The
@@ -121,7 +97,7 @@ destroy (foreignContext -> fctx) = withForeignContext fctx $ \ctx -> do
 --
 {-# INLINE push #-}
 push :: Context -> IO ()
-push (foreignContext -> fctx) = withForeignContext fctx $ \ctx -> do
+push (deviceContext -> lctx) = withLifetime lctx $ \ctx -> do
   traceIO dump_gc ("gc: push context: #" ++ show (CUDA.useContext ctx))
   CUDA.push ctx
 
@@ -133,16 +109,6 @@ pop :: IO ()
 pop = do
   ctx <- CUDA.pop
   traceIO dump_gc ("gc: pop context: #" ++ show (CUDA.useContext ctx))
-
-
--- Make a weak pointer to a CUDA context. We need to be careful to put the
--- finaliser on a primitive type. Unfortunately we can't create a Weak pointer
--- from a foreign pointer without descending into GHC primitives.
---
-mkWeakContext :: ForeignContext -> IO () -> IO (Weak ForeignContext)
-mkWeakContext c@(ForeignPtr _ (PlainForeignPtr (IORef (STRef mv)))) f = IO $ \s ->
-  case mkWeak# mv c f s of (# s', w #) -> (# s', Weak w #)
-mkWeakContext (ForeignPtr _ _) _ = $internalError "mkWeakContext" "ForeignPtr internals have changed"
 
 
 -- Make sure the GC knows that we want to keep this thing alive past the end of
