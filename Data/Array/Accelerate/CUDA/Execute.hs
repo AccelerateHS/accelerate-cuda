@@ -52,6 +52,7 @@ import Data.Array.Accelerate.Interpreter                        ( evalPrim, eval
 import Data.Array.Accelerate.Array.Data                         ( ArrayElt, ArrayData )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.FullList                           ( FullList(..), List(..) )
+import Data.Array.Accelerate.Lifetime                           ( withLifetime )
 import Data.Array.Accelerate.Trafo                              ( Extend(..) )
 import qualified Data.Array.Accelerate.Array.Representation     as R
 
@@ -857,9 +858,9 @@ marshalAccEnvTex !kernel !aenv (Gamma !gamma) !stream
            marshal (shape arr) (Just stream)
 
 marshalAccTex :: (Name,[Name]) -> AccKernel a -> Array sh e -> Maybe Stream -> CIO b -> CIO b
-marshalAccTex (_, !arrIn) (AccKernel _ _ !mdl _ _ _ _) (Array !sh !adata) ms run
+marshalAccTex (_, !arrIn) (AccKernel _ _ !lmdl _ _ _ _) (Array !sh !adata) ms run
   = do
-      texs <- liftIO (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
+      texs <- liftIO $ withLifetime lmdl $ \mdl -> (sequence' $ map (CUDA.getTex mdl) (reverse arrIn))
       marshalTextureData adata (R.size sh) texs ms (const run)
 
 marshalAccEnvArg :: Aval aenv -> Gamma aenv -> Stream -> ContT b CIO [CUDA.FunParam]

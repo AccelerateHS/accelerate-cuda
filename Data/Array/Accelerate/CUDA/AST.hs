@@ -28,6 +28,7 @@ module Data.Array.Accelerate.CUDA.AST (
 
 -- friends
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
@@ -49,13 +50,13 @@ import qualified Data.HashMap.Strict                    as Map
 -- and execution information.
 --
 data AccKernel a where
-  AccKernel :: !String                          -- __global__ entry function name
-            -> {-# UNPACK #-} !CUDA.Fun         -- __global__ function object
-            -> {-# UNPACK #-} !CUDA.Module      -- binary module
-            -> {-# UNPACK #-} !CUDA.Occupancy   -- occupancy analysis
-            -> {-# UNPACK #-} !Int              -- thread block size
-            -> {-# UNPACK #-} !Int              -- shared memory per block (bytes)
-            -> !(Int -> Int)                    -- number of blocks for input problem size
+  AccKernel :: !String                                -- __global__ entry function name
+            -> {-# UNPACK #-} !CUDA.Fun               -- __global__ function object
+            -> {-# UNPACK #-} !(Lifetime CUDA.Module) -- binary module
+            -> {-# UNPACK #-} !CUDA.Occupancy         -- occupancy analysis
+            -> {-# UNPACK #-} !Int                    -- thread block size
+            -> {-# UNPACK #-} !Int                    -- shared memory per block (bytes)
+            -> !(Int -> Int)                          -- number of blocks for input problem size
             -> AccKernel a
 
 

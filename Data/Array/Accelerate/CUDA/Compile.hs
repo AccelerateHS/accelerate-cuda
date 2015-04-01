@@ -26,6 +26,7 @@ module Data.Array.Accelerate.CUDA.Compile (
 -- friends
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
@@ -59,7 +60,6 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.IO.Unsafe
-import System.Mem.Weak
 import System.Process
 import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
 import qualified Data.ByteString                                as B
@@ -440,7 +440,7 @@ build1 acc code = do
   let (cta,blocks,smem) = launchConfig acc dev occ
       (mdl,fun,occ)     = unsafePerformIO $ do
         m <- link context table key
-        f <- CUDA.getFun m entry
+        f <- withLifetime m $ flip CUDA.getFun entry
         l <- CUDA.requires f CUDA.MaxKernelThreadsPerBlock
         o <- determineOccupancy acc dev f l
         D.when D.dump_cc (stats entry f o)
@@ -471,7 +471,7 @@ build1 acc code = do
 -- table. This may entail waiting for the external compilation process to
 -- complete. If successful, the temporary files are removed.
 --
-link :: Context -> KernelTable -> KernelKey -> IO CUDA.Module
+link :: Context -> KernelTable -> KernelKey -> IO (Lifetime CUDA.Module)
 link context table key =
   let intErr    = $internalError "link" "missing kernel entry"
       ctx       = deviceContext context
@@ -493,12 +493,13 @@ link context table key =
         ()              <- takeMVar done
         bin             <- B.readFile cubin
         mdl             <- CUDA.loadData bin
-        addFinalizer mdl (module_finalizer weak_ctx key mdl)
+        lmdl            <- newLifetime mdl
+        addFinalizer lmdl (module_finalizer weak_ctx key lmdl)
 
         -- Update hash tables and stash the binary object into the persistent
         -- cache
         --
-        KT.insert table key $! KernelObject bin (FL.singleton ctx mdl)
+        KT.insert table key $! KernelObject bin (FL.singleton ctx lmdl)
         KT.persist table cubin key
 
         -- Remove temporary build products.
@@ -510,20 +511,21 @@ link context table key =
           removeDirectory (dropFileName cufile)
             `catchIOError` \_ -> return ()      -- directory not empty
 
-        return mdl
+        return lmdl
 
       -- If we get a real object back, then this will already be in the
       -- persistent cache, since either it was just read in from there, or we
       -- had to generate new code and the link step above has added it.
       --
       KernelObject bin active
-        | Just mdl <- FL.lookup ctx active      -> return mdl
+        | Just lmdl <- FL.lookup ctx active     -> return lmdl
         | otherwise                             -> do
             message "re-linking module for current context"
             mdl                 <- CUDA.loadData bin
-            addFinalizer mdl (module_finalizer weak_ctx key mdl)
-            KT.insert table key $! KernelObject bin (FL.cons ctx mdl active)
-            return mdl
+            lmdl                <- newLifetime mdl
+            addFinalizer lmdl (module_finalizer weak_ctx key lmdl)
+            KT.insert table key $! KernelObject bin (FL.cons ctx lmdl active)
+            return lmdl
 
 
 -- Generate and compile code for a single open array expression
