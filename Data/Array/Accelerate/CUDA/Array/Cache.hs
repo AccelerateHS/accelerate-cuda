@@ -37,7 +37,6 @@ import Control.Monad.Trans.Reader
 import Foreign.CUDA.Ptr                                         ( DevicePtr )
 
 import qualified Foreign.CUDA.Driver                            as CUDA
-import qualified Foreign.CUDA.Driver.Event                      as Event
 import qualified Data.IntMap.Strict                             as IM
 
 import Data.Array.Accelerate.Array.Data                         ( ArrayData )
@@ -61,10 +60,7 @@ type MemoryTable = MVar (IntMap (MC.MemoryCache DevicePtr (Maybe Event)))
 
 instance MC.Task (Maybe Event) where
   isDone Nothing  = return True
-  isDone (Just e) = Event.query e
-
-  destroy Nothing  = return ()
-  destroy (Just e) = Event.destroy e
+  isDone (Just e) = query e
 
 -- Create a MemoryTable.
 --

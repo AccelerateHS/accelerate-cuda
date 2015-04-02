@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP          #-}
+{-# LANGUAGE ViewPatterns #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Event
 -- Copyright   : [2013..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -11,26 +12,30 @@
 --
 module Data.Array.Accelerate.CUDA.Execute.Event (
 
-  Event, create, waypoint, after, block, Event.destroy,
+  Event, create, waypoint, after, block, query, destroy,
 
 ) where
 
 -- friends
+import Data.Array.Accelerate.Lifetime
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
-import Foreign.CUDA.Driver.Event                                ( Event(..) )
 import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
-import qualified Foreign.CUDA.Driver.Event                      as Event
+import qualified Foreign.CUDA.Driver.Event                      as CUDA
 
+type Event = Lifetime CUDA.Event
 
--- Create a new event. It will not be automatically garbage collected, and is
--- not suitable for timing purposes.
+-- Create a new event. It will be automatically garbage collected, but is not
+-- suitable for timing purposes.
 --
 {-# INLINE create #-}
 create :: IO Event
 create = do
-  event <- Event.create [Event.DisableTiming]
+  e <- CUDA.create [CUDA.DisableTiming]
+  event <- newLifetime e
+  addFinalizer event $
+    D.traceIO D.dump_gc ("gc: finalise event " ++ showEvent event) >> CUDA.destroy e
   message ("create " ++ showEvent event)
   return event
 
@@ -41,7 +46,7 @@ create = do
 waypoint :: Stream -> IO Event
 waypoint stream = do
   event <- create
-  Event.record event (Just stream)
+  withLifetime event (`CUDA.record` Just stream)
   message $ "waypoint " ++ showEvent event ++ " in " ++ showStream stream
   return event
 
@@ -52,20 +57,25 @@ waypoint stream = do
 after :: Event -> Stream -> IO ()
 after event stream = do
   message $ "after " ++ showEvent event ++ " in " ++ showStream stream
-  Event.wait event (Just stream) []
+  withLifetime event $ \e -> CUDA.wait e (Just stream) []
 
 -- Block the calling thread until the event is recorded
 --
 {-# INLINE block #-}
 block :: Event -> IO ()
-block = Event.block
+block = flip withLifetime CUDA.block
 
-
--- Add a finaliser to an event token
+-- Query the status of the event.
 --
--- addEventFinalizer :: Event -> IO () -> IO ()
--- addEventFinalizer e@(Event (Ptr e#)) f = IO $ \s ->
---   case mkWeak# e# e f s of (# s', _w #) -> (# s', () #)
+{-# INLINE query #-}
+query :: Event -> IO Bool
+query = flip withLifetime CUDA.query
+
+-- Explicitly destroy the event.
+--
+{-# INLINE destroy #-}
+destroy :: Event -> IO ()
+destroy = finalize
 
 
 -- Debug
@@ -77,7 +87,7 @@ message msg = D.traceIO D.dump_sched ("event: " ++ msg)
 
 {-# INLINE showEvent #-}
 showEvent :: Event -> String
-showEvent (Event e) = show e
+showEvent (unsafeGetValue -> CUDA.Event e) = show e
 
 {-# INLINE showStream #-}
 showStream :: Stream -> String
