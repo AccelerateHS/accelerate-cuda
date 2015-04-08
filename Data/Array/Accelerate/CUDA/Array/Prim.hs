@@ -167,11 +167,9 @@ mallocArray
 mallocArray !ctx !mt !ad !n0 = do
   let !n        = 1 `max` n0
       !bytes    = n * sizeOf (undefined :: a)
-  exists <- contains ctx mt ad
-  unless exists $ do
-    message $ "mallocArray: " ++ showBytes bytes
-    malloc ctx mt ad False n     :: IO ()
-    return ()
+  message $ "mallocArray: " ++ showBytes bytes
+  _ <- malloc ctx mt ad False n
+  return ()
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
 -- device and upload an existing array. This is specialised because if the host
@@ -191,10 +189,8 @@ useArray !ctx !mt !ad !n0 =
 
       run dst = transfer "useArray/malloc" bytes $ CUDA.pokeArray n src dst
   in do
-    exists <- contains ctx mt ad
-    unless exists $ do
-      malloc ctx mt ad True n
-      withDevicePtrs ctx mt ad Nothing run
+    alloc <- malloc ctx mt ad True n
+    when alloc $ withDevicePtrs ctx mt ad Nothing run
 
 -- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
 -- device and upload an existing array. This is specialised because if the host
@@ -216,10 +212,8 @@ useArraySlice !ctx !mt !ad_host !ad_dev !tdesc =
           [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
           | (src_offset, dst_offset, size) <- blocksOf tdesc]
   in do
-    exists <- contains ctx mt ad_dev
-    unless exists $ do
-      malloc ctx mt ad_dev True (k * nblocks tdesc * blocksize tdesc)
-      withDevicePtrs ctx mt ad_dev Nothing run
+    alloc <- malloc ctx mt ad_dev True (k * nblocks tdesc * blocksize tdesc)
+    when alloc $ withDevicePtrs ctx mt ad_dev Nothing run
 
 
 useArrayAsync
@@ -237,10 +231,8 @@ useArrayAsync !ctx !mt !ad !n0 !ms =
 
       run dst = transfer "useArray/malloc" bytes $ CUDA.pokeArrayAsync n src dst ms
   in do
-    exists <- contains ctx mt ad
-    unless exists $ do
-      malloc ctx mt ad True n
-      withDevicePtrs ctx mt ad ms run
+    alloc <- malloc ctx mt ad True n
+    when alloc $ withDevicePtrs ctx mt ad ms run
 
 
 useDevicePtrs

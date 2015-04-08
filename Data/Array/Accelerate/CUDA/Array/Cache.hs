@@ -22,7 +22,7 @@
 module Data.Array.Accelerate.CUDA.Array.Cache (
 
   -- Tables for host/device memory associations
-  MemoryTable, new, malloc, withRemote, contains, free, insertUnmanaged, reclaim
+  MemoryTable, new, malloc, withRemote, free, insertUnmanaged, reclaim
 
 ) where
 
@@ -86,18 +86,9 @@ withRemote ctx ref ad run ms = do
           e <- waypoint s
           return (Just e, c)
 
--- Check if the table has an entry for the given array.
---
-contains :: PrimElt e a => Context -> MemoryTable -> ArrayData e -> IO Bool
-contains ctx ref ad = do
-  ct <- readMVar ref
-  case IM.lookup (contextId ctx) ct of
-    Nothing -> return False
-    Just mc -> MC.contains mc ad
-
 -- Allocate a new device array to be associated with the given host-side array.
 -- Has the same properties as `Data.Array.Accelerate.Array.Memory.Cache.malloc`
-malloc :: forall a b. (Typeable a, PrimElt a b) => Context -> MemoryTable -> ArrayData a -> Bool -> Int -> IO ()
+malloc :: forall a b. (Typeable a, PrimElt a b) => Context -> MemoryTable -> ArrayData a -> Bool -> Int -> IO Bool
 malloc !ctx !ref !ad !frozen !n = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
