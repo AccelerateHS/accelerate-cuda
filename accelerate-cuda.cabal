@@ -1,7 +1,7 @@
 Name:                   accelerate-cuda
 Version:                2.0.0.0
 Cabal-version:          >= 1.6
-Tested-with:            GHC == 7.8.*
+Tested-with:            GHC >= 7.8
 Build-type:             Simple
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
@@ -84,7 +84,7 @@ Flag internal-checks
 Library
   Build-depends:        accelerate              == 2.0.*,
                         array                   >= 0.3,
-                        base                    == 4.7.*,
+                        base                    >= 4.7,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         containers              >= 0.3,
@@ -104,7 +104,7 @@ Library
                         SafeSemaphore           >= 0.9,
                         srcloc                  >= 0.2,
                         text                    >= 0.11,
-                        template-haskell        >= 2.2,
+                        template-haskell,
                         transformers            >= 0.4,
                         unordered-containers    >= 0.1.4
 
