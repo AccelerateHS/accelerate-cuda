@@ -42,8 +42,8 @@ before_install:
 install:
     - ghc --version
     - cabal --version
-    - cabal install ${MODE} deps/*
-    - cabal install --only-dependencies --enable-tests ${MODE}
+    - cabal install --only-dependencies --enable-tests ${MODE} . deps/*
+    - cabal install deps/*
 
 script:
     # Check the build
