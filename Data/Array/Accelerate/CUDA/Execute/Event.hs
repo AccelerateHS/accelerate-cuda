@@ -18,10 +18,13 @@ module Data.Array.Accelerate.CUDA.Execute.Event (
 
 -- friends
 import Data.Array.Accelerate.Lifetime
+import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
+import Control.Exception                                        ( bracket_ )
 import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
+import Foreign.CUDA.Driver                                      ( push, pop )
 import qualified Foreign.CUDA.Driver.Event                      as CUDA
 
 type Event = Lifetime CUDA.Event
@@ -30,12 +33,14 @@ type Event = Lifetime CUDA.Event
 -- suitable for timing purposes.
 --
 {-# INLINE create #-}
-create :: IO Event
-create = do
+create :: Context -> IO Event
+create ctx = do
   e <- CUDA.create [CUDA.DisableTiming]
   event <- newLifetime e
-  addFinalizer event $
-    D.traceIO D.dump_gc ("gc: finalise event " ++ showEvent event) >> CUDA.destroy e
+  addFinalizer event $ do
+    D.traceIO D.dump_gc ("gc: finalise event " ++ showEvent event)
+    withLifetime (deviceContext ctx) $ \dctx -> do
+      bracket_ (push dctx) pop (CUDA.destroy e)
   message ("create " ++ showEvent event)
   return event
 
@@ -43,9 +48,9 @@ create = do
 -- stream has completed all previously submitted work.
 --
 {-# INLINE waypoint #-}
-waypoint :: Stream -> IO Event
-waypoint stream = do
-  event <- create
+waypoint :: Context -> Stream -> IO Event
+waypoint ctx stream = do
+  event <- create ctx
   withLifetime event (`CUDA.record` Just stream)
   message $ "waypoint " ++ showEvent event ++ " in " ++ showStream stream
   return event

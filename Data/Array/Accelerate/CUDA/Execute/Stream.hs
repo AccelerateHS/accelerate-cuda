@@ -74,7 +74,7 @@ streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> (Event -> a
 streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !action !after = do
   stream <- liftIO $ create ctx rsv
   first  <- action stream
-  end    <- liftIO $ Event.waypoint stream
+  end    <- liftIO $ Event.waypoint ctx stream
   final  <- after end first
   liftIO $! destroy (weakContext ctx) weak_rsv stream
   liftIO $! Event.destroy end
@@ -158,9 +158,9 @@ destroy !weak_ctx !weak_rsv !stream = do
 --
 flush :: HashTable (Lifetime CUDA.Context) (FullList () Stream) -> IO ()
 flush !tbl =
-  let clean (!ctx,!ss) = do
-        bracket_ (withLifetime ctx CUDA.push) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
-        HT.delete tbl ctx
+  let clean (!lctx,!ss) = do
+        withLifetime lctx $ \ctx -> bracket_ (CUDA.push ctx) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
+        HT.delete tbl lctx
   in
   message "flush reservoir" >> HT.mapM_ clean tbl
 

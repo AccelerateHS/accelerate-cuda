@@ -236,7 +236,8 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
-      nop <- liftIO Event.create                -- record event never call, so this is a functional no-op
+      ctx <- asks activeContext
+      nop <- liftIO $ Event.create ctx          -- record event never call, so this is a functional no-op
       r   <- executeOpenAfun1 p aenv (Async nop a)
       ok  <- indexArray r 0                     -- TLM TODO: memory manager should remember what is already on the host
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
@@ -632,19 +633,22 @@ stepOpenSeq aenv !l stream = go l Empty
 
     travAfun1 :: forall a b. PreOpenAfun ExecOpenAcc aenv (a -> b) -> a -> CIO b
     travAfun1 (Alam (Abody afun)) a =
-      do nop <- liftIO Event.create
+      do ctx <- asks activeContext
+         nop <- liftIO $ Event.create ctx
          executeOpenAcc afun (aenv `Apush` (Async nop a)) stream
     travAfun1 _ _ = error "travAfun1"
 
     travAfun2 :: forall a b c. PreOpenAfun ExecOpenAcc aenv (a -> b -> c) -> a -> b -> CIO c
     travAfun2 (Alam (Alam (Abody afun))) a b =
-      do nop <- liftIO Event.create
+      do ctx <- asks activeContext
+         nop <- liftIO $ Event.create ctx
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b)) stream
     travAfun2 _ _ _ = error "travAfun2"
 
     travAfun3 :: forall a b c d. PreOpenAfun ExecOpenAcc aenv (a -> b -> c -> d) -> a -> b -> c -> CIO d
     travAfun3 (Alam (Alam (Alam (Abody afun)))) a b c =
-      do nop <- liftIO Event.create
+      do ctx <- asks activeContext
+         nop <- liftIO $ Event.create ctx
          executeOpenAcc afun (aenv `Apush` (Async nop a) `Apush` (Async nop b) `Apush` (Async nop c)) stream
     travAfun3 _ _ _ _ = error "travAfun3"
 

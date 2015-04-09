@@ -83,7 +83,7 @@ withRemote ctx ref ad run ms = do
       case ms of
         Nothing -> return (Nothing, c)
         Just s  -> do
-          e <- waypoint s
+          e <- waypoint ctx s
           return (Just e, c)
 
 -- Allocate a new device array to be associated with the given host-side array.
