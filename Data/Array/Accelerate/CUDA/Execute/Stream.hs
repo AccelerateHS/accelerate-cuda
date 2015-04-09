@@ -1,5 +1,7 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP          #-}
+{-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE CPP               #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ViewPatterns      #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
@@ -21,7 +23,7 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
 import Data.Array.Accelerate.FullList                           ( FullList(..) )
-import Data.Array.Accelerate.Lifetime                           ( Lifetime, withLifetime )
+import Data.Array.Accelerate.Lifetime                           ( Lifetime, withLifetime, unsafeGetValue )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.FullList                 as FL
@@ -49,13 +51,13 @@ import qualified Data.HashTable.IO                              as HT
 --
 type HashTable key val  = HT.BasicHashTable key val
 
-type RSV                = MVar ( HashTable CUDA.Context (FullList () Stream) )
+type RSV                = MVar ( HashTable (Lifetime CUDA.Context) (FullList () Stream) )
 data Reservoir          = Reservoir {-# UNPACK #-} !RSV
                                     {-# UNPACK #-} !(Weak RSV)
 
-instance Hashable CUDA.Context where
+instance Hashable (Lifetime CUDA.Context) where
   {-# INLINE hashWithSalt #-}
-  hashWithSalt salt (CUDA.Context ctx)
+  hashWithSalt salt (unsafeGetValue -> CUDA.Context ctx)
     = salt `hashWithSalt` (fromIntegral (ptrToIntPtr ctx) :: Int)
 
 
@@ -98,9 +100,9 @@ new = do
 --
 {-# INLINE create #-}
 create :: Context -> Reservoir -> IO Stream
-create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl ->
-  withLifetime (deviceContext ctx) $ \key -> do
+create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
   --
+  let key = deviceContext ctx
   ms    <- HT.lookup tbl key
   case ms of
     Nothing -> do
@@ -132,7 +134,7 @@ destroy !weak_ctx !weak_rsv !stream = do
   mc <- deRefWeak weak_ctx
   case mc of
     Nothing       -> message ("finalise/dead context " ++ showStream stream)
-    Just fctx     -> withLifetime fctx $ \ctx -> do
+    Just ctx      -> do
       --
       mr <- deRefWeak weak_rsv
       case mr of
@@ -154,10 +156,10 @@ destroy !weak_ctx !weak_rsv !stream = do
 
 -- Destroy all streams in the reservoir.
 --
-flush :: HashTable CUDA.Context (FullList () Stream) -> IO ()
+flush :: HashTable (Lifetime CUDA.Context) (FullList () Stream) -> IO ()
 flush !tbl =
   let clean (!ctx,!ss) = do
-        bracket_ (CUDA.push ctx) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
+        bracket_ (withLifetime ctx CUDA.push) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
         HT.delete tbl ctx
   in
   message "flush reservoir" >> HT.mapM_ clean tbl
