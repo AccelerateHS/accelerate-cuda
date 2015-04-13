@@ -24,6 +24,7 @@ module Data.Array.Accelerate.CUDA.State (
 
   -- Querying execution state
   defaultContext, deviceProperties, activeContext, kernelTable, memoryTable, streamReservoir,
+  eventTable,
 
 ) where
 
@@ -34,6 +35,7 @@ import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, dump_gc )
 import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
 import Data.Array.Accelerate.CUDA.Array.Cache           as MT ( MemoryTable, new )
 import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
+import Data.Array.Accelerate.CUDA.Execute.Event         as ET ( EventTable, new)
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
@@ -58,7 +60,8 @@ import qualified Foreign.CUDA.Driver                    as CUDA
 data State = State {
     memoryTable         :: {-# UNPACK #-} !MemoryTable,                 -- host/device memory associations
     kernelTable         :: {-# UNPACK #-} !KernelTable,                 -- compiled kernel object code
-    streamReservoir     :: {-# UNPACK #-} !Reservoir                    -- kernel execution streams
+    streamReservoir     :: {-# UNPACK #-} !Reservoir,                   -- kernel execution streams
+    eventTable          :: {-# UNPACK #-} !EventTable                   -- CUDA events
   }
 
 newtype CIO a = CIO {
@@ -92,9 +95,9 @@ evalCUDA !ctx !acc =
 --
 -- RCE: This is unfortunately hacky, but necessary to stop device pointers
 -- leaking.
-evalCUDAState :: Context -> MemoryTable -> KernelTable -> Reservoir -> CIO a -> IO a
-evalCUDAState ctx mt kt rsv acc = evalStateT (runReaderT (runCIO acc) ctx)
-                                             (State mt kt rsv)
+evalCUDAState :: Context -> MemoryTable -> KernelTable -> Reservoir -> EventTable -> CIO a -> IO a
+evalCUDAState ctx mt kt rsv etbl acc = evalStateT (runReaderT (runCIO acc) ctx)
+                                                  (State mt kt rsv etbl)
 
 -- Top-level mutable state
 -- -----------------------
@@ -108,10 +111,11 @@ theState :: State
 theState
   = unsafePerformIO
   $ do  message "initialise CUDA state"
-        mtb     <- keepAlive =<< MT.new
+        etbl    <- keepAlive =<< ET.new
+        mtb     <- keepAlive =<< MT.new etbl
         ktb     <- keepAlive =<< KT.new
         rsv     <- keepAlive =<< ST.new
-        return  $! State mtb ktb rsv
+        return  $! State mtb ktb rsv etbl
 
 
 -- Select and initialise a default CUDA device, and create a new execution

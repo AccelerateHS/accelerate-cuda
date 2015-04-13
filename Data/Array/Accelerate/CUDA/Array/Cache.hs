@@ -28,6 +28,7 @@ module Data.Array.Accelerate.CUDA.Array.Cache (
 
 import Prelude                                                  hiding ( lookup )
 import Data.IntMap.Strict                                       ( IntMap )
+import Data.Functor                                             ( (<$>) )
 import Data.Proxy
 import Data.Typeable                                            ( Typeable )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, modifyMVar, readMVar )
@@ -43,7 +44,7 @@ import Data.Array.Accelerate.Array.Data                         ( ArrayData )
 import Data.Array.Accelerate.Array.Memory                       ( PrimElt )
 import Data.Array.Accelerate.CUDA.Array.Table                   ( CRM, contextId )
 import Data.Array.Accelerate.CUDA.Context                       ( Context, push, pop )
-import Data.Array.Accelerate.CUDA.Execute.Event
+import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event, EventTable, waypoint, query )
 import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
 import Data.Array.Accelerate.Error
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
@@ -56,7 +57,7 @@ import qualified Data.Array.Accelerate.Array.Memory.Cache       as MC
 -- that remote pointers can be re-used, something that would not be true for
 -- pointers allocated under different contexts.
 --
-type MemoryTable = MVar (IntMap (MC.MemoryCache DevicePtr (Maybe Event)))
+data MemoryTable = MemoryTable EventTable (MVar (IntMap (MC.MemoryCache DevicePtr (Maybe Event))))
 
 instance MC.Task (Maybe Event) where
   isDone Nothing  = return True
@@ -64,14 +65,14 @@ instance MC.Task (Maybe Event) where
 
 -- Create a MemoryTable.
 --
-new :: IO MemoryTable
-new = trace "initialise CUDA memory table" $ newMVar IM.empty
+new :: EventTable -> IO MemoryTable
+new et = trace "initialise CUDA memory table" $ MemoryTable et <$> newMVar IM.empty
 
 -- Perform action on the device ptr that matches the given host-side array. Any
 -- operations
 --
 withRemote :: PrimElt e a => Context -> MemoryTable -> ArrayData e -> (DevicePtr a -> IO b) -> Maybe Stream -> IO (Maybe b)
-withRemote ctx ref ad run ms = do
+withRemote ctx (MemoryTable et ref) ad run ms = do
   ct <- readMVar ref
   case IM.lookup (contextId ctx) ct of
     Nothing -> $internalError "withRemote" "context not found"
@@ -83,13 +84,13 @@ withRemote ctx ref ad run ms = do
       case ms of
         Nothing -> return (Nothing, c)
         Just s  -> do
-          e <- waypoint ctx s
+          e <- waypoint ctx et s
           return (Just e, c)
 
 -- Allocate a new device array to be associated with the given host-side array.
 -- Has the same properties as `Data.Array.Accelerate.Array.Memory.Cache.malloc`
 malloc :: forall a b. (Typeable a, PrimElt a b) => Context -> MemoryTable -> ArrayData a -> Bool -> Int -> IO Bool
-malloc !ctx !ref !ad !frozen !n = do
+malloc !ctx (MemoryTable _ !ref) !ad !frozen !n = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
            Nothing -> trace "malloc/context not found" $ insertContext ctx ct
@@ -99,7 +100,7 @@ malloc !ctx !ref !ad !frozen !n = do
 -- Explicitly free an array in the MemoryCache. Has the same properties as
 -- `Data.Array.Accelerate.Array.Memory.Cache.free`
 free :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO ()
-free !ctx !ref !arr = withMVar ref $ \ct ->
+free !ctx (MemoryTable _ !ref) !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> message "free/context not found"
     Just mt -> MC.free (Proxy :: Proxy CRM) mt arr
@@ -110,7 +111,7 @@ free !ctx !ref !arr = withMVar ref $ \ct ->
 -- manager.
 --
 insertUnmanaged :: (PrimElt a b) => Context -> MemoryTable -> ArrayData a -> DevicePtr b -> IO ()
-insertUnmanaged !ctx !ref !arr !ptr = do
+insertUnmanaged !ctx (MemoryTable _ !ref) !arr !ptr = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
            Nothing  -> trace "insertUnmanaged/context not found" $ insertContext ctx ct
@@ -130,7 +131,7 @@ insertContext ctx ct = do
 -- unreachable.
 --
 reclaim :: MemoryTable -> IO ()
-reclaim ref = withMVar ref (blocking . mapM_ MC.reclaim . IM.elems)
+reclaim (MemoryTable _ ref) = withMVar ref (blocking . mapM_ MC.reclaim . IM.elems)
 
 -- Miscellaneous
 -- -------------

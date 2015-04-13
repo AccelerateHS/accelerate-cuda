@@ -21,9 +21,9 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 
 -- friends
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
-import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
+import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event, EventTable )
 import Data.Array.Accelerate.FullList                           ( FullList(..) )
-import Data.Array.Accelerate.Lifetime                           ( Lifetime, withLifetime, unsafeGetValue )
+import Data.Array.Accelerate.Lifetime                           ( Lifetime, withLifetime )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.FullList                 as FL
@@ -32,10 +32,8 @@ import qualified Data.Array.Accelerate.FullList                 as FL
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Exception                                        ( bracket_ )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
-import Data.Hashable                                            ( Hashable(..) )
 import System.Mem.Weak                                          ( Weak, deRefWeak )
 import Foreign.CUDA.Driver.Stream                               ( Stream(..) )
-import Foreign.Ptr                                              ( ptrToIntPtr )
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Driver.Stream                     as Stream
 
@@ -55,11 +53,6 @@ type RSV                = MVar ( HashTable (Lifetime CUDA.Context) (FullList () 
 data Reservoir          = Reservoir {-# UNPACK #-} !RSV
                                     {-# UNPACK #-} !(Weak RSV)
 
-instance Hashable (Lifetime CUDA.Context) where
-  {-# INLINE hashWithSalt #-}
-  hashWithSalt salt (unsafeGetValue -> CUDA.Context ctx)
-    = salt `hashWithSalt` (fromIntegral (ptrToIntPtr ctx) :: Int)
-
 
 -- Executing operations in streams
 -- -------------------------------
@@ -70,11 +63,11 @@ instance Hashable (Lifetime CUDA.Context) where
 -- second operation completes.
 --
 {-# INLINE streaming #-}
-streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> (Event -> a -> m b) -> m b
-streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !action !after = do
+streaming :: MonadIO m => Context -> Reservoir -> EventTable -> (Stream -> m a) -> (Event -> a -> m b) -> m b
+streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !etbl !action !after = do
   stream <- liftIO $ create ctx rsv
   first  <- action stream
-  end    <- liftIO $ Event.waypoint ctx stream
+  end    <- liftIO $ Event.waypoint ctx etbl stream
   final  <- after end first
   liftIO $! destroy (weakContext ctx) weak_rsv stream
   liftIO $! Event.destroy end

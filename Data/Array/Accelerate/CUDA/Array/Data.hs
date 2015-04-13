@@ -58,6 +58,7 @@ import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
 import Data.Array.Accelerate.CUDA.Array.Cache
 import Data.Array.Accelerate.CUDA.Persistent            ( KernelTable )
+import Data.Array.Accelerate.CUDA.Execute.Event         ( EventTable )
 import Data.Array.Accelerate.CUDA.Execute.Stream        ( Reservoir )
 import qualified Data.Array.Accelerate.CUDA.Array.Prim  as Prim
 import qualified Foreign.CUDA.Driver                    as CUDA
@@ -90,13 +91,14 @@ run f = do
   mt     <- gets memoryTable
   liftIO $! f ctx mt
 
-run' :: (Context -> MemoryTable -> KernelTable -> Reservoir -> IO a) -> CIO a
+run' :: (Context -> MemoryTable -> KernelTable -> Reservoir -> EventTable -> IO a) -> CIO a
 run' f = do
   ctx    <- asks activeContext
   mt     <- gets memoryTable
   kt     <- gets kernelTable
   rsv    <- gets streamReservoir
-  liftIO $! f ctx mt kt rsv
+  etbl   <- gets eventTable
+  liftIO $! f ctx mt kt rsv etbl
 
 -- CPP hackery to generate the cases where we dispatch to the worker function handling
 -- elementary types.
@@ -463,7 +465,7 @@ marshalDevicePtrs !adata ptrs = map (CUDA.VArg . CUDA.wordPtrToDevPtr) $ deviceP
 marshalArrayData :: ArrayElt e => ArrayData e -> Maybe CUDA.Stream -> ([CUDA.FunParam] -> CIO b) -> CIO b
 marshalArrayData !adata ms f = run' doMarshal
   where
-    doMarshal !ctx !mt !kt !rsv = runContT (marshalR arrayElt adata) (evalCUDAState ctx mt kt rsv . f)
+    doMarshal !ctx !mt !kt !rsv !etbl = runContT (marshalR arrayElt adata) (evalCUDAState ctx mt kt rsv etbl . f)
       where
         marshalR :: ArrayEltR e -> ArrayData e -> ContT b IO [CUDA.FunParam]
         marshalR ArrayEltRunit             _  = return []
@@ -488,7 +490,7 @@ marshalArrayData !adata ms f = run' doMarshal
 marshalTextureData :: ArrayElt e => ArrayData e -> Int -> [CUDA.Texture] -> Maybe CUDA.Stream -> ([CUDA.Texture] -> CIO b) -> CIO b
 marshalTextureData !adata !n !texs ms f = run' doMarshal
   where
-    doMarshal !ctx !mt !kt !rsv = runContT (marshalR arrayElt adata texs) (evalCUDAState ctx mt kt rsv . \(_,ts) -> f ts)
+    doMarshal !ctx !mt !kt !rsv !etbl = runContT (marshalR arrayElt adata texs) (evalCUDAState ctx mt kt rsv etbl . \(_,ts) -> f ts)
       where
         marshalR :: ArrayEltR e -> ArrayData e -> [CUDA.Texture] -> ContT b IO (Int, [CUDA.Texture])
         marshalR ArrayEltRunit             _  _ = return (0, [])
@@ -511,7 +513,7 @@ marshalTextureData !adata !n !texs ms f = run' doMarshal
 withDevicePtrs :: ArrayElt e => ArrayData e -> Maybe CUDA.Stream -> (Prim.DevicePtrs e -> CIO b) -> CIO b
 withDevicePtrs !adata ms f = run' ptrs
   where
-    ptrs !ctx !mt !kt !rsv = runContT (ptrsR arrayElt adata) (evalCUDAState ctx mt kt rsv . f)
+    ptrs !ctx !mt !kt !rsv !etbl = runContT (ptrsR arrayElt adata) (evalCUDAState ctx mt kt rsv etbl . f)
       where
         ptrsR :: ArrayEltR e -> ArrayData e -> ContT b IO (Prim.DevicePtrs e)
         ptrsR ArrayEltRunit             _  = return ()
