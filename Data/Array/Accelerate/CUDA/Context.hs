@@ -78,6 +78,7 @@ fromDeviceContext dev ctx = do
   lctx          <- newLifetime ctx
   addFinalizer lctx $ do
     traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
+    CUDA.push ctx
     CUDA.destroy ctx
   weak          <- mkWeakPtr lctx
   traceIO dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
