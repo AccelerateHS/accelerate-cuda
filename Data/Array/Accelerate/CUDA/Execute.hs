@@ -65,7 +65,7 @@ import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
 import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
-import Control.Monad.Trans.Cont                                 ( ContT(..), evalContT )
+import Control.Monad.Trans.Cont                                 ( ContT(..) )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
@@ -770,7 +770,7 @@ marshalSlice' :: SliceIndex slix sl co dim
 marshalSlice' SliceNil () = return []
 marshalSlice' (SliceAll sl)   (sh, ()) = marshalSlice' sl sh
 marshalSlice' (SliceFixed sl) (sh, n)  =
-  do x  <- evalContT $ marshal n Nothing
+  do x  <- runContT (marshal n Nothing) return
      xs <- marshalSlice' sl sh
      return (xs ++ x)
 
@@ -923,7 +923,7 @@ execute :: Marshalable args
         -> args                         -- arguments to marshal to the kernel function
         -> Stream                       -- Compute stream to execute in
         -> CIO ()
-execute !kernel !gamma !aenv !n !a !stream = evalContT $ do
+execute !kernel !gamma !aenv !n !a !stream = flip runContT return $ do
   args  <- arguments kernel aenv gamma a stream
   liftIO $ launch kernel (configure kernel n) args stream
 
