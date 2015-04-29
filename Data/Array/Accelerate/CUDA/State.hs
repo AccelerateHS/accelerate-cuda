@@ -37,15 +37,16 @@ import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
 import Data.Array.Accelerate.CUDA.Analysis.Device
 
 -- library
-import Control.Applicative                              ( Applicative )
+import Control.Applicative
 import Control.Concurrent                               ( runInBoundThread )
 import Control.Exception                                ( catch, bracket_ )
-import Control.Monad.Trans                              ( MonadIO )
 import Control.Monad.Reader                             ( MonadReader, ReaderT(..), runReaderT )
 import Control.Monad.State.Strict                       ( MonadState, StateT(..), evalStateT )
+import Control.Monad.Trans                              ( MonadIO )
 import System.IO.Unsafe                                 ( unsafePerformIO )
 import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                    as CUDA
+import Prelude
 
 
 -- Execution State

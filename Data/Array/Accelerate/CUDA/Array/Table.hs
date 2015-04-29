@@ -21,22 +21,22 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 
 ) where
 
-import Prelude                                                  hiding ( lookup )
-import Data.Maybe                                               ( isJust )
-import Data.Hashable                                            ( Hashable(..) )
-import Data.Typeable                                            ( Typeable, gcast )
-import Control.Monad                                            ( unless )
+import Control.Applicative
 import Control.Concurrent                                       ( yield )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, mkWeakMVar )
 import Control.Exception                                        ( bracket_, catch, throwIO )
-import Control.Applicative                                      ( (<$>) )
+import Control.Monad                                            ( unless )
+import Data.Hashable                                            ( Hashable(..) )
+import Data.Maybe                                               ( isJust )
+import Data.Typeable                                            ( Typeable, gcast )
 import System.Mem                                               ( performGC )
-import System.Mem.Weak                                          ( Weak, mkWeak, deRefWeak, finalize )
 import System.Mem.StableName                                    ( StableName, makeStableName, hashStableName )
+import System.Mem.Weak                                          ( Weak, mkWeak, deRefWeak, finalize )
+import Prelude                                                  hiding ( lookup )
+
 import Foreign.Ptr                                              ( ptrToIntPtr )
 import Foreign.Storable                                         ( Storable, sizeOf )
 import Foreign.CUDA.Ptr                                         ( DevicePtr )
-
 import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.HashTable.IO                              as HT

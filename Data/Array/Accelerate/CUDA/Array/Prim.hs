@@ -31,7 +31,6 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
 ) where
 
 -- libraries
-import Prelude                                          hiding ( lookup )
 import Data.Int
 import Data.Word
 import Data.Maybe
@@ -47,6 +46,7 @@ import Foreign.Marshal.Alloc                            ( alloca )
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Driver.Stream             as CUDA
 import qualified Foreign.CUDA.Driver.Texture            as CUDA
+import Prelude                                          hiding ( lookup )
 
 -- friends
 import Data.Array.Accelerate.Error

@@ -52,7 +52,6 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
 -- standard library
-import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
@@ -61,6 +60,7 @@ import Control.Monad.Trans                                      ( MonadIO, liftI
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
+import Prelude                                                  hiding ( exp, sum, iterate )
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
