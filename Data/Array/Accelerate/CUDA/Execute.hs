@@ -237,8 +237,9 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
-      nop <- join $ liftIO <$> (Event.create <$> asks activeContext <*> gets eventTable)
-       -- ^ record event never call, so this is a functional no-op
+      tbl <- gets eventTable
+      ctx <- asks activeContext
+      nop <- liftIO $ Event.create ctx tbl      -- record event never call, so this is a functional no-op
       r   <- executeOpenAfun1 p aenv (Async nop a)
       ok  <- indexArray r 0                     -- TLM TODO: memory manager should remember what is already on the host
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
