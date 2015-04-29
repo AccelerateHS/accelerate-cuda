@@ -38,8 +38,6 @@ module Data.Array.Accelerate.CUDA.Array.Data (
 ) where
 
 -- libraries
-import Prelude                                          hiding ( fst, snd )
-import qualified Prelude                                as P
 import Control.Applicative
 import Control.Monad.Reader                             ( asks )
 import Control.Monad.State                              ( gets )
@@ -47,6 +45,8 @@ import Control.Monad.Trans                              ( liftIO )
 import Control.Monad.Trans.Cont
 import Foreign.C.Types
 import Foreign.Ptr
+import Prelude                                          hiding ( fst, snd )
+import qualified Prelude                                as P
 
 
 -- friends

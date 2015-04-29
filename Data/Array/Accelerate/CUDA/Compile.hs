@@ -41,7 +41,6 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Numeric
-import Prelude                                                  hiding ( exp, scanl, scanr )
 import Control.Applicative                                      hiding ( Const )
 import Control.Exception
 import Control.Monad
@@ -69,6 +68,7 @@ import qualified Data.Text.Lazy.Encoding                        as T
 import qualified Control.Concurrent.MSem                        as Q
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
+import Prelude                                                  hiding ( exp, scanl, scanr )
 
 import GHC.Conc                                                 ( getNumProcessors )
 
@@ -374,6 +374,7 @@ compileOpenSeq l =
           (_, a0') <- travE a0
           (_, f')  <- travF f
           return $ ExecScanSeq f' a0' x Nothing
+        ChunkedMapSeq{} -> error "TODO: @fmma needs to finish this..."
 
     compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
     compileC c =

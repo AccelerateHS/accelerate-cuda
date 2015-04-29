@@ -31,29 +31,29 @@ import qualified Data.Array.Accelerate.CUDA.Debug       as D
 import qualified Data.Array.Accelerate.FullList         as FL
 
 -- libraries
-import Prelude                                          hiding ( lookup )
 import Numeric
-import Data.Char
-import System.IO
-import System.FilePath
-import System.Directory
-import System.IO.Error
-import System.Mem.Weak
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad                                    ( when )
-import Data.Version
-import Data.Maybe                                       ( fromMaybe )
 import Data.Binary
-import Data.Hashable
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
 import Data.ByteString.Internal                         ( w2c )
+import Data.Char
+import Data.Hashable
+import Data.Maybe                                       ( fromMaybe )
+import Data.Version
+import System.Directory
+import System.FilePath
+import System.IO
+import System.IO.Error
+import System.Mem.Weak
 import qualified Data.ByteString                        as BS
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.ByteString.Lazy.Internal          as BL
 import qualified Data.HashTable.IO                      as HT
+import Prelude                                          hiding ( lookup )
 
 import qualified Foreign.CUDA.Driver                    as CUDA
 

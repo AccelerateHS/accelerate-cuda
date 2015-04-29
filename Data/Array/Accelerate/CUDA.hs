@@ -204,6 +204,7 @@ import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
 import System.IO.Unsafe
+import Prelude
 
 -- friends
 import Data.Array.Accelerate.Trafo

@@ -40,9 +40,10 @@ import qualified Foreign.CUDA.Analysis                  as CUDA
 -- system
 import Text.PrettyPrint
 import Data.Hashable
-import Data.Monoid                                      ( Monoid(..) )
+import Data.Monoid                                      hiding ( (<>) )
 import qualified Data.HashSet                           as Set
 import qualified Data.HashMap.Strict                    as Map
+import Prelude
 
 
 -- A non-empty list of binary objects will be used to execute a kernel. We keep

@@ -282,11 +282,11 @@ readArray grp dummy
 --
 writeArray
     :: forall sh e. (Shape sh, Elt e)
-    => Name                             -- group names
-    -> Array sh e                       -- dummy to fix types
-    -> ( [C.Param]                      -- function parameters to marshal the output array
-       , [C.Exp]                        -- the shape of the output array
-       , Rvalue x => x -> [C.Exp] )     -- write an element at a given index
+    => Name                                     -- group names
+    -> Array sh e                               -- dummy to fix types
+    -> ( [C.Param]                              -- function parameters to marshal the output array
+       , [C.Exp]                                -- the shape of the output array
+       , forall x. Rvalue x => x -> [C.Exp] )   -- write an element at a given index
 writeArray grp _ =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
@@ -307,12 +307,12 @@ writeArray grp _ =
 --
 shared
     :: forall e. Elt e
-    => e                                -- dummy type
-    -> Name                             -- group name
-    -> C.Exp                            -- how much shared memory per type
-    -> Maybe C.Exp                      -- (optional) initialise from this base address
-    -> ( [C.InitGroup]                  -- shared memory declaration and...
-       , Rvalue x => x -> [C.Exp])      -- ...indexing function
+    => e                                        -- dummy type
+    -> Name                                     -- group name
+    -> C.Exp                                    -- how much shared memory per type
+    -> Maybe C.Exp                              -- (optional) initialise from this base address
+    -> ( [C.InitGroup]                          -- shared memory declaration and...
+       , forall x. Rvalue x => x -> [C.Exp])    -- ...indexing function
 shared _ grp size mprev
   = let e:es                    = eltType (undefined :: e)
         x:xs                    = let k = length es in map (\n -> grp ++ show n) [k, k-1 .. 0]

@@ -26,9 +26,8 @@ module Data.Array.Accelerate.CUDA.Array.Cache (
 
 ) where
 
-import Prelude                                                  hiding ( lookup )
+import Data.Functor
 import Data.IntMap.Strict                                       ( IntMap )
-import Data.Functor                                             ( (<$>) )
 import Data.Proxy
 import Data.Typeable                                            ( Typeable )
 import Control.Concurrent.MVar                                  ( MVar, newMVar, withMVar, modifyMVar, readMVar )
@@ -36,6 +35,7 @@ import Control.Exception                                        ( bracket_ )
 import Control.Monad.IO.Class                                   ( MonadIO, liftIO )
 import Control.Monad.Trans.Reader
 import Foreign.CUDA.Ptr                                         ( DevicePtr )
+import Prelude                                                  hiding ( lookup )
 
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Data.IntMap.Strict                             as IM
