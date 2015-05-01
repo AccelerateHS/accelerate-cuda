@@ -32,7 +32,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   umul24, gridSize, threadIdx,
 
   -- Mutable operations
-  (.=.), locals, Lvalue(..), Rvalue(..),
+  (.=.), locals, localShape, Lvalue(..), Rvalue(..),
 
 ) where
 
@@ -396,6 +396,19 @@ locals base _
                           in ( (t, name), cvar name, [cdecl| $ty:t $id:name; |] )
     in
     unzip3 $ zipWith local elt [n-1, n-2 .. 0]
+
+-- Declare local variables for a shape of the given dimension.
+--
+localShape :: Name
+           -> Int                           -- dimension of shape
+           -> ( [(C.Type, Name)]            -- const declarations
+              , [C.Exp], [C.InitGroup])     -- mutable declaration and names
+localShape base n
+  = let local v       = let name = base ++ show v
+                        in ( (cint, name), cvar name, [cdecl| $ty:cint $id:name; |] )
+    in
+    unzip3 $ map local [n-1, n-2 .. 0]
+
 
 class Lvalue a where
   lvalue :: a -> C.Exp -> C.BlockItem

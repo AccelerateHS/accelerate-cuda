@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE ViewPatterns        #-}
 {-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
@@ -19,7 +20,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc, codegenToSeq
+  CUTranslSkel, codegenAcc, codegenToSeq, codegenInplaceUpdate,
 
 ) where
 
@@ -40,7 +41,7 @@ import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Vector, Shape, Elt, EltRepr
                                                                 , Tuple(..), TupleRepr )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
@@ -136,13 +137,6 @@ codegenAcc dev (Manifest pacc) aenv
       ZipWith{}                 -> fusionError
 
   where
-    codegen :: CUDA [CUTranslSkel aenv a] -> [CUTranslSkel aenv a]
-    codegen cuda =
-      let (skeletons, st)                = runCUDA cuda
-          addTo (CUTranslSkel name code) =
-            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
-      in
-      map addTo skeletons
 
     id :: Elt a => DelayedFun aenv (a -> a)
     id = Lam (Body (Var ZeroIdx))
@@ -177,6 +171,15 @@ codegenAcc dev (Manifest pacc) aenv
     unexpectedError     = $internalError "codegenAcc" $ "unexpected array primitive: " ++ prim
     fusionError         = $internalError "codegenAcc" $ "unexpected fusible material: " ++ prim
 
+codegen :: CUDA [CUTranslSkel aenv a] -> [CUTranslSkel aenv a]
+codegen cuda =
+  let (skeletons, st)                = runCUDA cuda
+      addTo (CUTranslSkel name code) =
+        CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+  in
+  map addTo skeletons
+
+
 codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
                 => SliceIndex slix
                               (EltRepr sl)
@@ -185,10 +188,10 @@ codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
                 -> DeviceProperties
                 -> DelayedOpenAcc aenv (Array sh e)
                 -> Gamma aenv
-                -> CUTranslSkel aenv (Array sl e)
+                -> CUTranslSkel aenv (Array (sl Sugar.:. Int) e)
 codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
   where
-    codegen :: CUDA (CUTranslSkel aenv (Array sl e)) -> CUTranslSkel aenv (Array sl e)
+    codegen :: CUDA (CUTranslSkel aenv a) -> CUTranslSkel aenv a
     codegen cuda =
       let (skeleton, st)                 = runCUDA cuda
           addTo (CUTranslSkel name code) =
@@ -208,6 +211,18 @@ codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
 
     travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
     travF1 = codegenFun1 dev aenv
+
+
+codegenInplaceUpdate :: forall aenv e. Elt e
+                     => DeviceProperties
+                     -> Gamma aenv
+                     -> DelayedFun aenv (e -> e -> e)
+                     -> CUTranslSkel aenv (Vector e)
+codegenInplaceUpdate dev aenv f =
+    head
+  $ codegen
+  $ return
+  <$> (mkInplaceUpdate dev aenv <$> codegenFun2 dev aenv f)
 
 
 -- Scalar function abstraction

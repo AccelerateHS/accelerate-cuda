@@ -169,7 +169,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Collect l               -> ExecSeq <$> compileOpenSeq l
+        Collect l               -> ExecSeq l <$> compileOpenSeq l
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -322,10 +322,12 @@ compileOpenExp exp =
 
     bind :: (Shape sh, Elt e) => ExecOpenAcc aenv (Array sh e) -> Free aenv
     bind (ExecAcc _ _ (Avar ix)) = freevar ix
-    bind _                       = $internalError "bind" "expected array variable"
+    bind (ExecAcc _ _ acc      ) = $internalError "bind" ("expected array variable. Got: " ++ showPreAccOp acc)
+    bind (EmbedAcc _ )           = $internalError "bind" "expected array variable. Got EmbedAcc"
+    bind (ExecSeq _ _)           = $internalError "bind" "expected array variable. Got ExecSeq"
 
 compileSeq :: DelayedSeq a -> CIO (ExecSeq a)
-compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> compileOpenSeq s
+compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> pure s <*> compileOpenSeq s
   where
     compileExtend :: Extend DelayedOpenAcc aenv aenv' -> CIO (Extend ExecOpenAcc aenv aenv')
     compileExtend BaseEnv       = return BaseEnv
@@ -336,56 +338,73 @@ compileOpenSeq l =
   case l of
     Producer   p l' -> ExecP <$> compileP p <*> compileOpenSeq l'
     Consumer   c    -> ExecC <$> compileC c
-    Reify ix        -> return $ ExecR ix Nothing
+    Reify mf x      ->
+      case mf of
+        Nothing ->
+          return $ ExecR Nothing x
+        Just f -> do
+          f' <- compileOpenAfun f
+          return $ ExecR (Just f') x
   where
     compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
     compileP p =
       case p of
-        ToSeq slix (_ :: proxy slix) acc -> do
+        ToSeq mf slix slixproxy acc -> do
           case acc of
+            
             -- In the case of converting an array that has not already been copied
             -- to device memory, we are smart and treat it specially.
-            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix])
-            _   -> do
-              (free1, acc') <- travA acc
+--            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix]) TODO
+            Delayed{} -> do
+              (free1, EmbedAcc sh) <- travA acc
               let gamma = makeEnvMap free1
               dev <- asks deviceProperties
-              -- The the array computation passed to 'toSeq' needs to be treated
-              -- specially. We don't want the entire array to be made manifest
-              -- if we can help it. In the event it is a delayed array, we make
-              -- the subarrays manifest one at a time and feed them to the 'Seq'
-              -- computation.
-              --
-              -- For the purposes of device configuration and launching, this can
-              -- be seen to work like 'Slice', even though in reality it
-              -- resembles a delayed 'Slice'.
-              let acc'' = Manifest (Slice slix acc (Const (zeroSlice slix) :: DelayedExp aenv slix))
-
-              kernel <- build1 acc'' (codegenToSeq slix dev acc gamma)
-              return $ ExecToSeq slix acc' kernel gamma ([] :: [slix])
+              f' <- 
+                case mf of
+                  Just f -> Just <$> compileOpenAfun f
+                  Nothing -> return Nothing
+              kernel <- build1 (Manifest $ Generate undefined undefined) (codegenToSeq slix dev acc gamma)
+              return $! ExecToSeq f' slix slixproxy kernel gamma sh
         StreamIn xs -> return $ ExecStreamIn xs
-        MapSeq f x -> do
+        MapSeq f mg x -> do
           f' <- compileOpenAfun f
-          return $ ExecMap f' x
-        ZipWithSeq f x y -> do
+          g' <- case mg of 
+                  Nothing -> return Nothing
+                  Just g  -> Just <$> compileOpenAfun g
+          return $ ExecMap f' g' x
+        ZipWithSeq f mg x y -> do
           f' <- compileOpenAfun f
-          return $ ExecZipWith f' x y
+          g' <- case mg of 
+                  Nothing -> return Nothing
+                  Just g  -> Just <$> compileOpenAfun g
+          return $ ExecZipWith f' g' x y
         ScanSeq f a0 x ->  do
           (_, a0') <- travE a0
-          (_, f')  <- travF f
-          return $ ExecScanSeq f' a0' x Nothing
+          let scanner = Alam $ Alam $ Abody $ Manifest $
+                        Scanl' (weaken (SuccIdx . SuccIdx) f)
+                          (Index (Manifest $ Avar (SuccIdx ZeroIdx)) IndexNil)
+                          (Manifest $ Avar ZeroIdx)
+          scanner' <- compileOpenAfun scanner
+          return $ ExecScanSeq scanner' a0' x
 
     compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
     compileC c =
       case c of
-        FoldSeq f a0 x -> do
-          (_, a0') <- travE a0
-          (_, f')  <- travF f
-          return $ ExecFoldSeq f' a0' x Nothing
+        FoldSeq (Just g) f z x -> do
+          (_, f') <- travF f
+          (_, z') <- travE z
+          zip <- compileOpenAfun g
+          fin <- compileOpenAfun $ Alam $ Abody $ Manifest $ Fold (weaken SuccIdx f) (weaken SuccIdx z) 
+                   (Delayed 
+                        (Shape (Manifest (Avar ZeroIdx)))
+                        (Lam (Body (Index (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
+                        (Lam (Body (LinearIndex (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
+                   )
+          return $ ExecFoldSeq (Just zip) fin z' f' x
         FoldSeqFlatten f acc x -> do
           acc' <- compileOpenAcc acc
           f' <- compileOpenAfun f
-          return $ ExecFoldSeqFlatten f' acc' x Nothing
+          return $ ExecFoldSeqFlatten f' acc' x
         Stuple t -> ExecStuple <$> compileCT t
 
     compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
@@ -694,4 +713,3 @@ time p = do
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
 message msg = liftIO $ D.traceIO D.dump_cc ("cc: " ++ msg)
-

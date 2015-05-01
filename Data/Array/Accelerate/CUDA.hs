@@ -369,7 +369,7 @@ streamOutWith ctx = exec . compile . convertSeq
       where
         go !s' = case step s' of
           Nothing       -> []
-          Just (a, s'') -> a : go s''
+          Just (a, s'') -> a ++ go s''
 
         step (StreamSeq ss)
           = unsafePerformIO
@@ -377,7 +377,7 @@ streamOutWith ctx = exec . compile . convertSeq
           $ do m <- ss
                case m of
                  Nothing      -> return Nothing
-                 Just (a, s') -> collect a >> return (Just (a, s'))
+                 Just (a, s') -> mapM collect a >> return (Just (a, s'))
 
 
 -- RCE: Similar to run1* variants, we need to be ultra careful with streamOut*
@@ -408,7 +408,7 @@ config =  Phase
   , floatOutAccFromExp     = True
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
-  , vectoriseSequences     = False
+  , vectoriseSequences     = True
   }
 
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeOperators       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Array.Sugar
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -13,13 +14,13 @@ module Data.Array.Accelerate.CUDA.Array.Sugar (
 
   module Data.Array.Accelerate.Array.Sugar,
   newArray, allocateArray, useArray, useArrayAsync,
-
 ) where
 
 import Control.Monad.Trans
 
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Data
+import Data.Array.Accelerate.Array.Data                 ( newArrayData )
 import Data.Array.Accelerate.Array.Sugar                hiding (newArray, allocateArray)
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 
@@ -42,4 +43,3 @@ allocateArray sh = do
   arr <- liftIO $ Sugar.allocateArray sh
   mallocArray arr
   return arr
-
