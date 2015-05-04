@@ -65,7 +65,7 @@ yielding the desired combined backward permutation function
 
 -}
 mkToSeq
-    :: forall slix senv aenv sh co sl a. (Shape sl, Shape sh, Elt a)
+    :: forall slix aenv sh co sl a. (Shape sl, Shape sh, Elt a)
     => SliceIndex slix
                   (EltRepr sl)
                   co
@@ -75,7 +75,7 @@ mkToSeq
     -> CUDelayedAcc aenv sh a
     -> CUTranslSkel aenv (Array (sl :. Int) a)
 mkToSeq slix dev aenv arr
-  | CUDelayed (CUExp shIn) (CUFun1 dce get) _ <- arr
+  | CUDelayed (CUExp shIn) (CUFun1 _dce get) _ <- arr  -- TODO deadcode elim.
   = CUTranslSkel "toSeq" [cunit|
 
     $esc:("#include <accelerate_cuda.h>")
@@ -133,8 +133,8 @@ combine slix sl co = reverse (go slix (reverse sl) (reverse co))
   where
     go :: SliceIndex slix sl co dim -> [a] -> [a] -> [a]
     go SliceNil [] [] = []
-    go (SliceAll   sl) (x:xs) ys = x:(go sl xs ys)
-    go (SliceFixed sl) xs (y:ys) = y:(go sl xs ys)
+    go (SliceAll   slix0) (x:xs) ys = x:(go slix0 xs ys)
+    go (SliceFixed slix0) xs (y:ys) = y:(go slix0 xs ys)
     go _ _ _ = $internalError "combine" "Something went wrong with the slice index."
 
 mkInplaceUpdate :: forall aenv e. (Elt e)

@@ -184,8 +184,8 @@ prettyExecAcc alvl wrap exec =
     ExecSeq{} -> text "<SequenceComputation>"
 
 data ExecSeq a where
-  ExecS :: Extend ExecOpenAcc () aenv 
-        -> PreOpenSeq DelayedOpenAcc aenv () arrs -- For shape analysis
+  ExecS :: Extend ExecOpenAcc () aenv
+        -> PreOpenSeq DelayedOpenAcc aenv () a -- For shape analysis
         -> ExecOpenSeq aenv () a -> ExecSeq a
 
 data ExecOpenSeq aenv lenv arrs where
@@ -236,8 +236,9 @@ data ExecP aenv lenv a where
               -> ExecP aenv lenv c
 
   ExecScanSeq :: Elt a
-              => ExecOpenAfun aenv (Scalar a -> Vector a -> (Vector a, Scalar a))
-              -> ExecExp aenv a
+              => ExecExp aenv a
+              -> ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a)  -- zipper
+              -> ExecOpenAfun aenv (Scalar a -> Vector a -> (Vector a, Scalar a)) -- scanner
               -> Idx lenv (Scalar a)
               -> ExecP aenv lenv (Scalar a)
 
@@ -246,7 +247,7 @@ data ExecC aenv lenv a where
               => Maybe (ExecOpenAfun aenv (Vector a -> Vector a -> Vector a))
               -> ExecOpenAfun aenv (Vector a -> Scalar a)
               -> ExecExp aenv a
-              -> ExecFun aenv (a -> a -> a)
+              -> ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a)  -- zipper
               -> Idx lenv (Scalar a)
               -> ExecC aenv lenv (Scalar a)
 

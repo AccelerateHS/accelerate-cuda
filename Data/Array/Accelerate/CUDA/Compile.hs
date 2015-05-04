@@ -24,7 +24,6 @@ module Data.Array.Accelerate.CUDA.Compile (
 ) where
 
 -- friends
-import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Trafo
@@ -346,6 +345,24 @@ compileOpenSeq l =
           f' <- compileOpenAfun f
           return $ ExecR (Just f') x
   where
+    -- Zipper that assumes same-shape args. Generate is used over
+    -- ZipWith because ZipWith results in an "unexpected fusible
+    -- material" from Codegen.
+    zipper :: (Shape sh, Elt e) => DelayedFun aenv (e -> e -> e) -> DelayedOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
+    zipper (Lam (Lam (Body body))) = Alam $ Alam $ Abody $ Manifest $
+      (Generate (Shape x))
+      (Lam $ Body $ Let (Index x ix) (Let (weakenE SuccIdx (Index y ix)) body'))
+      where
+        body' = weaken (SuccIdx . SuccIdx) $ weakenE k body
+        k :: Idx (((), t3), t3) t' -> Idx ((((), sh), t3), t3) t'
+        k ZeroIdx = ZeroIdx
+        k (SuccIdx ZeroIdx) = SuccIdx ZeroIdx
+        k (SuccIdx (SuccIdx idx)) = SuccIdx (SuccIdx (SuccIdx idx))
+        ix = Var ZeroIdx
+        x = Manifest $ Avar ZeroIdx
+        y = Manifest $ Avar (SuccIdx ZeroIdx)
+    zipper _ = error "unreachable"
+    
     compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
     compileP p =
       case p of
@@ -355,6 +372,8 @@ compileOpenSeq l =
             -- In the case of converting an array that has not already been copied
             -- to device memory, we are smart and treat it specially.
 --            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix]) TODO
+            Manifest (Avar _x) -> error "Not implemented: use lazy"
+            Manifest _ -> error "unexpected non-variable in ToSeq"
             Delayed{} -> do
               (free1, EmbedAcc sh) <- travA acc
               let gamma = makeEnvMap free1
@@ -378,22 +397,22 @@ compileOpenSeq l =
                   Nothing -> return Nothing
                   Just g  -> Just <$> compileOpenAfun g
           return $ ExecZipWith f' g' x y
-        ScanSeq f a0 x ->  do
-          (_, a0') <- travE a0
+        ScanSeq f e0 x ->  do
+          (_, e0') <- travE e0
           let scanner = Alam $ Alam $ Abody $ Manifest $
                         Scanl' (weaken (SuccIdx . SuccIdx) f)
                           (Index (Manifest $ Avar (SuccIdx ZeroIdx)) IndexNil)
                           (Manifest $ Avar ZeroIdx)
+          zipper'  <- compileOpenAfun (zipper f)
           scanner' <- compileOpenAfun scanner
-          return $ ExecScanSeq scanner' a0' x
+          return $ ExecScanSeq e0' zipper' scanner' x
 
     compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
     compileC c =
       case c of
         FoldSeq mg f z x -> do
-          (_, f') <- travF f
           (_, z') <- travE z
-          zip <- 
+          zipfun <- 
             case mg of
               Just g -> Just <$> compileOpenAfun g
               Nothing -> return Nothing
@@ -403,7 +422,8 @@ compileOpenSeq l =
                         (Lam (Body (Index (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
                         (Lam (Body (LinearIndex (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
                    )
-          return $ ExecFoldSeq zip fin z' f' x
+          zipper' <- compileOpenAfun (zipper f)
+          return $ ExecFoldSeq zipfun fin z' zipper' x
         FoldSeqFlatten f acc x -> do
           acc' <- compileOpenAcc acc
           f' <- compileOpenAfun f
@@ -426,12 +446,6 @@ compileOpenSeq l =
     travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
     travF (Body b)  = liftA Body <$> travE b
     travF (Lam  f)  = liftA Lam  <$> travF f
-
-    zeroSlice :: SliceIndex slix sl co sh -> slix
-    zeroSlice SliceNil = ()
-    zeroSlice (SliceFixed sl) = (zeroSlice sl, 0)
-    zeroSlice (SliceAll sl)   = (zeroSlice sl, ())
-
 
 -- Applicative
 -- -----------
