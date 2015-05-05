@@ -69,7 +69,7 @@ import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
-import System.IO.Unsafe                                         ( unsafeInterleaveIO )
+import System.IO.Unsafe                                         ( unsafeInterleaveIO, unsafePerformIO )
 import Data.Int
 import Data.Word
 
@@ -462,9 +462,10 @@ data SeqConfig = SeqConfig
 
 -- Default sequence evaluation configuration for testing purposes.
 --
+-- Default sequence evaluation configuration for testing purposes.
+--
 defaultSeqConfig :: SeqConfig
-defaultSeqConfig = SeqConfig { chunkSize = 128 }
-
+defaultSeqConfig = SeqConfig { chunkSize = case unsafePerformIO (D.queryFlag D.chunk_size) of Nothing -> 128; Just n -> n }
 
 -- An executable stream DAG for executing sequence expressions in a
 -- streaming fashion.
