@@ -535,13 +535,13 @@ initialiseSeq :: SeqConfig
               -> Aval aenv
               -> Stream
               -> CIO (Int, StreamDAG () arrs)
-initialiseSeq conf dseq topSeq aenv stream =
+initialiseSeq !conf !dseq !topSeq !aenv !stream =
   let maxElemSize = shapeTreeMaxSize <$> seqShapes dseq (avalToValPartial aenv)
       pd = maxStepSize (chunkSize conf) maxElemSize
-  in (pd,) <$>
+  in
   if isVect dseq && pd > 1
-    then initialiseSeqChunked aenv topSeq ChunkCtxEmpty pd stream
-    else initialiseSeqLoop    aenv topSeq stream
+    then liftIO (D.traceIO D.verbose "chunking..")    >> (pd,) <$> initialiseSeqChunked aenv topSeq ChunkCtxEmpty pd stream
+    else liftIO (D.traceIO D.verbose "no chunking..") >> (1,)  <$> initialiseSeqLoop    aenv topSeq stream
   where
     maxStepSize :: Int -> Maybe Int -> Int
     maxStepSize _            Nothing         = 1
@@ -594,7 +594,7 @@ initialiseSeqChunked :: forall aenv senv senv' arrs.
                      -> Int
                      -> Stream
                      -> CIO (StreamDAG senv' arrs)
-initialiseSeqChunked aenv s cctx pd spineStream =
+initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
       case s of
         ExecP p s0 -> StreamProducer <$> initProducer p <*> initialiseSeqChunked aenv s0 (ChunkCtxCons cctx) pd spineStream
         ExecC c    -> StreamConsumer <$> initConsumer c
@@ -728,7 +728,7 @@ initialiseSeqLoop :: forall aenv senv arrs.
                   -> ExecOpenSeq aenv senv arrs
                   -> Stream
                   -> CIO (StreamDAG senv arrs)
-initialiseSeqLoop aenv s spineStream =
+initialiseSeqLoop !aenv !s !spineStream =
       case s of
         ExecP p s0 -> StreamProducer <$> initProducer p <*> initialiseSeqLoop aenv s0 spineStream
         ExecC c    -> StreamConsumer <$> initConsumer c
@@ -736,7 +736,7 @@ initialiseSeqLoop aenv s spineStream =
       where
         initProducer :: ExecP aenv senv a
                      -> CIO (StreamProducer senv a)
-        initProducer p =
+        initProducer !p =
           case p of
             ExecStreamIn arrs -> return (StreamStreamIn arrs)
             ExecToSeq _ slix _ kernel gamma shExp -> do
@@ -750,9 +750,9 @@ initialiseSeqLoop aenv s spineStream =
                 n = coShapeSize slix (fromElt sh)
               return $ StreamMapFin (0, n) (toSeqOp kernel gamma sl)
             ExecUseLazy{} -> error "Not implemented yet" -- TODO
-            ExecMap f _ x       -> return $ StreamMap $ \ senv -> evalAF1 f (aprj x senv)
+            ExecMap f _ x        -> return $ StreamMap $ \ senv -> evalAF1 f (aprj x senv)
             ExecZipWith f _ x y -> return $ StreamMap $ \ senv -> evalAF2 f (aprj x senv) (aprj y senv)
-            ExecScanSeq e f _ x    -> StreamScan scanner <$> (newArray Z . const =<< evalE e)
+            ExecScanSeq e f _ x -> StreamScan scanner <$> (newArray Z . const =<< evalE e)
               where
                 scanner senv a stream = do
                   let c@(Async ev _) = aprj x senv
@@ -816,7 +816,7 @@ initialiseSeqLoop aenv s spineStream =
         evalE exp = executeExp exp aenv spineStream
 
 streamSeq :: ExecSeq [a] -> StreamSeq a
-streamSeq (ExecS binds dsequ sequ) = StreamSeq $ do
+streamSeq (ExecS !binds !dsequ !sequ) = StreamSeq $ do
   aenv <- executeExtend binds Aempty
   streaming
     (\ stream ->
@@ -827,7 +827,7 @@ streamSeq (ExecS binds dsequ sequ) = StreamSeq $ do
 streamOutSequence :: StreamDAG () [arrs]
                   -> Int
                   -> StreamSeq arrs
-streamOutSequence topSeq pd
+streamOutSequence !topSeq !pd
   = loop pd topSeq
   where
     -- Iterate the given sequence until it terminates.
@@ -835,7 +835,7 @@ streamOutSequence topSeq pd
     loop :: Int
          -> StreamDAG () [arrs]
          -> StreamSeq arrs
-    loop n s = StreamSeq $
+    loop !n !s = StreamSeq $
       let k = stepSize n s
       in if k == 0
             then return Nothing
@@ -847,7 +847,7 @@ streamOutSequence topSeq pd
          -> Aval senv
          -> Int
          -> CIO (StreamDAG senv a, a)
-    step s senv k =
+    step !s !senv !k =
       case s of
         StreamProducer p s0 ->
           streaming (produce p senv k)
@@ -862,13 +862,13 @@ streamOutSequence topSeq pd
 executeSequence :: StreamDAG () arrs
                 -> Int
                 -> CIO arrs
-executeSequence topSeq pd
+executeSequence !topSeq !pd
   = loop pd topSeq
   where
     loop :: Int
          -> StreamDAG () arrs
          -> CIO arrs
-    loop n s =
+    loop !n !s =
       let k = stepSize n s
       in if k == 0
          then streaming (returnOut s) wait
@@ -879,7 +879,7 @@ executeSequence topSeq pd
          -> Int
          -> Stream
          -> CIO (StreamDAG senv a)
-    step s senv k stream =
+    step !s !senv !k !stream =
       case s of
         StreamProducer p s0 ->
           streaming (produce p senv k)
@@ -906,7 +906,7 @@ produce :: StreamProducer senv a
         -> Int
         -> Stream
         -> CIO (a, StreamProducer senv a)
-produce p senv k stream =
+produce !p !senv !k !stream =
   case p of
     StreamStreamIn xs -> do
       let (x, xs') = (head xs, tail xs)
@@ -922,7 +922,7 @@ produce p senv k stream =
       return (c', StreamScan scanner a')
 
 consume :: forall senv a. StreamConsumer senv a -> Aval senv -> Stream -> CIO (StreamConsumer senv a)
-consume c senv stream =
+consume !c !senv !stream =
   case c of
     StreamFold f g acc ->
       do acc' <- f senv acc stream
@@ -939,7 +939,7 @@ consume c senv stream =
         return (StreamStuple t')
 
 returnOut :: StreamDAG senv arrs -> Stream -> CIO arrs
-returnOut s stream =
+returnOut !s !stream =
   case s of
     StreamProducer _ s0 -> returnOut s0 stream
     StreamConsumer c -> retC c
