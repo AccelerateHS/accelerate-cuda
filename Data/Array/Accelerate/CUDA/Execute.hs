@@ -540,8 +540,10 @@ initialiseSeq !conf !dseq !topSeq !aenv !stream =
       pd = maxStepSize (chunkSize conf) maxElemSize
   in
   if isVect dseq && pd > 1
-    then liftIO (D.traceIO D.verbose "chunking..")    >> (pd,) <$> initialiseSeqChunked aenv topSeq ChunkCtxEmpty pd stream
-    else liftIO (D.traceIO D.verbose "no chunking..") >> (1,)  <$> initialiseSeqLoop    aenv topSeq stream
+    then liftIO (D.traceIO D.verbose $ "chunking with parallel degree " ++ show pd ++ "..") >>
+         (pd,) <$> initialiseSeqChunked aenv topSeq ChunkCtxEmpty pd stream
+    else liftIO (D.traceIO D.verbose "no chunking..")
+         >> (1,)  <$> initialiseSeqLoop aenv topSeq stream
   where
     maxStepSize :: Int -> Maybe Int -> Int
     maxStepSize _            Nothing         = 1
