@@ -53,6 +53,7 @@ import Data.List                                                ( intercalate )
 import Data.Bits
 import Data.Maybe
 import Data.Monoid
+import Data.Traversable                                         ( sequence )
 import System.Directory
 import System.Exit                                              ( ExitCode(..) )
 import System.FilePath
@@ -362,13 +363,13 @@ compileOpenSeq l =
         x = Manifest $ Avar ZeroIdx
         y = Manifest $ Avar (SuccIdx ZeroIdx)
     zipper _ = error "unreachable"
-    
+
     compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
     compileP p =
       case p of
         ToSeq mf slix slixproxy acc -> do
           case acc of
-            
+
             -- In the case of converting an array that has not already been copied
             -- to device memory, we are smart and treat it specially.
 --            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix]) TODO
@@ -378,7 +379,7 @@ compileOpenSeq l =
               (free1, EmbedAcc sh) <- travA acc
               let gamma = makeEnvMap free1
               dev <- asks deviceProperties
-              f' <- 
+              f' <-
                 case mf of
                   Just f -> Just <$> compileOpenAfun f
                   Nothing -> return Nothing
@@ -387,13 +388,13 @@ compileOpenSeq l =
         StreamIn xs -> return $ ExecStreamIn xs
         MapSeq f mg x -> do
           f' <- compileOpenAfun f
-          g' <- case mg of 
+          g' <- case mg of
                   Nothing -> return Nothing
                   Just g  -> Just <$> compileOpenAfun g
           return $ ExecMap f' g' x
         ZipWithSeq f mg x y -> do
           f' <- compileOpenAfun f
-          g' <- case mg of 
+          g' <- case mg of
                   Nothing -> return Nothing
                   Just g  -> Just <$> compileOpenAfun g
           return $ ExecZipWith f' g' x y
@@ -412,22 +413,23 @@ compileOpenSeq l =
       case c of
         FoldSeq mg f z x -> do
           (_, z') <- travE z
-          zipfun <- 
+          zipfun <-
             case mg of
               Just g -> Just <$> compileOpenAfun g
               Nothing -> return Nothing
-          fin <- compileOpenAfun $ Alam $ Abody $ Manifest $ Fold (weaken SuccIdx f) (weaken SuccIdx z) 
-                   (Delayed 
+          fin <- compileOpenAfun $ Alam $ Abody $ Manifest $ Fold (weaken SuccIdx f) (weaken SuccIdx z)
+                   (Delayed
                         (Shape (Manifest (Avar ZeroIdx)))
                         (Lam (Body (Index (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
                         (Lam (Body (LinearIndex (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
                    )
           zipper' <- compileOpenAfun (zipper f)
           return $ ExecFoldSeq zipfun fin z' zipper' x
-        FoldSeqFlatten f acc x -> do
+        FoldSeqFlatten cf f acc x -> do
           acc' <- compileOpenAcc acc
           f' <- compileOpenAfun f
-          return $ ExecFoldSeqFlatten f' acc' x
+          cf' <- sequence (compileOpenAfun <$> cf)
+          return $ ExecFoldSeqFlatten cf' f' acc' x
         Stuple t -> ExecStuple <$> compileCT t
 
     compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)

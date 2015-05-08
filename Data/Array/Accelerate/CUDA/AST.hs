@@ -31,7 +31,7 @@ module Data.Array.Accelerate.CUDA.AST (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Pretty
-import Data.Array.Accelerate.Array.Lifted               ( Vector' )
+import Data.Array.Accelerate.Array.Lifted               ( Regular )
 import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar, (:.) )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import Data.Array.Accelerate.Trafo                      ( Extend, DelayedOpenAcc )
@@ -192,13 +192,13 @@ data ExecOpenSeq aenv lenv arrs where
   ExecP :: Arrays a => ExecP aenv lenv a -> ExecOpenSeq aenv (lenv, a) arrs -> ExecOpenSeq aenv lenv  arrs
   ExecC :: Arrays a => ExecC aenv lenv a -> ExecOpenSeq aenv lenv a
   ExecR :: Arrays a
-        => Maybe (ExecOpenAfun aenv (Vector' a -> Scalar Int -> a))
+        => Maybe (ExecOpenAfun aenv (Regular a -> Scalar Int -> a))
         -> Idx lenv a -> ExecOpenSeq aenv lenv [a]
 
 data ExecP aenv lenv a where
 
   ExecToSeq    :: (Elt slix, Shape sl, Shape sh, Elt e)
-               => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Vector' (Array sl e)))
+               => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e)))
                -> SliceIndex (EltRepr slix)
                              (EltRepr sl)
                              co
@@ -224,13 +224,13 @@ data ExecP aenv lenv a where
 
   ExecMap :: (Arrays a, Arrays b)
           => ExecOpenAfun aenv (a -> b)
-          -> Maybe (ExecOpenAfun aenv (Vector' a -> Vector' b))
+          -> Maybe (ExecOpenAfun aenv (Regular a -> Regular b))
           -> Idx lenv a
           -> ExecP aenv lenv b
 
   ExecZipWith :: (Arrays a, Arrays b, Arrays c)
               => ExecOpenAfun aenv (a -> b -> c)
-              -> Maybe (ExecOpenAfun aenv (Vector' a -> Vector' b -> Vector' c))
+              -> Maybe (ExecOpenAfun aenv (Regular a -> Regular b -> Regular c))
               -> Idx lenv a
               -> Idx lenv b
               -> ExecP aenv lenv c
@@ -252,7 +252,8 @@ data ExecC aenv lenv a where
               -> ExecC aenv lenv (Scalar a)
 
   ExecFoldSeqFlatten :: (Arrays a, Shape sh, Elt e)
-                     => ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a)
+                     => Maybe (ExecOpenAfun aenv (a -> Regular (Array sh e) -> a))
+                     -> ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a)
                      -> ExecOpenAcc aenv a
                      -> Idx lenv (Array sh e)
                      -> ExecC aenv lenv a

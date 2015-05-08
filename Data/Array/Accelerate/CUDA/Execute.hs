@@ -507,12 +507,12 @@ data StreamConsumer senv a where
                => Atuple (StreamConsumer senv) (TupleRepr a)
                -> StreamConsumer senv a
 
-type Chunk a = Vector' a
+type Chunk a = Regular a
 
 -- Get all the shapes of a chunk of arrays. O(1).
 --
-chunkShapes :: Chunk (Array sh a) -> Vector sh
-chunkShapes = shapes'
+chunkShape :: Shape sh => Chunk (Array sh a) -> sh
+chunkShape = shape'
 
 -- Get all the elements of a chunk of arrays. O(1).
 --
@@ -522,7 +522,7 @@ chunkElems = elements'
 -- Convert a vector to a chunk of scalars.
 --
 vec2Chunk :: Elt e => Vector e -> Chunk (Scalar e)
-vec2Chunk = vec2Vec'
+vec2Chunk = vec2Regular
 
 -- Type conversion from ordinary sequence contexts to sequence
 -- contexts of chunks.
@@ -583,7 +583,7 @@ initialiseSeq !conf !dseq !topSeq !aenv !stream =
     isVectC c =
       case c of
         FoldSeq f _ _ _ -> isJust f
-        FoldSeqFlatten _ _ _ -> True
+        FoldSeqFlatten _ _ _ _ -> True
         Stuple stup ->
           let isVectT :: Atuple (Consumer acc aenv senv) t -> Bool
               isVectT NilAtup         = True
@@ -611,7 +611,7 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
             go (ChunkCtxCons ctx) (SuccIdx x0) = SuccIdx (go ctx x0)
             go _ _ = error "unreachable"
 
-        initReify :: Maybe (ExecOpenAfun aenv (Vector' a -> Scalar Int -> a))
+        initReify :: Maybe (ExecOpenAfun aenv (Regular a -> Scalar Int -> a))
                   -> Idx senv a
                   -> StreamDAG senv' [a]
         initReify (Just f) x = StreamReify $ \ senv k ->
@@ -649,7 +649,7 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
                   return (vec2Chunk v, accum)
 
         toSeqOp :: (Shape sl, Elt e)
-                => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Vector' (Array sl e)))
+                => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e)))
                 -> Int
                 -> AccKernel (Array (sl :. Int) e)
                 -> Gamma aenv
@@ -669,13 +669,13 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
             (.:) sz sh = listToShape (shapeToList sh ++ [sz])
         toSeqOp _ _ _ _ _ _ _ _ = error "unreachable"
 
-        initMapSeq :: Maybe (ExecOpenAfun aenv (Vector' a -> Vector' b))
+        initMapSeq :: Maybe (ExecOpenAfun aenv (Regular a -> Regular b))
                    -> Idx senv a
                    -> StreamProducer senv' (Chunk b)
         initMapSeq (Just f') x  = StreamMap (\ senv -> evalAF1 f' (aprj (cvtIdx x) senv))
         initMapSeq _ _ = error "unreachable"
 
-        initZipWithSeq :: Maybe (ExecOpenAfun aenv (Vector' a -> Vector' b -> Vector' c))
+        initZipWithSeq :: Maybe (ExecOpenAfun aenv (Regular a -> Regular b -> Regular c))
                        -> Idx senv a
                        -> Idx senv b
                        -> StreamProducer senv' (Chunk c)
@@ -698,12 +698,13 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
               a0 <- newArray (Z :. pd) (const e')
               return $ StreamFold consumer finalizer a0
             ExecFoldSeq _ _ _ _ _ -> error "unreachable"
-            ExecFoldSeqFlatten f acc x -> do
+            ExecFoldSeqFlatten (Just f') _ acc x -> do
               let consumer senv a stream =
                     let arr = aprj (cvtIdx x) senv
-                    in evalAF3 f (const a `fmap` arr) (chunkShapes `fmap` arr) (chunkElems `fmap` arr) stream
+                    in evalAF2 f' (const a `fmap` arr) arr stream
               a0 <- executeOpenAcc acc aenv spineStream
               return $ StreamFold consumer (\ accum _ -> return accum) a0
+            ExecFoldSeqFlatten _ _ _ _ -> error "unreachable"
             ExecStuple t ->
               let initTup :: Atuple (ExecC aenv senv) t -> CIO (Atuple (StreamConsumer senv') t)
                   initTup NilAtup          = return $ NilAtup
@@ -717,10 +718,6 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
         evalAF2 :: ExecOpenAfun aenv (a -> b -> c) -> Async a -> Async b -> Stream -> CIO c
         evalAF2 (Alam (Alam (Abody f))) x y = executeOpenAcc f (aenv `Apush` x `Apush` y)
         evalAF2 _ _ _ = error "error AF2"
-
-        evalAF3 :: ExecOpenAfun aenv (a -> b -> c -> d) -> Async a -> Async b -> Async c -> Stream -> CIO d
-        evalAF3 (Alam (Alam (Alam (Abody f)))) x y z = executeOpenAcc f (aenv `Apush` x `Apush` y `Apush` z)
-        evalAF3 _ _ _ _ = error "error AF3"
 
         evalE :: ExecExp aenv t -> CIO t
         evalE exp = executeExp exp aenv spineStream
@@ -771,7 +768,7 @@ initialiseSeqLoop !aenv !s !spineStream =
                     let arr@(Async ev _) = aprj x senv
                     evalAF2 f (Async ev a) arr stream
               StreamFold consumer (\ accum _ -> return accum) <$> (newArray Z . const =<< evalE e)
-            ExecFoldSeqFlatten f acc x -> do
+            ExecFoldSeqFlatten _ f acc x -> do
               let consumer senv a stream =
                     let Async ev v = aprj x senv
                     in do
