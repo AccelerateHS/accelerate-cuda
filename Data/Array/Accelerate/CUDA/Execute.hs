@@ -39,6 +39,7 @@ module Data.Array.Accelerate.CUDA.Execute (
 import Data.Array.Accelerate.CUDA.AST
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Data
+import Data.Array.Accelerate.CUDA.Array.Slice
 import Data.Array.Accelerate.CUDA.Array.Sugar
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
@@ -71,6 +72,7 @@ import Control.Monad.Trans                                      ( MonadIO, liftI
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO, unsafePerformIO )
 import Data.Int
+import Data.Monoid                                              ( mempty )
 import Data.Word
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
@@ -628,17 +630,22 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
         initProducer p =
           case p of
             ExecStreamIn _as -> error "ExecStreamIn is not supported with chunking"
-            ExecToSeq f slix _ kernel gamma shExp -> do
-              sh <- evalE shExp
+            ExecToSeq (Just f) slix _ arg -> do
+              sh <- case arg of
+                Right (shExp, _, _)    -> evalE shExp
+                Left (arr, _, _, _, _) -> return $ shape arr
               let
-                coShapeSize :: SliceIndex slix sl co sh -> sh -> Int
-                coShapeSize SliceNil          ()        = 1
-                coShapeSize (SliceAll   slix0) (sh0, _ ) = coShapeSize slix0 sh0
-                coShapeSize (SliceFixed slix0) (sh0, sz) = coShapeSize slix0 sh0 * sz
                 sl = sliceShape slix sh
                 n = coShapeSize slix (fromElt sh)
-              return $ StreamMapFin (0, n) (toSeqOp f n kernel gamma sl)
-            ExecUseLazy{} -> error "Not implemented yet" -- TODO
+              return $ StreamMapFin (0, n) $ \ _senv i stream -> do
+                let k = (pd `min` ((n - i) `max` 0))
+                out <- case arg of
+                  Right (_, kernel, gamma)       -> toSeqOp kernel gamma aenv          sl i k stream
+                  Left (arr, kp3, kp5, kp7, kp9) -> useLazyOp kp3 kp5 kp7 kp9 arr slix sl i k stream
+                -- Convert result to chunk
+                nop <- join $ liftIO <$> (Event.create <$> asks activeContext <*> gets eventTable)
+                evalAF1 f (Async nop out) stream
+            ExecToSeq Nothing _ _ _ -> error "unreachable"
             ExecMap _ f' x       -> return $ initMapSeq f' x
             ExecZipWith _ f' x y -> return $ initZipWithSeq f' x y
             ExecScanSeq e _ f x    -> StreamScan scanner <$> (newArray Z . const =<< evalE e)
@@ -647,27 +654,6 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
                   let c@(Async ev _) = aprj (cvtIdx x) senv
                   (v, accum) <- evalAF2 f (Async ev a) (chunkElems `fmap` c) stream
                   return (vec2Chunk v, accum)
-
-        toSeqOp :: (Shape sl, Elt e)
-                => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e)))
-                -> Int
-                -> AccKernel (Array (sl :. Int) e)
-                -> Gamma aenv
-                -> sl
-                -> Aval senv'
-                -> Int
-                -> Stream
-                -> CIO (Chunk (Array sl e))
-        toSeqOp (Just f) n kernel gamma sl _senv i stream = do
-              let sh = ((pd `min` ((n - i) `max` 0)) .: sl)
-              out <- allocateArray sh
-              execute kernel gamma aenv (size sh) (i, out) stream
-              nop <- join $ liftIO <$> (Event.create <$> asks activeContext <*> gets eventTable)
-              evalAF1 f (Async nop out) stream
-          where
-            (.:) :: Shape sl => Int -> sl -> (sl :. Int)
-            (.:) sz sh = listToShape (shapeToList sh ++ [sz])
-        toSeqOp _ _ _ _ _ _ _ _ = error "unreachable"
 
         initMapSeq :: Maybe (ExecOpenAfun aenv (Regular a -> Regular b))
                    -> Idx senv a
@@ -738,18 +724,20 @@ initialiseSeqLoop !aenv !s !spineStream =
                      -> CIO (StreamProducer senv a)
         initProducer !p =
           case p of
-            ExecStreamIn arrs -> return (StreamStreamIn arrs)
-            ExecToSeq _ slix _ kernel gamma shExp -> do
-              sh <- evalE shExp
-              let
-                coShapeSize :: SliceIndex slix sl co sh -> sh -> Int
-                coShapeSize SliceNil          ()        = 1
-                coShapeSize (SliceAll   slix0) (sh0, _ ) = coShapeSize slix0 sh0
-                coShapeSize (SliceFixed slix0) (sh0, sz) = coShapeSize slix0 sh0 * sz
+            ExecStreamIn arrs -> return (StreamStreamIn arrs)            
+            ExecToSeq _ slix _ arg -> do
+              sh <- case arg of
+                Right (shExp, _, _)    -> evalE shExp
+                Left (arr, _, _, _, _) -> return $ shape arr
+              let 
                 sl = sliceShape slix sh
                 n = coShapeSize slix (fromElt sh)
-              return $ StreamMapFin (0, n) (toSeqOp kernel gamma sl)
-            ExecUseLazy{} -> error "Not implemented yet" -- TODO
+              return $ StreamMapFin (0, n) $ \ _senv i stream -> do
+                out <- case arg of
+                  Right (_, kernel, gamma)       -> toSeqOp kernel gamma aenv          sl i 1 stream
+                  Left (arr, kp3, kp5, kp7, kp9) -> useLazyOp kp3 kp5 kp7 kp9 arr slix sl i 1 stream
+                -- Convert result to chunk
+                return (reshapeOp sl out)
             ExecMap f _ x        -> return $ StreamMap $ \ senv -> evalAF1 f (aprj x senv)
             ExecZipWith f _ x y -> return $ StreamMap $ \ senv -> evalAF2 f (aprj x senv) (aprj y senv)
             ExecScanSeq e f _ x -> StreamScan scanner <$> (newArray Z . const =<< evalE e)
@@ -782,23 +770,6 @@ initialiseSeqLoop !aenv !s !spineStream =
                   initTup (SnocAtup t0 c0) = SnocAtup <$> initTup t0 <*> initConsumer c0
               in StreamStuple <$> initTup t
 
-        toSeqOp :: (Shape sl, Elt e)
-                => AccKernel (Array (sl :. Int) e)
-                -> Gamma aenv
-                -> sl
-                -> Aval senv
-                -> Int
-                -> Stream
-                -> CIO (Array sl e)
-        toSeqOp kernel gamma sl _senv i stream = do
-              let sh = 1 .: sl
-              out <- allocateArray sh
-              execute kernel gamma aenv (size sh) (i, out) stream
-              return (reshapeOp sl out)
-          where
-            (.:) :: Shape sl => Int -> sl -> (sl :. Int)
-            (.:) sz sh = listToShape (shapeToList sh ++ [sz])
-
         evalAF1 :: ExecOpenAfun aenv (a -> b) -> Async a -> Stream -> CIO b
         evalAF1 (Alam (Abody f)) x = executeOpenAcc f (aenv `Apush` x)
         evalAF1 _ _ = error "error AF1"
@@ -814,6 +785,79 @@ initialiseSeqLoop !aenv !s !spineStream =
 
         evalE :: ExecExp aenv t -> CIO t
         evalE exp = executeExp exp aenv spineStream
+
+
+coShapeSize :: SliceIndex slix sl co sh -> sh -> Int
+coShapeSize SliceNil          ()        = 1
+coShapeSize (SliceAll   slix0) (sh0, _ ) = coShapeSize slix0 sh0
+coShapeSize (SliceFixed slix0) (sh0, sz) = coShapeSize slix0 sh0 * sz
+
+(.:) :: Shape sl => Int -> sl -> (sl :. Int)
+(.:) sz sh = listToShape (shapeToList sh ++ [sz])
+
+toSeqOp :: (Shape sl, Elt e)
+        => AccKernel (Array (sl :. Int) e)
+        -> Gamma aenv
+        -> Aval aenv
+        -> sl
+        -> Int
+        -> Int
+        -> Stream
+        -> CIO (Array (sl :. Int) e)
+toSeqOp kernel gamma aenv sl i k stream = do
+  let sh = k .: sl
+  out <- allocateArray sh
+  execute kernel gamma aenv (size sh) (i, out) stream
+  return out
+
+useLazyOp :: (Shape sh, Shape sl, Elt e)
+          => AccKernel (Array DIM3 e)
+          -> AccKernel (Array DIM5 e)
+          -> AccKernel (Array DIM7 e)
+          -> AccKernel (Array DIM9 e)
+          -> Array sh e
+          -> SliceIndex slix (EltRepr sl) co (EltRepr sh)
+          -> sl
+          -> Int
+          -> Int
+          -> Stream
+          -> CIO (Array (sl :. Int) e)
+useLazyOp kp3 kp5 kp7 kp9 arr slix sl i k stream = do
+  let
+    sh = (k .: sl)
+    args = copyArgs slix (fromElt (shape arr)) i (i + k)
+
+    -- specialize mapM_. Otherwise get 'untouchable' type error.
+    map' :: (a -> CIO ()) -> [a] -> CIO ()
+    map' = mapM_
+
+  -- tmp holds the copied array before permutation.
+  tmpArr@(Array _ tmp) <- allocateArray sh
+  -- out holds the end result.
+  outArr@(Array _ out) <- allocateArray sh
+  -- Poke 2D regions from host to device:
+  mapM_ (\ x -> pokeCopyArgs x arr tmpArr) args
+
+  -- Permute each poked region to conform with slicing. TODO test
+  -- whether permutation is needed at all before doing this.
+  withDevicePtrs tmp (Just stream) $ \ dtmp ->
+    withDevicePtrs out (Just stream) $ \ dout ->
+      map' (\ x ->
+             let dtmp' = advancePtrsOfArrayData tmp (offset x) dtmp
+                 dout' = advancePtrsOfArrayData out (offset x) dout
+                 mdtmp = marshalDevicePtrs tmp dtmp'
+                 mdout = marshalDevicePtrs out dout'
+             in
+             case permutation x of
+               Permut sh0 p ->
+                 case p of
+                   P3 -> execute kp3 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P3 sh0, mdout) stream
+                   P5 -> execute kp5 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P5 sh0, mdout) stream
+                   P7 -> execute kp7 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P7 sh0, mdout) stream
+                   P9 -> execute kp9 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P9 sh0, mdout) stream
+           ) args
+  return outArr
+
 
 streamSeq :: ExecSeq [a] -> StreamSeq a
 streamSeq (ExecS !binds !dsequ !sequ) = StreamSeq $ do

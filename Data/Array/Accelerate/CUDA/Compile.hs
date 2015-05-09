@@ -368,23 +368,30 @@ compileOpenSeq l =
     compileP p =
       case p of
         ToSeq mf slix slixproxy acc -> do
-          case acc of
-
-            -- In the case of converting an array that has not already been copied
-            -- to device memory, we are smart and treat it specially.
---            Manifest (Use a) -> return $ ExecUseLazy slix (toArr a) ([] :: [slix]) TODO
-            Manifest (Avar _x) -> error "Not implemented: use lazy"
-            Manifest _ -> error "unexpected non-variable in ToSeq"
-            Delayed{} -> do
-              (free1, EmbedAcc sh) <- travA acc
-              let gamma = makeEnvMap free1
-              dev <- asks deviceProperties
-              f' <-
-                case mf of
-                  Just f -> Just <$> compileOpenAfun f
-                  Nothing -> return Nothing
-              kernel <- build1 (Manifest $ Generate undefined undefined) (codegenToSeq slix dev acc gamma)
-              return $! ExecToSeq f' slix slixproxy kernel gamma sh
+          (free1, acc') <- travA acc
+          dev <- asks deviceProperties
+          f' <-
+            case mf of
+              Just f -> Just <$> compileOpenAfun f
+              Nothing -> return Nothing
+          arg <-
+                case (acc, acc') of
+                  (Delayed{}, EmbedAcc sh) -> do
+                    let gamma = makeEnvMap free1
+                    kernel <- build1 (Manifest $ Generate undefined undefined) (codegenToSeq slix dev acc gamma)
+                    return $ Right (sh, kernel, gamma)
+                  -- In the case of converting an array that has not already been copied
+                  -- to device memory, we are smart and treat it specially.
+                  (Manifest (Use a), _) -> do
+                    liftIO (D.traceIO D.verbose $ "toSeq (use arr): Copying slices lazily..")
+                    let (p3,p5,p7,p9) = codegenUseLazyPerms dev
+                    kp3 <- build1 (Manifest $ Generate undefined undefined) p3
+                    kp5 <- build1 (Manifest $ Generate undefined undefined) p5
+                    kp7 <- build1 (Manifest $ Generate undefined undefined) p7
+                    kp9 <- build1 (Manifest $ Generate undefined undefined) p9
+                    return $ Left (toArr a, kp3, kp5, kp7, kp9)
+                  (Manifest _      , _) -> error "unexpected non-use in ToSeq"
+          return $! ExecToSeq f' slix slixproxy arg
         StreamIn xs -> return $ ExecStreamIn xs
         MapSeq f mg x -> do
           f' <- compileOpenAfun f
@@ -428,7 +435,7 @@ compileOpenSeq l =
         FoldSeqFlatten cf f acc x -> do
           acc' <- compileOpenAcc acc
           f' <- compileOpenAfun f
-          cf' <- sequence (compileOpenAfun <$> cf)
+          cf' <- Data.Traversable.sequence (compileOpenAfun <$> cf)
           return $ ExecFoldSeqFlatten cf' f' acc' x
         Stuple t -> ExecStuple <$> compileCT t
 

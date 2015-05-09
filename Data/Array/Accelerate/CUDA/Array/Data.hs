@@ -23,11 +23,11 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   -- * Array operations and representations
   mallocArray, freeArray,
   indexArray,
-  useArray,  useArrayAsync, useArraySlice,
+  useArray,  useArrayAsync,
   useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync,
+  pokeArray, pokeArrayAsync, pokeCopyArgs,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
   withDevicePtrs, advancePtrsOfArrayData,
   devicePtrsFromList, devicePtrsToWordPtrs,
@@ -55,7 +55,7 @@ import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt, EltRepr )
 import Data.Array.Accelerate.Array.Representation       ( size, SliceIndex )
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
+import Data.Array.Accelerate.CUDA.Array.Slice
 import Data.Array.Accelerate.CUDA.Array.Cache
 import Data.Array.Accelerate.CUDA.Persistent            ( KernelTable )
 import Data.Array.Accelerate.CUDA.Execute.Event         ( EventTable )
@@ -199,28 +199,6 @@ useArrayAsync (Array !sh !adata) ms = run doUse
         --
         usePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> Maybe CUDA.Stream -> IO ()
         mkPrimDispatch(usePrim,Prim.useArrayAsync)
-
-
--- | Upload a slice of an existing array (eg. row of a matrix) to the
--- device. TODO : Bounds checking, generalize slices to more than just
--- inner dimension?
-useArraySlice :: (Elt slix, Shape sl, Shape dim, Elt e)
-              => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr dim)
-              -> slix        -- Slice
-              -> Array dim e -- Host array
-              -> Array sl e  -- Device array
-              -> CIO ()
-useArraySlice slix sl (Array dim !adata_host) (Array _ !adata_dev) = run doUse
-  where
-    tdesc = transferDesc slix (fromElt sl) dim
-    doUse !ctx !mt = useR arrayElt adata_host adata_dev
-      where
-        useR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
-        useR ArrayEltRunit             _   _   = return ()
-        useR (ArrayEltRpair aeR1 aeR2) adh add = useR aeR1 (fst adh) (fst add) >> useR aeR2 (snd adh) (snd add)
-        useR aer                       adh add = usePrim aer ctx mt adh add tdesc -- usePrim aer ctx mt adh add tdesc
-        usePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> TransferDesc -> IO ()
-        mkPrimDispatch(usePrim,Prim.useArraySlice)
 
 useDevicePtrs :: (Shape sh, Elt e) => EltRepr sh -> Prim.DevicePtrs (EltRepr e) -> CIO (Array sh e)
 useDevicePtrs sh ptrs = run doUse
@@ -435,6 +413,26 @@ pokeArrayAsync (Array !sh !adata) !ms = run doPoke
         --
         pokePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> Int -> Maybe CUDA.Stream -> IO ()
         mkPrimDispatch(pokePrim,Prim.pokeArrayAsync)
+
+
+-- Copy data from an Accelerate array into the associated device array of a different array.
+--
+pokeCopyArgs :: Elt e
+           => CopyArgs
+           -> Array dim  e
+           -> Array dim' e 
+           -> CIO ()
+pokeCopyArgs args (Array _ !adata) (Array _ !adata') = run doPoke
+  where
+    doPoke !ctx !mt = pokeR arrayElt adata adata'
+      where
+        pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        pokeR ArrayEltRunit             _  _   = return ()
+        pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
+        pokeR aer                       ad ad' = pokePrim aer ctx mt args ad ad'
+        --
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> CopyArgs -> ArrayData e -> ArrayData e -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeCopyArgs)
 
 
 -- |Convert the device pointers into a list of word pointers

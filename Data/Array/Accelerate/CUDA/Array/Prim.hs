@@ -2,6 +2,7 @@
 {-# LANGUAGE ConstraintKinds     #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TupleSections       #-}
@@ -22,10 +23,10 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   DevicePtrs, HostPtrs,
 
   mallocArray, indexArray,
-  useArray,  useArrayAsync, useArraySlice, useDevicePtrs,
+  useArray,  useArrayAsync, useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync,
+  pokeArray, pokeArrayAsync, pokeCopyArgs,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
   withDevicePtrs, advancePtrsOfArrayData
 
@@ -54,7 +55,7 @@ import Data.Array.Accelerate.Lifetime                   ( withLifetime )
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Memory               ( PrimElt )
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc(..), blocksOf )
+import Data.Array.Accelerate.CUDA.Array.Slice
 import Data.Array.Accelerate.CUDA.Array.Cache
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
@@ -191,30 +192,6 @@ useArray !ctx !mt !ad !n0 =
   in do
     alloc <- malloc ctx mt ad True n
     when alloc $ withDevicePtrs ctx mt ad Nothing run
-
--- A combination of 'mallocArray' and 'pokeArray' to allocate space on the
--- device and upload an existing array. This is specialised because if the host
--- array is shared on the heap, we do not need to do anything.
---
-useArraySlice
-    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
-    => Context
-    -> MemoryTable
-    -> ArrayData e
-    -> ArrayData e
-    -> TransferDesc
-    -> IO ()
-useArraySlice !ctx !mt !ad_host !ad_dev !tdesc =
-  let src    = ptrsOfArrayData ad_host
-      k      = sizeOf (undefined :: a)
-      run dst =
-        sequence_
-          [ transfer "useArraySlice/malloc" (k * size) $ CUDA.pokeArray size (plusPtr src (k * src_offset)) (plusDevPtr dst (k * dst_offset))
-          | (src_offset, dst_offset, size) <- blocksOf tdesc]
-  in do
-    alloc <- malloc ctx mt ad_dev True (k * nblocks tdesc * blocksize tdesc)
-    when alloc $ withDevicePtrs ctx mt ad_dev Nothing run
-
 
 useArrayAsync
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
@@ -390,6 +367,33 @@ pokeArrayAsync !ctx !mt !ad !n !st =
   withDevicePtrs ctx mt ad st $ \dst ->
     transfer "pokeArrayAsync: " (n * sizeOf (undefined :: a)) $
       CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
+
+
+pokeCopyArgs
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> CopyArgs
+    -> ArrayData e
+    -> ArrayData e
+    -> IO ()
+pokeCopyArgs !ctx !mt CopyArgs{..}  !ad_host !ad_dev =
+  withDevicePtrs ctx mt ad_dev Nothing $ \dst ->
+    mapM_ 
+      (\ Memcpy2Dargs{..} ->
+        transfer "pokeCopyArgs: " (width * height * sizeOf (undefined :: a)) $
+          CUDA.pokeArray2D 
+            width
+            height
+            (ptrsOfArrayData ad_host)
+            srcPitch
+            srcX
+            srcY
+            (advancePtrsOfArrayData offset ad_dev dst)
+            dstPitch
+            dstX
+            dstY
+      ) memcpy2Dargs
 
 
 -- Marshal device pointers to arguments that can be passed to kernel invocation

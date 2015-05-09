@@ -1,212 +1,360 @@
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE ImpredicativeTypes    #-}
+
 -- |
 -- Module      : Data.Array.Accelerate.Array.Slice
 --
--- Maintainer  : Frederik Meisner Madsen <fmma@diku.dk>
+-- Maintainer  : Frederik Meisner Madsen <fmma@di.ku.dk>
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 --
 
 module Data.Array.Accelerate.CUDA.Array.Slice (
 
-  transferDesc, blocksOf,
+  CopyArgs(..),
+  Memcpy2Dargs(..),
+  Permut(..),
+  P(..),
 
-  TransferDesc(..)
+  copyArgs,
+  reifyP,
+  shapeP,
 
 ) where
 
-import Control.Arrow                                    ( first )
-import Data.List                                        ( groupBy, elemIndex )
-import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
+import GHC.Base                                         ( quotInt )
+import Data.Array.Accelerate                            ( Exp, lift1 )
+import Data.Array.Accelerate.Array.Sugar                ( Shape, Z(..), (:.)(..), DIM3, DIM5, DIM7, DIM9, shapeToList, listToShape )
+import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..), size )
+
+-- Instrument a copy from host to device of all slices in the range
+-- 'i' (inclusive) to 'j' (exclusive), the slicing strategy is
+-- provided by the given SliceIndex.
+copyArgs  :: SliceIndex slix sl co dim -> dim -> Int -> Int -> [CopyArgs]
+copyArgs sl dim i j =
+  let sls = map normaliseSl (shapeToSl (massageShape sl dim) i j)
+      offsets = scanl (+) 0 (map dstSize sls)
+  in zipWith f sls offsets
+  where
+    f sl o = CopyArgs { memcpy2Dargs = copy sl
+                      , offset = o
+                      , permutation = slicePermut sl
+                      }
+
+afDstSize :: (A, F) -> Int
+afDstSize (a, _) = a
+faDstSize :: (F, A) -> Int
+faDstSize (_, a) = a
+dstSize :: SlN -> Int
+dstSize (ac, r, (afs, as, fas)) = productOdd ac * rangeLen r * product (map afDstSize afs) * as * product (map faDstSize fas)
 
 
--- Slicing algorithm.
-
--- Figure out how to transfer a multi-dimensional slice from a
--- multi-dimensional array of the same or higher dimensionality to a
--- contiguous memory region. The algorithm uses as few data transfers
--- as possible, where a linear memory copy with a stride consitutes
--- one transfer (cudaMemcpy2d). Each transfer is described by four
--- numbers: A start, a stride, a number of basic blocks and block
--- size.
---
-
--- Memory transfer(s) description suitable for (multiple calls to)
--- cudaMemcpu2D. The number of calls necessary is given by the length
--- of the starting offsets. The unit is basic elements of the target
--- array.
-data TransferDesc =
-  TransferDesc { starts    :: [Int] -- Starting offsets.
-               , stride    :: Int   -- Stride.
-               , nblocks   :: Int   -- Number of blocks.
-               , blocksize :: Int } -- Elements per block.
+-- The arguments for one call to memcpy2D, along with an offset into
+-- the destination array.
+data Memcpy2Dargs = Memcpy2Dargs
+        { width
+        , height
+        , srcPitch
+        , srcX
+        , srcY
+        , dstPitch
+        , dstX
+        , dstY
+        , srcRows        -- Not exported (pitch in the Y-axis)
+        , dstRows :: Int -- Not exported
+        }
   deriving Show
 
--- Get the basic blocks of the given transfer descriptions, described
--- as offset and length. This function can be used to do a memory copy
--- with only contiguous data transfers, if a strided transfer is not
--- available.
-blocksOf :: TransferDesc -> [(Int, Int, Int)]
-blocksOf tdesc =
-  [ ( start + i * stride tdesc
-    , i * blocksize tdesc
-    , blocksize tdesc)
-  | start <- starts tdesc
-  , i <- [0..nblocks tdesc-1]]
+-- CopyArgs contain the arguments to a list of memcpy2dcalls. Each
+-- call should be applied to a region on the device, offset in number
+-- of elements by the 'offset' field. To obtain the correct
+-- permutation of elements in each region, the 'permutation' field
+-- contains shape and permutation information that should be applied
+-- after copying. The permutation moves all iteration dimensions to
+-- the outermost dimensions, leaving the slice shape as the innermost.
+data CopyArgs = CopyArgs
+  { memcpy2Dargs :: [Memcpy2Dargs]
+  , offset       :: Int
+  , permutation  :: Permut
+  }
 
--- A slice index in one dimension, annotated with information used to
--- catogorize how the dimension is transferred.
-type SliceIR = ( TransferType -- Transfer type annotation.
-               , Int )        -- Size of this dimension.
+-- A pair, used to denote that "a ranges over 0..b-1".
+data In a b = a `In` b
 
-data TransferType =
-            Strided -- Transfer the entire dimension. Each element
-                    -- will be transfered in a different block, but in
-                    -- a single transfer.
+instance (Show a, Show b) => Show (In a b) where
+  show (i `In` n) = show i ++ " in " ++ show n
 
-          | Contiguous -- Transfer the entire dimension in one
-                       -- contiguous data transfer. Each element will
-                       -- be transfered in the same block in the same
-                       -- transfer.
+idx :: In a b -> a
+idx (i `In` _) = i
 
-          | Fixed Int -- Transfer a specific element in this
-                      -- dimension. The argument is the element index.
+dim :: In a b -> b
+dim (_ `In` n) = n
 
-          | FixedAll -- Transfer the entire dimension. Each element
-                     -- will be transfered in a seperate data
-                     -- transfer.
+-- Dimension transfer types:
+type A = Int               -- all elements in dimension
+type F = Int        `In` A -- fixed element in dimension
+type R = (Int, Int) `In` A -- fixed range of elements in dimension
 
--- Convert a slice index to internal representation used by this
--- algorithm. Initially, all dimensions are represented as strided
--- (transfer entire dimension) or fixed (transfer specific element).
+rangeStart :: R -> Int
+rangeStart = fst . idx
 
-toIR :: SliceIndex slix sl co dim
-     -> slix
-     -> dim
-     -> [SliceIR]
-toIR SliceNil        ()       ()      = []
-toIR (SliceAll   si) (sl, ()) (sh, n) = (Strided, n):toIR si sl sh
-toIR (SliceFixed si) (sl, i ) (sh, n) = (Fixed i, n):toIR si sl sh
-{-
-toIR :: SliceIndex slix sl co dim
-     -> slix
-     -> dim
-     -> [SliceIR]
-toIR slix sl dim =
-  f slix sl dim []
+rangeEnd :: R -> Int
+rangeEnd   = snd . idx
+
+rangeLen :: R -> Int
+rangeLen r = rangeEnd r - rangeStart r
+
+-- Some lists:
+-- (ab)*
+type EvenList a b = [(a, b)]
+
+-- a(ba)*
+type OddList a b = (a, EvenList b a)
+
+-- (ab)*a(ba)*
+type PivotedOddList a b = (EvenList a b, a, EvenList b a)
+
+-- product defined on OddList.
+productOdd :: Num a => OddList a a -> a
+productOdd (a0, as) = foldl (\ a (b,c) -> a*b*c) a0 as
+
+
+shift :: b -> EvenList a b -> a -> EvenList b a
+shift a [] b = [(a, b)]
+shift a ((b0,a0) : bas) b = (a,b0) : shift a0 bas b
+
+shiftlPivot :: Int -> OddList a b -> PivotedOddList a b
+shiftlPivot 0 (a0, bas) = ([], a0, bas)
+shiftlPivot n (a0, bas) =
+  let (bas0, (b,a):bas1) = (take (n-1) bas, drop (n-1) bas)
+  in (shift a0 bas0 b, a, bas1)
+
+indexOfMax :: Ord a => OddList a b -> Int
+indexOfMax (a0, bas) = snd $ foldl (\ (a0, i0) ((_, a), i) -> if a > a0 then (a, i) else (a0, i0)) (a0, 0) (bas `zip` [1..])
+
+-- Pivot an odd-length list around the maximum off the odd-positioned
+-- elements.
+pivotMax :: Ord a => OddList a b -> PivotedOddList a b
+pivotMax xs = shiftlPivot (indexOfMax xs) xs
+
+-- Dimension of an array, decorated with slice indexing.
+-- Innermost-to-outermost ~ left-to-right.
+type Sl = ( OddList A A   -- Innermost contiguous region.
+          , R             -- Range.
+          , OddList A F)  -- Outermost Index-slice.
+
+-- Same as Sl, but where the outermost dimensions are pivoted around a
+-- distinguished A-dimension (FixedAll) that has been chosen as a
+-- basis for partitioning, resulting in fewest possible calls to
+-- memcpy2D.
+type SlN = (OddList A A, R, PivotedOddList A F)
+
+-- Convert a slice index description to a list of arguments for
+-- multiple calls to memcpy2D. In most cases, only one call is needed,
+-- but in the general case, it is not possible to describe the memory
+-- transfer with a single call.
+--
+-- Number of calls = product of all a's in afs and fas. That is why
+-- the largest dimension has been selected as the pivot.
+copy :: SlN -> [Memcpy2Dargs]
+copy (ac, r, (afs, as, fas)) =
+  let
+     mem0 = Memcpy2Dargs
+        { width    = productOdd ac * rangeLen r
+        , height   = as
+        , srcPitch = productOdd ac * dim r
+        , srcX     = productOdd ac * rangeStart r
+        , srcY     = 0
+        , dstPitch = productOdd ac * rangeLen r
+        , dstX     = 0
+        , dstY     = 0
+        , srcRows  = as
+        , dstRows  = as
+        }
+  in foldl outerMats (foldl innerMats [mem0] afs) fas
   where
-    f :: SliceIndex slix' sl' co' dim'
-      -> slix'
-      -> dim'
-      -> [SliceIR]
-      -> [SliceIR]
-    f SliceNil        ()       ()      res = res
-    f (SliceAll   si) (sl, ()) (sh, n) res = f si sl sh ((Strided, n):res)
-    f (SliceFixed si) (sl, i ) (sh, n) res = f si sl sh ((Fixed i, n):res)
+    innerMats :: [Memcpy2Dargs] -> (A, F) -> [Memcpy2Dargs]
+    innerMats mems (a, f) =
+      [ let
+          sp = srcPitch mem
+          dp = dstPitch mem
+        in
+        mem { srcX     = srcX mem + sp * (idx f * a + i)
+            , dstX     = dstX mem + dp * i
+            , srcPitch = sp * a * dim f
+            , dstPitch = dp * a
+            }
+      | mem <- mems
+      , i   <- [0 .. a - 1]
+      ]
+
+    outerMats :: [Memcpy2Dargs] -> (F, A) -> [Memcpy2Dargs]
+    outerMats mems (f, a) =
+      [ let
+          sr = srcRows mem
+          dr = dstRows mem
+        in
+        mem { srcY    = srcY mem + sr * (idx f + i * dim f)
+            , dstY    = dstY mem + dr * i
+            , srcRows = sr * a * dim f
+            , dstRows = dr * a
+            }
+      | mem <- mems
+      , i   <- [0 .. a - 1]
+      ]
+
+-- Convert a shape to a the form we will be working
+-- with. Even-positioned elments represents SliceAll
+-- dimensions. Odd-positioned elements represents SliceFixed
+-- dimensions. Consecutive SliceAll (SliceFixed) dimensions are
+-- collapsed to a single dimension, since finer shape details are
+-- irrelevant.
+massageShape :: SliceIndex slix sl co dim -> dim -> OddList A A
+massageShape = goContiguous 1
+  where
+    goContiguous :: Int -> SliceIndex slix sl co dim -> dim -> OddList A A
+    goContiguous a SliceNil () = (a, [])
+    goContiguous a (SliceAll   sl) (sh, sz) = goContiguous (a * sz) sl sh
+    goContiguous a (SliceFixed sl) (sh, sz) = (a, goFixed sz sl sh)
+
+    goFixed :: Int -> SliceIndex slix sl co dim -> dim -> EvenList A A
+    goFixed i SliceNil () = [(i, 1)]
+    goFixed i (SliceAll sl)   (sh, sz)
+      | sz == 1   = goFixed sz sl sh
+      | otherwise = goAll sz i sl sh
+    goFixed i (SliceFixed sl) (sh, sz) = goFixed (i * sz) sl sh
+
+    goAll :: Int -> Int -> SliceIndex slix sl co dim -> dim -> EvenList A A
+    goAll a i SliceNil () = [(i, a)]
+    goAll a i (SliceAll   sl) (sh, sz) = goAll (a * sz) i sl sh
+    goAll a i (SliceFixed sl) (sh, sz)
+      | sz == 1   = goAll a i sl sh
+      | otherwise = (i, a) : goFixed sz sl sh
+
+-- Compute the slicing that determine a range of slices.
+shapeToSl :: OddList A A -> Int -> Int -> [Sl]
+shapeToSl (a0, dim) from to = go (reverse xs) from to
+  where
+    -- Zip the dimension with a scan of the fixed dimensions.
+    xs = (init . scanl (*) 1 . map fst $ dim) `zip` dim
+
+    go :: [(Int, (Int, Int))] -> Int -> Int -> [Sl]
+    go ((f', (f, a)) : xs) i j
+      | i >= j = []
+      | otherwise
+      = let (i0, i') = deltaForm f' i
+            (j0, j') = deltaForm f' j
+
+            -- Prefix the index-slice.
+            prefix i = map ((\ (inner, r, (as, ys)) -> (inner, r, (as, ys ++ [(i `In` f, a)]))))
+        in if i0 == j0
+           then prefix i0 (go xs i' j')
+           else
+             -- Left dangling region.
+             concat [prefix i0 (go xs i' f') | i' > 0] ++
+
+             -- Middle complete region.
+             [( contiguous xs               -- Copy everything in remaining dims.
+              , (i0 + signum i', j0) `In` f -- Copy the range.
+              , (a, []))                    -- Initial index-slice.
+             | (i0 + signum i') < j0] ++
+
+             -- Right dangling region.
+             concat [prefix j0 (go xs 0  j') | j' > 0]
+    go [] _ _ = []
+
+    contiguous :: [(Int, (Int, Int))] -> OddList A A
+    contiguous xs = (a0, reverse (map snd xs))
+
+    -- Convert an index x to (x0, x') where x = x0 * d + x'
+    deltaForm :: Int -> Int -> (Int, Int)
+    deltaForm d x = let x0 = x `quotInt` d
+                    in (x0, x - x0 * d)
+
+normaliseSl :: Sl -> SlN
+normaliseSl (inner, r, outer) = (inner, r, pivotMax outer) -- pivotMax
+
+
+-- Once copied, the data needs to be permuted, in order to conform to
+-- the specification - Each slice should occupy one contigious region
+-- of memory on the device, and the region of a slice should be
+-- positioned right after the region of the previous slice. After a
+-- copy, the elements are ordered by linear index of the source shape.
+-- After permutation, they are ordered by linear index of the
+-- iteration shape, followed by the linear index of the slice shape.
+data Permut where
+  Permut :: Shape sh
+         => sh   -- Shape of copied elements
+         -> P sh -- Permutation
+         -> Permut
+
+instance Show Permut where
+  show (Permut sh _) = show sh
+
+data P sh where
+  P3 :: P DIM3
+  P5 :: P DIM5
+  P7 :: P DIM7
+  P9 :: P DIM9
+
+-- Reify a permutation
+reifyP :: P sh -> (forall x. [x] -> [x], forall x. [x] -> [x])
+reifyP p =
+  case p of
+    P3 ->
+      ( \ [as,r,ac] -> [r,as,ac]
+      , \ [r,as,ac] -> [as,r,ac])
+    P5 ->
+      ( \ [as,r,a0,f0,ac] -> [r,f0,as,a0,ac]
+      , \ [r,f0,as,a0,ac] -> [as,r,a0,f0,ac])
+    P7 ->
+      ( \ [as,r,a1,f1,a0,f0,ac] -> [r,f1,f0,as,a1,a0,ac]
+      , \ [r,f1,f0,as,a1,a0,ac] -> [as,r,a1,f1,a0,f0,ac])
+    P9 ->
+      ( \ [as,r,a2,f2,a1,f1,a0,f0,ac] -> [r,f2,f1,f0,as,a2,a1,a0,ac]
+      , \ [r,f2,f1,f0,as,a2,a1,a0,ac] -> [as,r,a2,f2,a1,f1,a0,f0,ac])
+    {-
+    P3 ->
+      ( \ [ac, r, as] -> [ac, as, r]
+      , \ [ac, as, r] -> [ac, r, as])
+    P5 ->
+      ( \ [ac, f0, a0, r, as] -> [ac, a0, as, f0, r]
+      , \ [ac, a0, as, f0, r] -> [ac, f0, a0, r, as])
+    P7 ->
+      ( \ [ac, f0, a0, f1, a1, r, as] -> [ac, a0, a1, as, f0, f1, r]
+      , \ [ac, a0, a1, as, f0, f1, r] -> [ac, f0, a0, f1, a1, r, as])
+    P9 ->
+      ( \ [ac, f0, a0, f1, a1, f2, a2, r, as] -> [ac, a0, a1, a2, as, f0, f1, f2, r]
+      , \ [ac, a0, a1, a2, as, f0, f1, f2, r] -> [ac, f0, a0, f1, a1, f2, a2, r, as])
 -}
+slicePermut :: SlN -> Permut
+slicePermut ((ac0, ac), r, (afs, as, fas)) =
+  let
+    sh = Z :. product (map afDstSize afs) * as * product (map faDstSize fas) :. rangeLen r
+  in
+  case ac of
+    [] ->
+      Permut
+        (sh:.ac0)
+        P3
+    [(f0,a0)] ->
+      Permut
+        (sh:.a0:.f0:.ac0)
+        P5
+    [(f0,a0),(f1,a1)] ->
+      Permut
+        (sh:.a1:.f1:.a0:.f0:.ac0)
+        P7
+    [(f0,a0),(f1,a1),(f2,a2)] ->
+      Permut
+        (sh:.a2:.f2:.a1:.f1:.a0:.f0:.ac0)
+        P9
+    _ -> error "Too many dimensions"
 
--- Promote strided slice indices to contiguous slice indices when
--- possible (= all strided innermost dimensions).
-strideToContiguous :: [SliceIR] -> [SliceIR]
-strideToContiguous slirs =
-  let (strided, rest) = span (isStrided . fst) slirs
-      conti           = map (first promote) strided
-  in conti ++ rest
-  where
-    isStrided Strided = True
-    isStrided _ = False
-
-    promote Strided = Contiguous
-    promote x = x
-
--- Find largest group (= next to each other) of strided slice
--- indices. Promote all other strided groups to fixed groups, which
--- entails multiple data transfers in these dimensions. This is
--- necessary step, since it is impossible to describe the memory
--- transfer with the given transfer description type in some
--- situations (namely when there is a gap between strided
--- dimensions). This step chooses the split that results in fewest
--- possible data transfers by selecting the largest stride pivot.
-selectStridePivot :: [SliceIR] -> [SliceIR]
-selectStridePivot slirs =
-  let -- Group the slice dimensions in groups of same transfer types.
-      groups = groupBy sameTransferType slirs
-
-      -- Calculate the sizes of the strided groups, ignore the rest.
-      sizes  = map (product . map stridedSize) groups
-
-      -- Find the largest strided group.
-      Just imax = elemIndex (maximum sizes) sizes
-
-      -- Promote the remaining strided groups to fixed groups using
-      -- multiple data transfers.
-      (groups1, pivotGroup:groups2) = splitAt imax groups
-
-      groups' = map (map (first promote)) groups1 ++ pivotGroup:map (map (first promote)) groups2
-
-  in concat groups'
-  where
-    sameTransferType :: SliceIR -> SliceIR -> Bool
-    sameTransferType x y = fst x ~= fst y
-      where
-        (~=) :: TransferType -> TransferType -> Bool
-        Contiguous ~= Contiguous = True
-        Strided    ~= Strided    = True
-        Fixed _    ~= Fixed _    = True
-        FixedAll   ~= FixedAll   = True
-        _          ~= _          = False
-
-    promote :: TransferType -> TransferType
-    promote Strided = FixedAll
-    promote x = x
-
-    stridedSize :: SliceIR -> Int
-    stridedSize (Strided, n) = n
-    stridedSize _ = 0
-
--- Compute a description of the transfers necessary to copy the
--- specified slice.
-transferDesc :: SliceIndex slix sl co dim
-             -> slix -- Slice index.
-             -> dim  -- Full shape.
-             -> TransferDesc
-transferDesc slix sl dim =
-  let slirs  = selectStridePivot $ strideToContiguous $ toIR slix sl dim
-      tdesc0 = TransferDesc [0] 1 1 1
-      size0  = 1
-  in f slirs size0 tdesc0
-  where
-    f :: [SliceIR] -> Int -> TransferDesc -> TransferDesc
-    f slirs m tdesc =
-      case slirs of
-        [] -> tdesc
-
-        (ttyp, n):slirs' -> f slirs' (n * m) $
-          case ttyp of
-            Strided ->
-              TransferDesc
-                { starts = starts tdesc
-                , stride = if stride tdesc == 1 then m else stride tdesc
-                , nblocks = n * nblocks tdesc
-                , blocksize = blocksize tdesc }
-
-            Contiguous ->
-              TransferDesc
-                { starts = starts tdesc
-                , stride = stride tdesc
-                , nblocks = nblocks tdesc
-                , blocksize = n * blocksize tdesc }
-
-            Fixed i ->
-              TransferDesc
-                { starts = [start + i * m | start <- starts tdesc]
-                , stride = stride tdesc
-                , nblocks = nblocks tdesc
-                , blocksize = blocksize tdesc }
-
-            FixedAll ->
-              TransferDesc
-                { starts = [start + i * m | start <- starts tdesc, i <- [0..n-1]]
-                , stride = stride tdesc
-                , nblocks = nblocks tdesc
-                , blocksize = blocksize tdesc }
+shapeP :: Shape sh => P sh -> sh -> sh
+shapeP p sh =
+  let (fw, _) = reifyP p
+  in listToShape $ reverse $ fw $ reverse $ shapeToList sh

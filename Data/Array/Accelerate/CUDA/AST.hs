@@ -32,7 +32,9 @@ import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Array.Lifted               ( Regular )
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar, (:.) )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar, (:.)
+                                                        , DIM3, DIM5, DIM7, DIM9 )
+
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import Data.Array.Accelerate.Trafo                      ( Extend, DelayedOpenAcc )
 import qualified Data.Array.Accelerate.FullList         as FL
@@ -204,19 +206,19 @@ data ExecP aenv lenv a where
                              co
                              (EltRepr sh)
                -> !(proxy slix)
-               -> AccKernel (Array (sl :. Int) e)
-               -> !(Gamma aenv)
-               -> ExecExp aenv sh
+               -> Either
+                    ( Array sh e
+                      -- Permutation kernels:
+                    , AccKernel (Array DIM3 e)
+                    , AccKernel (Array DIM5 e)
+                    , AccKernel (Array DIM7 e)
+                    , AccKernel (Array DIM9 e)
+                    ) -- Use lazy
+                    ( ExecExp aenv sh
+                    , AccKernel (Array (sl :. Int) e) -- Fused kernel
+                    , Gamma aenv
+                    )
                -> ExecP aenv lenv (Array sl e)
-
-  ExecUseLazy :: (Elt slix, Shape sl, Shape sh, Elt e)
-              => SliceIndex (EltRepr slix)
-                            (EltRepr sl)
-                            co
-                            (EltRepr sh)
-              -> Array sh e
-              -> [slix]
-              -> ExecP aenv lenv (Array sl e)
 
   ExecStreamIn :: Arrays a
                => [a]

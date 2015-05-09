@@ -6,6 +6,7 @@
 {-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE ViewPatterns        #-}
+{-# LANGUAGE ImpredicativeTypes  #-}
 {-# OPTIONS -fno-warn-name-shadowing #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen
@@ -20,7 +21,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc, codegenToSeq, codegenInplaceUpdate,
+  CUTranslSkel, codegenAcc, codegenToSeq, codegenInplaceUpdate, codegenUseLazyPerms,
 
 ) where
 
@@ -41,8 +42,10 @@ import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Pretty                             ()
 import Data.Array.Accelerate.Analysis.Shape
+import Data.Array.Accelerate.CUDA.Array.Slice
 import Data.Array.Accelerate.Array.Sugar                        ( Array, Vector, Shape, Elt, EltRepr
-                                                                , Tuple(..), TupleRepr )
+                                                                , Tuple(..), TupleRepr 
+                                                                , DIM3, DIM5, DIM7, DIM9)
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
@@ -179,6 +182,51 @@ codegen cuda =
   in
   map addTo skeletons
 
+
+codegenUseLazyPerms :: forall e. Elt e 
+                    => DeviceProperties ->
+  ( CUTranslSkel ((), Array DIM3 e) (Array DIM3 e)
+  , CUTranslSkel ((), Array DIM5 e) (Array DIM5 e)
+  , CUTranslSkel ((), Array DIM7 e) (Array DIM7 e)
+  , CUTranslSkel ((), Array DIM9 e) (Array DIM9 e)
+  )
+codegenUseLazyPerms dev =
+  ( codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P3) <$> travF1 id <*> dacc)
+  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P5) <$> travF1 id <*> dacc)
+  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P7) <$> travF1 id <*> dacc)
+  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P9) <$> travF1 id <*> dacc)
+  )
+  where
+    codegen :: CUDA (CUTranslSkel aenv a) -> CUTranslSkel aenv a
+    codegen cuda =
+      let (skeleton, st)                 = runCUDA cuda
+          addTo (CUTranslSkel name code) =
+            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
+      in
+      addTo skeleton
+
+    id :: Elt a => DelayedFun aenv (a -> a)
+    id = Lam (Body (Var ZeroIdx))
+      
+    p :: Shape sh => (forall x. [x] -> [x]) -> CUFun1 ((), Array sh e) (sh -> sh)
+    p f = CUFun1 (zip (repeat True)) ((,) [] . map rvalue . f)
+
+    travF1 :: Shape sh => DelayedFun ((), Array sh e) (a -> b) -> CUDA (CUFun1 ((), Array sh e) (a -> b))
+    travF1 = codegenFun1 dev aenv
+    
+    travE :: Shape sh => DelayedExp ((), Array sh e) t -> CUDA (CUExp ((), Array sh e) t)
+    travE = codegenExp dev aenv
+    
+    dacc :: Shape sh => CUDA (CUDelayedAcc ((), Array sh e) sh e)
+    dacc = CUDelayed <$> travE  (Shape a)
+                     <*> travF1 (Lam $ Body $       Index a (Var ZeroIdx))
+                     <*> travF1 (Lam $ Body $ LinearIndex a (Var ZeroIdx))
+
+    a :: Shape sh => DelayedOpenAcc ((), Array sh e) (Array sh e)
+    a = Manifest (Avar ZeroIdx)
+                                       
+    aenv :: Shape sh => Gamma ((), Array sh e)
+    aenv = makeEnvMap (freevar ZeroIdx)
 
 codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
                 => SliceIndex slix
