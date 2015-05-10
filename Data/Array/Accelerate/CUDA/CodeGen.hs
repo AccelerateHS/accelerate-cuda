@@ -26,14 +26,14 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
-import Prelude                                                  hiding ( id, exp, replicate )
-import Control.Applicative                                      ( (<$>), (<*>) )
-import Control.Monad.State.Strict
 import Data.HashSet                                             ( HashSet )
+import Control.Monad.State.Strict
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
+import Control.Applicative                                      hiding ( Const )
+import Prelude                                                  hiding ( id, exp, replicate )
 
 -- friends
 import Data.Array.Accelerate.Error
