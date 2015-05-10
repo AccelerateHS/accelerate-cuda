@@ -1035,6 +1035,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
       IndexHead sh              -> (\(_  :. ix) -> ix) <$> travE sh
       IndexTail sh              -> (\(ix :.  _) -> ix) <$> travE sh
+      IndexTrans sh             -> transpose <$> travE sh
       IndexSlice ix slix sh     -> indexSlice ix <$> travE slix <*> travE sh
       IndexFull ix slix sl      -> indexFull  ix <$> travE slix <*> travE sl
       ToIndex sh ix             -> toIndex   <$> travE sh  <*> travE ix

@@ -428,6 +428,7 @@ codegenOpenExp dev aenv = cvtE
         IndexCons sh sz         -> (++) <$> cvtE sh env <*> cvtE sz env
         IndexHead ix            -> return . cindexHead <$> cvtE ix env
         IndexTail ix            ->          cindexTail <$> cvtE ix env
+        IndexTrans ix           ->         cindexTrans <$> cvtE ix env
         IndexSlice ix slix sh   -> indexSlice ix slix sh env
         IndexFull  ix slix sl   -> indexFull  ix slix sl env
         ToIndex sh ix           -> toIndex   sh ix env

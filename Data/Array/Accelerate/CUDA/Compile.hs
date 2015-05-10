@@ -248,6 +248,7 @@ compileOpenExp exp =
     IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
     IndexHead h             -> liftA  IndexHead             <$> travE h
     IndexTail t             -> liftA  IndexTail             <$> travE t
+    IndexTrans s            -> liftA  IndexTrans            <$> travE s
     IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
     IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
     ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
