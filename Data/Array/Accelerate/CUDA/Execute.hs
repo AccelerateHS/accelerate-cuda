@@ -874,8 +874,6 @@ streamOutSequence :: StreamDAG () [arrs]
 streamOutSequence !topSeq !pd
   = loop pd topSeq
   where
-    -- Iterate the given sequence until it terminates.
-    -- A sequence only terminates when one of the producers are exhausted.
     loop :: Int
          -> StreamDAG () [arrs]
          -> StreamSeq arrs
@@ -884,24 +882,8 @@ streamOutSequence !topSeq !pd
       in if k == 0
             then return Nothing
             else do
-              (s', arrs0) <- step s Aempty k
+              (s', arrs0) <- stepSequence s Aempty k
               return $ Just (arrs0, loop n s')
-
-    step :: StreamDAG senv a
-         -> Aval senv
-         -> Int
-         -> CIO (StreamDAG senv a, a)
-    step !s !senv !k =
-      case s of
-        StreamProducer p s0 ->
-          streaming (produce p senv k)
-          $ \ (Async ev (c', p')) -> do
-            (s0', a) <- step s0 (senv `Apush` Async ev c') k
-            return (StreamProducer p' s0', a)
-        StreamReify f -> do
-          as <- f senv k
-          return (StreamReify f, as)
-        StreamConsumer _ -> error "absurd"
 
 executeSequence :: StreamDAG () arrs
                 -> Int
@@ -915,25 +897,28 @@ executeSequence !topSeq !pd
     loop !n !s =
       let k = stepSize n s
       in if k == 0
-         then streaming (returnOut s) wait
-         else streaming (step s Aempty k) wait >>= loop n
+         then returnOut s
+         else do
+           (s', _) <- stepSequence s Aempty k 
+           loop n s'
 
-    step :: StreamDAG senv a
-         -> Aval senv
-         -> Int
-         -> Stream
-         -> CIO (StreamDAG senv a)
-    step !s !senv !k !stream =
-      case s of
-        StreamProducer p s0 ->
-          streaming (produce p senv k)
-          $ \ (Async ev (c', p')) -> do
-            s0' <- step s0 (senv `Apush` Async ev c') k stream
-            return (StreamProducer p' s0')
-        StreamConsumer c  -> do
-          c' <- consume c senv stream
-          return $ StreamConsumer c'
-        StreamReify _ -> $internalError "step" "Absurd"
+stepSequence :: StreamDAG senv a
+             -> Aval senv
+             -> Int
+             -> CIO (StreamDAG senv a, a)
+stepSequence !s !senv !k =
+  case s of
+    StreamProducer p s0 ->
+      streaming (produce p senv k)
+      $ \ (Async ev (c', p')) -> do
+        (s0', a) <- stepSequence s0 (senv `Apush` Async ev c') k
+        return (StreamProducer p' s0', a)
+    StreamConsumer c  -> do
+      c' <- consume c senv
+      return $ (StreamConsumer c', error "use returnOut")
+    StreamReify f -> do
+      as <- f senv k
+      return (StreamReify f, as)
 
 stepSize :: Int -> StreamDAG senv arrs -> Int
 stepSize pd s =
@@ -965,38 +950,41 @@ produce !p !senv !k !stream =
       (c', a') <- scanner senv a stream
       return (c', StreamScan scanner a')
 
-consume :: forall senv a. StreamConsumer senv a -> Aval senv -> Stream -> CIO (StreamConsumer senv a)
-consume !c !senv !stream =
-  case c of
-    StreamFold f g acc ->
-      do acc' <- f senv acc stream
-         return (StreamFold f g acc')
-    StreamStuple t ->
-      let consT :: Atuple (StreamConsumer senv) t -> CIO (Atuple (StreamConsumer senv) t)
-          consT NilAtup        = return (NilAtup)
-          consT (SnocAtup t0 c0) = do
-            c'  <- consume c0 senv stream
-            t'  <- consT t0
-            return (SnocAtup t' c')
-      in do
-        t' <- consT t
-        return (StreamStuple t')
+consume :: forall senv arrs. StreamConsumer senv arrs -> Aval senv -> CIO (StreamConsumer senv arrs)
+consume !con !senv = streaming (go con) wait
+  where
+    go :: StreamConsumer senv a -> Stream -> CIO (StreamConsumer senv a)
+    go c stream =
+      case c of
+        StreamFold f g acc ->
+          do acc' <- f senv acc stream
+             return (StreamFold f g acc')
+        StreamStuple t ->
+          let consT :: Atuple (StreamConsumer senv) t -> CIO (Atuple (StreamConsumer senv) t)
+              consT NilAtup        = return (NilAtup)
+              consT (SnocAtup t0 c0) = do
+                c'  <- go c0 stream
+                t'  <- consT t0
+                return (SnocAtup t' c')
+          in do
+            t' <- consT t
+            return (StreamStuple t')
 
-returnOut :: StreamDAG senv arrs -> Stream -> CIO arrs
-returnOut !s !stream =
+returnOut :: StreamDAG senv arrs -> CIO arrs
+returnOut !s = 
   case s of
-    StreamProducer _ s0 -> returnOut s0 stream
-    StreamConsumer c -> retC c
+    StreamProducer _ s0 -> returnOut s0
+    StreamConsumer c -> streaming (retC c) wait
     StreamReify _ -> error "absurd"
   where
-    retC :: StreamConsumer senv arrs -> CIO arrs
-    retC c =
+    retC :: StreamConsumer senv arrs -> Stream -> CIO arrs
+    retC c stream =
       case c of
         StreamFold _ g accum -> g accum stream
         StreamStuple t ->
           let retT :: Atuple (StreamConsumer senv) t -> CIO t
               retT NilAtup = return ()
-              retT (SnocAtup t0 c0) = (,) <$> retT t0 <*> retC c0
+              retT (SnocAtup t0 c0) = (,) <$> retT t0 <*> retC c0 stream
           in toAtuple <$> retT t
 
 
