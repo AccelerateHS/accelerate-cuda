@@ -40,7 +40,6 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 
 -- libraries
 import Numeric
-import Prelude                                                  hiding ( exp, scanl, scanr )
 import Control.Applicative                                      hiding ( Const )
 import Control.Exception
 import Control.Monad
@@ -69,6 +68,7 @@ import qualified Data.Text.Lazy.Encoding                        as T
 import qualified Control.Concurrent.MSem                        as Q
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
+import Prelude                                                  hiding ( exp, scanl, scanr )
 
 import GHC.Conc                                                 ( getNumProcessors )
 
@@ -248,6 +248,7 @@ compileOpenExp exp =
     IndexCons t h           -> liftA2 IndexCons             <$> travE t <*> travE h
     IndexHead h             -> liftA  IndexHead             <$> travE h
     IndexTail t             -> liftA  IndexTail             <$> travE t
+    IndexTrans s            -> liftA  IndexTrans            <$> travE s
     IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
     IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
     ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i

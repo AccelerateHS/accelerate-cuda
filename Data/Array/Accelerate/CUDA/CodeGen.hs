@@ -26,14 +26,14 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
-import Prelude                                                  hiding ( id, exp, replicate )
-import Control.Applicative                                      ( (<$>), (<*>) )
-import Control.Monad.State.Strict
 import Data.HashSet                                             ( HashSet )
+import Control.Monad.State.Strict
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
+import Control.Applicative                                      hiding ( Const )
+import Prelude                                                  hiding ( id, exp, replicate )
 
 -- friends
 import Data.Array.Accelerate.Error
@@ -428,6 +428,7 @@ codegenOpenExp dev aenv = cvtE
         IndexCons sh sz         -> (++) <$> cvtE sh env <*> cvtE sz env
         IndexHead ix            -> return . cindexHead <$> cvtE ix env
         IndexTail ix            ->          cindexTail <$> cvtE ix env
+        IndexTrans ix           ->         cindexTrans <$> cvtE ix env
         IndexSlice ix slix sh   -> indexSlice ix slix sh env
         IndexFull  ix slix sl   -> indexFull  ix slix sl env
         ToIndex sh ix           -> toIndex   sh ix env

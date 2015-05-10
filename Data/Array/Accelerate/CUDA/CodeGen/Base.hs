@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cint, cvar, ccall, cchar, cintegral, cbool, cshape, cslice, csize, cindexHead, cindexTail, ctoIndex, cfromIndex,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, cslice, csize, cindexHead, cindexTail, cindexTrans, ctoIndex, cfromIndex,
   readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
@@ -180,6 +180,10 @@ cindexHead = rvalue . last
 cindexTail :: Rvalue r => [r] -> [C.Exp]
 cindexTail = map rvalue . init
 
+-- Get the tail of a shape/index
+cindexTrans :: Rvalue r => [r] -> [C.Exp]
+cindexTrans = map rvalue . reverse
+
 -- generate code that calculates the product of the list of expressions
 csize :: Rvalue r => [r] -> C.Exp
 csize [] = [cexp| 1 |]
@@ -282,11 +286,11 @@ readArray grp dummy
 --
 writeArray
     :: forall sh e. (Shape sh, Elt e)
-    => Name                             -- group names
-    -> Array sh e                       -- dummy to fix types
-    -> ( [C.Param]                      -- function parameters to marshal the output array
-       , [C.Exp]                        -- the shape of the output array
-       , Rvalue x => x -> [C.Exp] )     -- write an element at a given index
+    => Name                                     -- group names
+    -> Array sh e                               -- dummy to fix types
+    -> ( [C.Param]                              -- function parameters to marshal the output array
+       , [C.Exp]                                -- the shape of the output array
+       , forall x. Rvalue x => x -> [C.Exp] )   -- write an element at a given index
 writeArray grp _ =
   let (sh, arrs)        = namesOfArray grp (undefined :: e)
       dim               = expDim (undefined :: Exp aenv sh)
@@ -307,12 +311,12 @@ writeArray grp _ =
 --
 shared
     :: forall e. Elt e
-    => e                                -- dummy type
-    -> Name                             -- group name
-    -> C.Exp                            -- how much shared memory per type
-    -> Maybe C.Exp                      -- (optional) initialise from this base address
-    -> ( [C.InitGroup]                  -- shared memory declaration and...
-       , Rvalue x => x -> [C.Exp])      -- ...indexing function
+    => e                                        -- dummy type
+    -> Name                                     -- group name
+    -> C.Exp                                    -- how much shared memory per type
+    -> Maybe C.Exp                              -- (optional) initialise from this base address
+    -> ( [C.InitGroup]                          -- shared memory declaration and...
+       , forall x. Rvalue x => x -> [C.Exp])    -- ...indexing function
 shared _ grp size mprev
   = let e:es                    = eltType (undefined :: e)
         x:xs                    = let k = length es in map (\n -> grp ++ show n) [k, k-1 .. 0]

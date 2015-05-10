@@ -63,17 +63,18 @@ import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
 -- standard library
-import Prelude                                                  hiding ( exp, sum, iterate )
 import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
-import Control.Monad.Trans                                      ( MonadIO, liftIO )
+import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
+import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO, unsafePerformIO )
 import Data.Int
 import Data.Monoid                                              ( mempty )
 import Data.Word
+import Prelude                                                  hiding ( exp, sum, iterate )
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver                            as CUDA
@@ -245,8 +246,9 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     awhile :: PreOpenAfun ExecOpenAcc aenv (a -> Scalar Bool) -> PreOpenAfun ExecOpenAcc aenv (a -> a) -> a -> CIO a
     awhile p f a = do
-      nop <- join $ liftIO <$> (Event.create <$> asks activeContext <*> gets eventTable)
-       -- ^ record event never call, so this is a functional no-op
+      tbl <- gets eventTable
+      ctx <- asks activeContext
+      nop <- liftIO $ Event.create ctx tbl      -- record event never call, so this is a functional no-op
       r   <- executeOpenAfun1 p aenv (Async nop a)
       ok  <- indexArray r 0                     -- TLM TODO: memory manager should remember what is already on the host
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
@@ -724,12 +726,12 @@ initialiseSeqLoop !aenv !s !spineStream =
                      -> CIO (StreamProducer senv a)
         initProducer !p =
           case p of
-            ExecStreamIn arrs -> return (StreamStreamIn arrs)            
+            ExecStreamIn arrs -> return (StreamStreamIn arrs)
             ExecToSeq _ slix _ arg -> do
               sh <- case arg of
                 Right (shExp, _, _)    -> evalE shExp
                 Left (arr, _, _, _, _) -> return $ shape arr
-              let 
+              let
                 sl = sliceShape slix sh
                 n = coShapeSize slix (fromElt sh)
               return $ StreamMapFin (0, n) $ \ _senv i stream -> do
@@ -1023,6 +1025,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
       IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
       IndexHead sh              -> (\(_  :. ix) -> ix) <$> travE sh
       IndexTail sh              -> (\(ix :.  _) -> ix) <$> travE sh
+      IndexTrans sh             -> transpose <$> travE sh
       IndexSlice ix slix sh     -> indexSlice ix <$> travE slix <*> travE sh
       IndexFull ix slix sl      -> indexFull  ix <$> travE slix <*> travE sl
       ToIndex sh ix             -> toIndex   <$> travE sh  <*> travE ix

@@ -28,7 +28,6 @@ module Data.Array.Accelerate.CUDA.Array.Table (
 
 ) where
 
-import Prelude                                                  hiding ( lookup )
 import Data.Functor
 import Data.Proxy
 import Data.IntMap.Strict                                       ( IntMap )
@@ -39,6 +38,7 @@ import Control.Monad.Trans.Reader
 import Foreign.Ptr                                              ( ptrToIntPtr )
 import Foreign.Storable                                         ( Storable, sizeOf )
 import Foreign.CUDA.Ptr                                         ( DevicePtr )
+import Prelude                                                  hiding ( lookup )
 
 import Foreign.CUDA.Driver.Error
 import qualified Foreign.CUDA.Driver                            as CUDA
