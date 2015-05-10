@@ -70,7 +70,7 @@ import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
 import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
-import System.IO.Unsafe                                         ( unsafeInterleaveIO )
+import System.IO.Unsafe                                         ( unsafeInterleaveIO, unsafePerformIO )
 import Data.Int
 import Data.Monoid                                              ( mempty )
 import Data.Word
@@ -726,12 +726,12 @@ initialiseSeqLoop !aenv !s !spineStream =
                      -> CIO (StreamProducer senv a)
         initProducer !p =
           case p of
-            ExecStreamIn arrs -> return (StreamStreamIn arrs)            
+            ExecStreamIn arrs -> return (StreamStreamIn arrs)
             ExecToSeq _ slix _ arg -> do
               sh <- case arg of
                 Right (shExp, _, _)    -> evalE shExp
                 Left (arr, _, _, _, _) -> return $ shape arr
-              let 
+              let
                 sl = sliceShape slix sh
                 n = coShapeSize slix (fromElt sh)
               return $ StreamMapFin (0, n) $ \ _senv i stream -> do
