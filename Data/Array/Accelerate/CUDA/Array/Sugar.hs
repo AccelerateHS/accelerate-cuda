@@ -13,7 +13,7 @@
 module Data.Array.Accelerate.CUDA.Array.Sugar (
 
   module Data.Array.Accelerate.Array.Sugar,
-  newArray, allocateArray, useArray, useArrayAsync,
+  newArray, newArrayAsync, allocateArray, useArray, useArrayAsync,
 ) where
 
 import Control.Monad.Trans
@@ -24,6 +24,7 @@ import Data.Array.Accelerate.Array.Data                 ( newArrayData )
 import Data.Array.Accelerate.Array.Sugar                hiding (newArray, allocateArray)
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 
+import qualified Foreign.CUDA.Driver.Stream             as CUDA
 
 -- Create an array from its representation function, uploading the result to the
 -- device
@@ -35,6 +36,16 @@ newArray sh f =
       useArray arr
       return arr
 
+
+-- Create an array from its representation function, uploading the result to the
+-- device
+--
+newArrayAsync :: (Shape sh, Elt e) => sh -> (sh -> e) -> CUDA.Stream -> CIO (Array sh e)
+newArrayAsync sh f stream =
+  let arr = Sugar.newArray sh f
+  in do
+      useArrayAsync arr (Just stream)
+      return arr
 
 -- Allocate a new, uninitialised Accelerate array on host and device
 --

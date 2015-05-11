@@ -132,8 +132,8 @@ data ExecOpenAcc aenv a where
             -> ExecOpenAcc aenv (Array sh e)
 
   ExecSeq :: Arrays arrs
-           => PreOpenSeq DelayedOpenAcc aenv () arrs -- For shape analysis
-           -> ExecOpenSeq aenv () arrs
+           => !(PreOpenSeq DelayedOpenAcc aenv () arrs) -- For shape analysis
+           -> !(ExecOpenSeq aenv () arrs)
            -> ExecOpenAcc aenv arrs
 
 
@@ -187,27 +187,27 @@ prettyExecAcc alvl wrap exec =
     ExecSeq{} -> text "<SequenceComputation>"
 
 data ExecSeq a where
-  ExecS :: Extend ExecOpenAcc () aenv
-        -> PreOpenSeq DelayedOpenAcc aenv () a -- For shape analysis
-        -> ExecOpenSeq aenv () a -> ExecSeq a
+  ExecS :: !(Extend ExecOpenAcc () aenv)
+        -> !(PreOpenSeq DelayedOpenAcc aenv () a) -- For shape analysis
+        -> !(ExecOpenSeq aenv () a) -> ExecSeq a
 
 data ExecOpenSeq aenv lenv arrs where
-  ExecP :: Arrays a => ExecP aenv lenv a -> ExecOpenSeq aenv (lenv, a) arrs -> ExecOpenSeq aenv lenv  arrs
-  ExecC :: Arrays a => ExecC aenv lenv a -> ExecOpenSeq aenv lenv a
+  ExecP :: Arrays a => !(ExecP aenv lenv a) -> !(ExecOpenSeq aenv (lenv, a) arrs) -> ExecOpenSeq aenv lenv  arrs
+  ExecC :: Arrays a => !(ExecC aenv lenv a) -> ExecOpenSeq aenv lenv a
   ExecR :: Arrays a
-        => Maybe (ExecOpenAfun aenv (Regular a -> Scalar Int -> a))
-        -> Idx lenv a -> ExecOpenSeq aenv lenv [a]
+        => !(Maybe (ExecOpenAfun aenv (Regular a -> Scalar Int -> a)))
+        -> !(Idx lenv a) -> ExecOpenSeq aenv lenv [a]
 
 data ExecP aenv lenv a where
 
   ExecToSeq    :: (Elt slix, Shape sl, Shape sh, Elt e)
-               => Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e)))
-               -> SliceIndex (EltRepr slix)
-                             (EltRepr sl)
-                             co
-                             (EltRepr sh)
+               => !(Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e))))
+               -> !(SliceIndex (EltRepr slix)
+                               (EltRepr sl)
+                               co
+                               (EltRepr sh))
                -> !(proxy slix)
-               -> Either
+               -> !(Either
                     ( Array sh e
                       -- Permutation kernels:
                     , AccKernel (Array DIM3 e)
@@ -219,6 +219,7 @@ data ExecP aenv lenv a where
                     , AccKernel (Array (sl :. Int) e) -- Fused kernel
                     , Gamma aenv
                     )
+                   )
                -> ExecP aenv lenv (Array sl e)
 
   ExecStreamIn :: Arrays a
@@ -226,42 +227,42 @@ data ExecP aenv lenv a where
                -> ExecP aenv lenv a
 
   ExecMap :: (Arrays a, Arrays b)
-          => ExecOpenAfun aenv (a -> b)
-          -> Maybe (ExecOpenAfun aenv (Regular a -> Regular b))
-          -> Idx lenv a
+          => !(ExecOpenAfun aenv (a -> b))
+          -> !(Maybe (ExecOpenAfun aenv (Regular a -> Regular b)))
+          -> !(Idx lenv a)
           -> ExecP aenv lenv b
 
   ExecZipWith :: (Arrays a, Arrays b, Arrays c)
-              => ExecOpenAfun aenv (a -> b -> c)
-              -> Maybe (ExecOpenAfun aenv (Regular a -> Regular b -> Regular c))
-              -> Idx lenv a
-              -> Idx lenv b
+              => !(ExecOpenAfun aenv (a -> b -> c))
+              -> !(Maybe (ExecOpenAfun aenv (Regular a -> Regular b -> Regular c)))
+              -> !(Idx lenv a)
+              -> !(Idx lenv b)
               -> ExecP aenv lenv c
 
   ExecScanSeq :: Elt a
-              => ExecExp aenv a
-              -> ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a)  -- zipper
-              -> ExecOpenAfun aenv (Scalar a -> Vector a -> (Vector a, Scalar a)) -- scanner
-              -> Idx lenv (Scalar a)
+              => !(ExecExp aenv a)
+              -> !(ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a))  -- zipper
+              -> !(ExecOpenAfun aenv (Scalar a -> Vector a -> (Vector a, Scalar a))) -- scanner
+              -> !(Idx lenv (Scalar a))
               -> ExecP aenv lenv (Scalar a)
 
 data ExecC aenv lenv a where
   ExecFoldSeq :: Elt a
-              => Maybe (ExecOpenAfun aenv (Vector a -> Vector a -> Vector a))
-              -> ExecOpenAfun aenv (Vector a -> Scalar a)
-              -> ExecExp aenv a
-              -> ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a)  -- zipper
-              -> Idx lenv (Scalar a)
+              => !(Maybe (ExecOpenAfun aenv (Vector a -> Vector a -> Vector a)))
+              -> !(ExecOpenAfun aenv (Vector a -> Scalar a))
+              -> !(ExecExp aenv a)
+              -> !(ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a))  -- zipper
+              -> !(Idx lenv (Scalar a))
               -> ExecC aenv lenv (Scalar a)
 
   ExecFoldSeqFlatten :: (Arrays a, Shape sh, Elt e)
-                     => Maybe (ExecOpenAfun aenv (a -> Regular (Array sh e) -> a))
-                     -> ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a)
-                     -> ExecOpenAcc aenv a
-                     -> Idx lenv (Array sh e)
+                     => !(Maybe (ExecOpenAfun aenv (a -> Regular (Array sh e) -> a)))
+                     -> !(ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a))
+                     -> !(ExecOpenAcc aenv a)
+                     -> !(Idx lenv (Array sh e))
                      -> ExecC aenv lenv a
 
   ExecStuple :: (Arrays a, IsAtuple a)
-             => Atuple (ExecC aenv senv) (TupleRepr a)
+             => !(Atuple (ExecC aenv senv) (TupleRepr a))
              -> ExecC aenv senv a
 
