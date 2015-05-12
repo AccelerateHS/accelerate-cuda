@@ -22,6 +22,7 @@ module Data.Array.Accelerate.CUDA.Array.Slice (
   copyArgs,
   reifyP,
   shapeP,
+  noPermut,
 
 ) where
 
@@ -366,3 +367,15 @@ shapeP :: Shape sh => P sh -> sh -> sh
 shapeP p sh =
   let (fw, _) = reifyP p
   in listToShape $ reverse $ fw $ reverse $ shapeToList sh
+
+
+noPermut :: CopyArgs -> Bool
+noPermut args = 
+  case permutation args of
+    Permut sh p -> go p sh
+  where
+    go :: P sh -> sh -> Bool
+    go P3 (Z :. a :. b :. ac) = a == 1 || b == 1
+    go P5 (Z :. a :. b :. c :. d :. ac) = (a == 1 && c == 1) || (b == 1 && d == 1)
+    go P7 (Z :. a :. b :. c :. d :. e :. f :. ac) = (a == 1 && c == 1 && e == 1) || (b == 1 && d == 1 && f == 1)
+    go P9 (Z :. a :. b :. c :. d :. e :. f :. g :. h :. ac) = (a == 1 && c == 1 && e == 1 && g == 1) || (b == 1 && d == 1 && f == 1 && h == 1)

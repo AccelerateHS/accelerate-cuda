@@ -841,18 +841,23 @@ useLazyOp !kp3 !kp5 !kp7 !kp9 !arr !slix !sl !i !k !stream = do
     map' :: (a -> CIO ()) -> [a] -> CIO ()
     map' = mapM_
 
-  -- tmp holds the copied array before permutation.
-  tmpArr@(Array _ tmp) <- allocateArray sh -- ###
   -- out holds the end result.
   outArr@(Array _ out) <- allocateArray sh -- ###
-  -- Poke 2D regions from host to device:
-  mapM_ (\ !x -> pokeCopyArgs x arr tmpArr) args
-
-  -- Permute each poked region to conform with slicing. TODO test
-  -- whether permutation is needed at all before doing this.
-  withDevicePtrs tmp (Just stream) $ \ !dtmp ->
-    withDevicePtrs out (Just stream) $ \ !dout ->
-      map' (\ !x ->
+  if all noPermut args
+    then do
+      -- Poke 2D regions from host to device:
+      mapM_ (\ !x -> pokeCopyArgsAsync x arr outArr (Just stream)) args
+    else do
+      -- tmp holds the copied array before permutation.
+      -- 
+      tmpArr@(Array _ tmp) <- allocateArray sh -- ###
+      
+      -- Poke 2D regions from host to device:
+      mapM_ (\ !x -> pokeCopyArgsAsync x arr tmpArr (Just stream)) args
+      -- Permute each poked region to conform with slicing.
+      withDevicePtrs tmp (Just stream) $ \ !dtmp ->
+        withDevicePtrs out (Just stream) $ \ !dout ->
+          map' (\ !x ->
              let !dtmp' = advancePtrsOfArrayData tmp (offset x) dtmp
                  !dout' = advancePtrsOfArrayData out (offset x) dout
                  !mdtmp = marshalDevicePtrs tmp dtmp'
@@ -865,7 +870,7 @@ useLazyOp !kp3 !kp5 !kp7 !kp9 !arr !slix !sl !i !k !stream = do
                    P5 -> execute kp5 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P5 sh0, mdout) stream
                    P7 -> execute kp7 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P7 sh0, mdout) stream
                    P9 -> execute kp9 mempty Aempty (size sh0) (sh0, mdtmp, shapeP P9 sh0, mdout) stream
-           ) args
+               ) args
   return outArr
 
 
