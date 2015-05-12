@@ -213,8 +213,16 @@ copy (ac, r, (afs, as, fas)) =
 -- collapsed to a single dimension, since finer shape details are
 -- irrelevant.
 massageShape :: SliceIndex slix sl co dim -> dim -> OddList A A
-massageShape = goContiguous 1
+massageShape slix sh = 
+  case go slix sh of
+    -- If there are no fixed dimensions, just pretend there is a fixed
+    -- unit dimension.
+    (x, []) -> (x, [(1,1)])
+    res     -> res
   where
+    go :: SliceIndex slix sl co dim -> dim -> OddList A A
+    go = goContiguous 1
+    
     goContiguous :: Int -> SliceIndex slix sl co dim -> dim -> OddList A A
     goContiguous a SliceNil () = (a, [])
     goContiguous a (SliceAll   sl) (sh, sz) = goContiguous (a * sz) sl sh
