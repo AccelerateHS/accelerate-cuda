@@ -27,7 +27,7 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, pokeCopyArgs,
+  pokeArray, pokeArrayAsync, pokeCopyArgs, pokeCopyArgsAsync,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
   withDevicePtrs, advancePtrsOfArrayData,
   devicePtrsFromList, devicePtrsToWordPtrs,
@@ -433,6 +433,24 @@ pokeCopyArgs args (Array _ !adata) (Array _ !adata') = run doPoke
         --
         pokePrim :: ArrayEltR e -> Context -> MemoryTable -> CopyArgs -> ArrayData e -> ArrayData e -> IO ()
         mkPrimDispatch(pokePrim,Prim.pokeCopyArgs)
+
+pokeCopyArgsAsync :: Elt e
+           => CopyArgs
+           -> Array dim  e
+           -> Array dim' e 
+           -> Maybe CUDA.Stream
+           -> CIO ()
+pokeCopyArgsAsync args (Array _ !adata) (Array _ !adata') ms = run doPoke
+  where
+    doPoke !ctx !mt = pokeR arrayElt adata adata'
+      where
+        pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        pokeR ArrayEltRunit             _  _   = return ()
+        pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
+        pokeR aer                       ad ad' = pokePrim aer ctx mt args ad ad' ms
+        --
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> CopyArgs -> ArrayData e -> ArrayData e -> Maybe CUDA.Stream -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeCopyArgsAsync)
 
 
 -- |Convert the device pointers into a list of word pointers

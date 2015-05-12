@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   useArray,  useArrayAsync, useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, pokeCopyArgs,
+  pokeArray, pokeArrayAsync, pokeCopyArgs, pokeCopyArgsAsync,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
   withDevicePtrs, advancePtrsOfArrayData
 
@@ -393,6 +393,34 @@ pokeCopyArgs !ctx !mt CopyArgs{..}  !ad_host !ad_dev =
             dstPitch
             dstX
             dstY
+      ) memcpy2Dargs
+
+pokeCopyArgsAsync
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> CopyArgs
+    -> ArrayData e
+    -> ArrayData e
+    -> Maybe CUDA.Stream
+    -> IO ()
+pokeCopyArgsAsync !ctx !mt CopyArgs{..}  !ad_host !ad_dev !ms =
+  withDevicePtrs ctx mt ad_dev ms $ \dst ->
+    mapM_ 
+      (\ Memcpy2Dargs{..} ->
+        transfer "pokeCopyArgs: " (width * height * sizeOf (undefined :: a)) $
+          CUDA.pokeArray2DAsync
+            width
+            height
+            (CUDA.HostPtr (ptrsOfArrayData ad_host))
+            srcPitch
+            srcX
+            srcY
+            (advancePtrsOfArrayData offset ad_dev dst)
+            dstPitch
+            dstX
+            dstY
+            ms
       ) memcpy2Dargs
 
 
