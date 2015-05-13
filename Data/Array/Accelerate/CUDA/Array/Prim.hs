@@ -40,7 +40,6 @@ import Data.Typeable
 import Control.Monad
 import Language.Haskell.TH
 import System.Mem.StableName
-import Foreign.CUDA.Ptr                                 ( plusDevPtr )
 import Foreign.Ptr
 import Foreign.C.Types
 import Foreign.Storable

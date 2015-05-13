@@ -67,9 +67,8 @@ import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
-import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
+import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
-import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO, unsafePerformIO )
 import Data.Int
 import Data.Monoid                                              ( mempty )
@@ -181,7 +180,7 @@ executeOpenAcc
     -> CIO arrs
 executeOpenAcc _ EmbedAcc{} _ _
   = $internalError "execute" "unexpected delayed array"
-executeOpenAcc cudaStreams (ExecSeq !dsequ !sequ) !aenv !stream
+executeOpenAcc _ (ExecSeq !dsequ !sequ) !aenv !stream
   = do (pd, s) <- initialiseSeq defaultSeqConfig dsequ sequ aenv stream
        streaming (executeSequence s pd) wait
 executeOpenAcc cudaStreams (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
@@ -517,11 +516,6 @@ data StreamConsumer senv a where
                -> StreamConsumer senv a
 
 type Chunk a = Regular a
-
--- Get all the shapes of a chunk of arrays. O(1).
---
-chunkShape :: Shape sh => Chunk (Array sh a) -> sh
-chunkShape !c = shape' c
 
 -- Get all the elements of a chunk of arrays. O(1).
 --

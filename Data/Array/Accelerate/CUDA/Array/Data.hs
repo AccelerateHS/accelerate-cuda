@@ -52,8 +52,8 @@ import qualified Prelude                                as P
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, fromElt, toElt, EltRepr )
-import Data.Array.Accelerate.Array.Representation       ( size, SliceIndex )
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
+import Data.Array.Accelerate.Array.Representation       ( size )
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Slice
 import Data.Array.Accelerate.CUDA.Array.Cache

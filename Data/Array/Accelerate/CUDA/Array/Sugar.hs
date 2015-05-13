@@ -20,7 +20,6 @@ import Control.Monad.Trans
 
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Array.Data
-import Data.Array.Accelerate.Array.Data                 ( newArrayData )
 import Data.Array.Accelerate.Array.Sugar                hiding (newArray, allocateArray)
 import qualified Data.Array.Accelerate.Array.Sugar      as Sugar
 
