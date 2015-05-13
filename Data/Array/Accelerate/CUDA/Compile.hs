@@ -419,20 +419,6 @@ compileOpenSeq l =
     compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
     compileC c =
       case c of
-        FoldSeq mg f z x -> do
-          (_, z') <- travE z
-          zipfun <-
-            case mg of
-              Just g -> Just <$> compileOpenAfun g
-              Nothing -> return Nothing
-          fin <- compileOpenAfun $ Alam $ Abody $ Manifest $ Fold (weaken SuccIdx f) (weaken SuccIdx z)
-                   (Delayed
-                        (Shape (Manifest (Avar ZeroIdx)))
-                        (Lam (Body (Index (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
-                        (Lam (Body (LinearIndex (Manifest (Avar ZeroIdx)) (Var ZeroIdx))))
-                   )
-          zipper' <- compileOpenAfun (zipper f)
-          return $ ExecFoldSeq zipfun fin z' zipper' x
         FoldSeqFlatten cf f acc x -> do
           acc' <- compileOpenAcc acc
           f' <- compileOpenAfun f

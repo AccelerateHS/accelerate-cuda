@@ -592,7 +592,6 @@ initialiseSeq !conf !dseq !topSeq !aenv !stream =
     isVectC :: Consumer acc aenv senv a -> Bool
     isVectC !c =
       case c of
-        FoldSeq !f _ _ _ -> isJust f
         FoldSeqFlatten _ _ _ _ -> True
         Stuple !stup ->
           let isVectT :: Atuple (Consumer acc aenv senv) t -> Bool
@@ -680,16 +679,6 @@ initialiseSeqChunked !aenv !s !cctx !pd !spineStream =
                      -> CIO (StreamConsumer senv' a)
         initConsumer !c =
           case c of
-            ExecFoldSeq (Just !zipfun) !foldfun !e _ !x -> do
-              let consumer !senv !v !stream =
-                    let !arr = prj (cvtIdx x) senv
-                    in evalAF2 zipfun v (chunkElems arr) stream
-                  finalizer !v !stream = do
-                    evalAF1 foldfun v stream
-              !e' <- evalE e
-              !a0 <- newArray (Z :. pd) (const e')
-              return $ StreamFold consumer finalizer a0
-            ExecFoldSeq _ _ _ _ _ -> error "unreachable"
             ExecFoldSeqFlatten (Just !f') _ !acc !x -> do
               let consumer !senv !a !stream =
                     let !arr = prj (cvtIdx x) senv
@@ -759,11 +748,6 @@ initialiseSeqLoop !aenv !s !spineStream =
                      -> CIO (StreamConsumer senv a)
         initConsumer !c =
           case c of
-            ExecFoldSeq _ _ !e !f !x -> do
-              let consumer !senv !a !stream = do
-                    let !arr = prj x senv
-                    evalAF2 f a arr stream
-              StreamFold consumer (\ !accum _ -> return accum) <$> (newArray Z . const =<< evalE e)
             ExecFoldSeqFlatten _ !f !acc !x -> do
               let consumer !senv !a !stream =
                     let !v = prj x senv

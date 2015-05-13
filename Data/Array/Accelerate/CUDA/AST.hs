@@ -247,14 +247,6 @@ data ExecP aenv lenv a where
               -> ExecP aenv lenv (Scalar a)
 
 data ExecC aenv lenv a where
-  ExecFoldSeq :: Elt a
-              => !(Maybe (ExecOpenAfun aenv (Vector a -> Vector a -> Vector a)))
-              -> !(ExecOpenAfun aenv (Vector a -> Scalar a))
-              -> !(ExecExp aenv a)
-              -> !(ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a))  -- zipper
-              -> !(Idx lenv (Scalar a))
-              -> ExecC aenv lenv (Scalar a)
-
   ExecFoldSeqFlatten :: (Arrays a, Shape sh, Elt e)
                      => !(Maybe (ExecOpenAfun aenv (a -> Regular (Array sh e) -> a)))
                      -> !(ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a))
