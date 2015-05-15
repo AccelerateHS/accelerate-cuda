@@ -76,10 +76,17 @@ fromDeviceContext :: CUDA.Device -> CUDA.Context -> IO Context
 fromDeviceContext dev ctx = do
   prp           <- CUDA.props dev
   lctx          <- newLifetime ctx
-  addFinalizer lctx $ do
-    traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
-    CUDA.push ctx
-    CUDA.destroy ctx
+
+  -- RCE: There seems to be a bug with contexts being destroyed before
+  -- everything that relies on them has also been destroyed. I don't know what's
+  -- causing this, so I'm termporarily turn of context destruction and letting
+  -- the CUDA driver deal with it on program exit. This should investigated and
+  -- fixed as soon as possible.
+
+  -- addFinalizer lctx $ do
+  --   traceIO dump_gc $ "gc: finalise context #" ++ show (CUDA.useContext ctx)
+  --   CUDA.push ctx
+  --   CUDA.destroy ctx
   weak          <- mkWeakPtr lctx
   traceIO dump_gc $ "gc: initialise context #" ++ show (CUDA.useContext ctx)
 
