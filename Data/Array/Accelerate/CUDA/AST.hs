@@ -23,6 +23,7 @@ module Data.Array.Accelerate.CUDA.AST (
   ExecAcc, ExecAfun, ExecOpenAfun, ExecOpenAcc(..),
   ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
   ExecSeq(..), ExecOpenSeq(..), ExecP(..), ExecC(..),
+  ExecSeqPrelude(..), ExecAconst(..),
   freevar, makeEnvMap,
 
 ) where
@@ -191,14 +192,14 @@ data ExecSeq a where
         -> !(PreOpenSeq DelayedOpenAcc aenv () a) -- For shape analysis
         -> !(ExecOpenSeq aenv () a) -> ExecSeq a
 
-data ExecOpenSeq aenv lenv arrs where
-  ExecP :: Arrays a => !(ExecP aenv lenv a) -> !(ExecOpenSeq aenv (lenv, a) arrs) -> ExecOpenSeq aenv lenv  arrs
-  ExecC :: Arrays a => !(ExecC aenv lenv a) -> ExecOpenSeq aenv lenv a
+data ExecOpenSeq aenv senv arrs where
+  ExecP :: Arrays a => !(ExecP aenv senv a) -> !(ExecOpenSeq aenv (senv, a) arrs) -> ExecOpenSeq aenv senv  arrs
+  ExecC :: Arrays a => !(ExecC aenv senv a) -> ExecOpenSeq aenv senv a
   ExecR :: Arrays a
         => !(Maybe (ExecOpenAfun aenv (Regular a -> Scalar Int -> a)))
-        -> !(Idx lenv a) -> ExecOpenSeq aenv lenv [a]
+        -> !(Idx senv a) -> ExecOpenSeq aenv senv [a]
 
-data ExecP aenv lenv a where
+data ExecP aenv senv a where
 
   ExecToSeq    :: (Elt slix, Shape sl, Shape sh, Elt e)
                => !(Maybe (ExecOpenAfun aenv (Array (sl :. Int) e -> Regular (Array sl e))))
@@ -220,41 +221,77 @@ data ExecP aenv lenv a where
                     , Gamma aenv
                     )
                    )
-               -> ExecP aenv lenv (Array sl e)
+               -> ExecP aenv senv (Array sl e)
 
   ExecStreamIn :: Arrays a
                => [a]
-               -> ExecP aenv lenv a
+               -> ExecP aenv senv a
 
   ExecMap :: (Arrays a, Arrays b)
           => !(ExecOpenAfun aenv (a -> b))
           -> !(Maybe (ExecOpenAfun aenv (Regular a -> Regular b)))
-          -> !(Idx lenv a)
-          -> ExecP aenv lenv b
+          -> !(Idx senv a)
+          -> ExecP aenv senv b
 
   ExecZipWith :: (Arrays a, Arrays b, Arrays c)
               => !(ExecOpenAfun aenv (a -> b -> c))
               -> !(Maybe (ExecOpenAfun aenv (Regular a -> Regular b -> Regular c)))
-              -> !(Idx lenv a)
-              -> !(Idx lenv b)
-              -> ExecP aenv lenv c
+              -> !(Idx senv a)
+              -> !(Idx senv b)
+              -> ExecP aenv senv c
 
   ExecScanSeq :: Elt a
               => !(ExecExp aenv a)
               -> !(ExecOpenAfun aenv (Scalar a -> Scalar a -> Scalar a))  -- zipper
               -> !(ExecOpenAfun aenv (Scalar a -> Vector a -> (Vector a, Scalar a))) -- scanner
-              -> !(Idx lenv (Scalar a))
-              -> ExecP aenv lenv (Scalar a)
+              -> !(Idx senv (Scalar a))
+              -> ExecP aenv senv (Scalar a)
+  
+  ExecGeneralMapSeq :: Arrays a
+                    => !(ExecSeqPrelude aenv senv env envReg)
+                    -> !(ExecOpenAcc env a)
+                    -> !(Maybe (ExecOpenAcc envReg (Regular a)))
+                    -> ExecP aenv senv a
 
-data ExecC aenv lenv a where
+data ExecC aenv senv a where
   ExecFoldSeqFlatten :: (Arrays a, Shape sh, Elt e)
-                     => !(Maybe (ExecOpenAfun aenv (a -> Regular (Array sh e) -> a)))
+                     => !(Maybe (ExecOpenAfun aenv (Regular (Array sh e) -> a -> a)))
                      -> !(ExecOpenAfun aenv (a -> Vector sh -> Vector e -> a))
                      -> !(ExecOpenAcc aenv a)
-                     -> !(Idx lenv (Array sh e))
-                     -> ExecC aenv lenv a
+                     -> !(Idx senv (Array sh e))
+                     -> ExecC aenv senv a
+
+  ExecFoldSeqRegular :: Arrays a
+                     => !(ExecSeqPrelude aenv senv env envReg)
+                     -> !(ExecOpenAfun envReg (a -> a))
+                     -> !(ExecOpenAcc aenv a)
+                     -> ExecC aenv senv a
 
   ExecStuple :: (Arrays a, IsAtuple a)
              => !(Atuple (ExecC aenv senv) (TupleRepr a))
              -> ExecC aenv senv a
 
+
+data ExecSeqPrelude aenv senv env envReg where
+  ExecSeqPrelude :: !(Atuple ExecAconst arrs)
+                 -> !(ExtReg aenv aenv arrs env' envReg')
+                 -> !(ExtReg env' envReg' senv env envReg)
+                 -> ExecSeqPrelude aenv senv env envReg
+
+data ExecAconst a where
+  ExecSliceArr :: (Elt slix, Shape sl, Shape sh, Elt e)
+           => ExecOpenAfun () (Array (sl :. Int) e -> Regular (Array sl e))
+           -> !(SliceIndex  (EltRepr slix)
+                            (EltRepr sl)
+                            co
+                            (EltRepr sh))
+           -> !(proxy slix)
+           -> !(AccKernel (Array DIM3 e))
+           -> !(AccKernel (Array DIM5 e))
+           -> !(AccKernel (Array DIM7 e))
+           -> !(AccKernel (Array DIM9 e))
+           -> !(Array sh e)
+           -> !Int
+           -> ExecAconst (Array sl e)
+  ExecArrList :: Arrays a => [a] -> ExecAconst a
+  ExecRegArrList :: (Shape sh, Elt e) => !sh -> [Array sh e] -> ExecAconst (Array sh e)

@@ -406,6 +406,14 @@ compileOpenSeq l =
                   Nothing -> return Nothing
                   Just g  -> Just <$> compileOpenAfun g
           return $ ExecZipWith f' g' x y
+        GeneralMapSeq pre a a' -> do
+          pre' <- compilePre pre
+          a0 <- compileOpenAcc a
+          a0' <- case a' of
+                      Nothing -> return Nothing
+                      Just x  -> Just <$> compileOpenAcc x
+          return $ ExecGeneralMapSeq pre' a0 a0'
+
         ScanSeq f e0 x ->  do
           (_, e0') <- travE e0
           let scanner = Alam $ Alam $ Abody $ Manifest $
@@ -416,6 +424,29 @@ compileOpenSeq l =
           scanner' <- compileOpenAfun scanner
           return $ ExecScanSeq e0' zipper' scanner' x
 
+    compilePre :: SeqPrelude aenv senv env envReg -> CIO (ExecSeqPrelude aenv senv env envReg)
+    compilePre (SeqPrelude arrs ex ex') = do
+      arrs0 <- compileAconsts arrs
+      return (ExecSeqPrelude arrs0 ex ex')
+
+    compileAconsts :: Atuple Aconst a -> CIO (Atuple ExecAconst a)
+    compileAconsts NilAtup = return NilAtup
+    compileAconsts (SnocAtup tup a) = SnocAtup <$> compileAconsts tup <*> go a
+      where
+        go :: Aconst a -> CIO (ExecAconst a)
+        go (SliceArr slix prox arr) = do
+          liftIO (D.traceIO D.verbose $ "toSeq (use arr): Copying slices lazily..")
+          dev <- asks deviceProperties
+          let (p3,p5,p7,p9) = codegenUseLazyPerms dev
+          kp3 <- build1 (Manifest $ Generate undefined undefined) p3
+          kp5 <- build1 (Manifest $ Generate undefined undefined) p5
+          kp7 <- build1 (Manifest $ Generate undefined undefined) p7
+          kp9 <- build1 (Manifest $ Generate undefined undefined) p9
+          reg <- compileOpenAfun (Alam $ Abody $ Manifest $ Atuple $ NilAtup `SnocAtup` Manifest (Avar ZeroIdx))
+          return $ ExecSliceArr reg slix prox kp3 kp5 kp7 kp9 arr 0
+        go (ArrList as) = return (ExecArrList as)
+        go (RegArrList sh as) = return (ExecRegArrList sh as)
+
     compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
     compileC c =
       case c of
@@ -424,6 +455,11 @@ compileOpenSeq l =
           f' <- compileOpenAfun f
           cf' <- Data.Traversable.sequence (compileOpenAfun <$> cf)
           return $ ExecFoldSeqFlatten cf' f' acc' x
+        FoldSeqRegular pre f a -> do
+          pre' <- compilePre pre
+          f' <- compileOpenAfun f
+          a' <- compileOpenAcc a
+          return $ ExecFoldSeqRegular pre' f' a'
         Stuple t -> ExecStuple <$> compileCT t
 
     compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
