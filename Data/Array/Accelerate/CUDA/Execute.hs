@@ -567,7 +567,7 @@ initialiseSeq !conf !dseq !topSeq !aenv !stream =
     -- by only considering the shapes of aenv for shape
     -- analysis. This means that the analysis is less total.
     avalToValPartial :: Aval aenv' -> ValPartial aenv'
-    avalToValPartial !Aempty = EmptyPartial
+    avalToValPartial !Aempty = ValBottom
     avalToValPartial (Apush       !aenv0 (Async _ !a)) = avalToValPartial aenv0 `PushTotalShapesOnly` a
     avalToValPartial (ApushNoSync !aenv0 !a)           = avalToValPartial aenv0 `PushTotalShapesOnly` a
 
