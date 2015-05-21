@@ -548,7 +548,7 @@ initialiseSeq :: SeqConfig
               -> Stream
               -> CIO (Int, StreamDAG () arrs)
 initialiseSeq !conf !dseq !topSeq !aenv !stream =
-  let !maxElemSize = shapeTreeMaxSize <$> seqShapes dseq (avalToValPartial aenv)
+  let !maxElemSize = seqPD dseq (avalToValPartial aenv)
       !pd = maxStepSize (chunkSize conf) maxElemSize
   in
   if isVect dseq && pd > 1
