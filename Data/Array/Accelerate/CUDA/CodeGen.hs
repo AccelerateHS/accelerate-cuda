@@ -437,6 +437,9 @@ codegenOpenExp dev aenv = cvtE
         PrimAsin ty             -> unary (A.asin ty) x env
         PrimAcos ty             -> unary (A.acos ty) x env
         PrimAtan ty             -> unary (A.atan ty) x env
+        PrimSinh ty             -> unary (A.sinh ty) x env
+        PrimCosh ty             -> unary (A.cosh ty) x env
+        PrimTanh ty             -> unary (A.tanh ty) x env
         PrimAsinh ty            -> unary (A.asinh ty) x env
         PrimAcosh ty            -> unary (A.acosh ty) x env
         PrimAtanh ty            -> unary (A.atanh ty) x env
