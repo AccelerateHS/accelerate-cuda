@@ -3,6 +3,8 @@ env:
   global:
     - HAPPY=1.19.5
     - ALEX=3.1.4
+    - SHA_ACCELERATE=4d181866db677d0bb0fad0aa3224d8856c5a0911
+    - URL_ACCELERATE=https://github.com/AccelerateHS/accelerate.git
 
   matrix:
     - CUDA=7.0-28 GHC=7.8.4
@@ -14,6 +16,13 @@ matrix:
     - env: CUDA=7.0-28 GHC=head CABAL=head
 
 before_install:
+    # Fetch accelerate dependencies
+    - echo "Checking out dependencies"
+    - travis_retry git clone ${URL_ACCELERATE} deps/accelerate
+    - pushd deps/accelerate
+    - git reset --hard ${SHA_ACCELERATE}
+    - popd
+
     # If travis doesn't have the version of GHC that we want, get it from hvr's PPA
     - echo "Setting up GHC"
     - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
