@@ -40,18 +40,19 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
 
 ) where
 
-import Prelude                                          as P
 import Data.Functor
 import Control.Applicative
+import Control.Monad.State                              ( liftIO )
 import Foreign.StablePtr
 import Foreign.C.Types
 import Foreign.Ptr
 import Foreign.Storable                                 ( Storable(..) )
 import Foreign.Marshal.Array                            ( peekArray, pokeArray, mallocArray )
 import Foreign.Marshal.Alloc                            ( free )
-import Control.Monad.State                              ( liftIO )
-import qualified Foreign.CUDA.Driver                    as CUDA
 import Language.Haskell.TH                              hiding ( ppr )
+import qualified Foreign.CUDA.Driver                    as CUDA
+
+import Prelude                                          as P
 
 -- friends
 import Data.Array.Accelerate.Smart                      ( Acc )
