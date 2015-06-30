@@ -29,8 +29,8 @@ before_install:
     - travis_retry sudo apt-get update -qq
     - travis_retry sudo apt-get autoremove
       # - travis_retry sudo apt-get install -y c2hs
-    - travis_retry sudo apt-get install happy-1.19.5 alex-3.1.4
-    - export PATH=/opt/alex/3.1.4/bin:/opt/happy/1.19.5/bin:${PATH}
+    - travis_retry sudo apt-get install happy-${HAPPY} alex-${ALEX}
+    - export PATH=/opt/alex/${ALEX}/bin:/opt/happy/${HAPPY}/bin:${PATH}
     - export PATH=/usr/local/ghc/${GHC}/bin:${PATH}
     - |
         if [ $(ghc --numeric-version) != ${GHC} ]; then
