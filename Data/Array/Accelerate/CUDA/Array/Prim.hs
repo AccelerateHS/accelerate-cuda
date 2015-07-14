@@ -378,14 +378,14 @@ pokeCopyArgs
     -> IO ()
 pokeCopyArgs !ctx !mt CopyArgs{..}  !ad_host !ad_dev =
   withDevicePtrs ctx mt ad_dev Nothing $ \dst ->
-    mapM_ 
+    mapM_
       (\ Memcpy2Dargs{..} ->
         transfer "pokeCopyArgs: " (width * height * sizeOf (undefined :: a)) $
-          CUDA.pokeArray2D 
+          CUDA.pokeArray2D
             width
             height
             (ptrsOfArrayData ad_host)
-            srcPitch
+            (if srcY == 0 then 0 else srcPitch)
             srcX
             srcY
             (advancePtrsOfArrayData offset ad_dev dst)
@@ -405,14 +405,14 @@ pokeCopyArgsAsync
     -> IO ()
 pokeCopyArgsAsync !ctx !mt CopyArgs{..}  !ad_host !ad_dev !ms =
   withDevicePtrs ctx mt ad_dev ms $ \dst ->
-    mapM_ 
+    mapM_
       (\ Memcpy2Dargs{..} ->
         transfer "pokeCopyArgs: " (width * height * sizeOf (undefined :: a)) $
           CUDA.pokeArray2DAsync
             width
             height
             (CUDA.HostPtr (ptrsOfArrayData ad_host))
-            srcPitch
+            (if srcY == 0 then 0 else srcPitch)
             srcX
             srcY
             (advancePtrsOfArrayData offset ad_dev dst)
