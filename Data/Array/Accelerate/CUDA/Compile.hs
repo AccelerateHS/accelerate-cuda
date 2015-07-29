@@ -233,8 +233,9 @@ compileOpenAcc = traverseAcc
 
 -- Traverse a scalar expression
 --
-compileOpenExp :: DelayedOpenExp env aenv e
-      -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
+compileOpenExp
+    :: DelayedOpenExp env aenv e
+    -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
 compileOpenExp exp =
   case exp of
     Var ix                  -> return $ pure (Var ix)
@@ -331,7 +332,10 @@ compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> compileOpenSeq
     compileExtend BaseEnv       = return BaseEnv
     compileExtend (PushEnv e a) = PushEnv <$> compileExtend e <*> compileOpenAcc a
 
-compileOpenSeq :: forall aenv lenv arrs' . PreOpenSeq DelayedOpenAcc aenv lenv arrs' -> CIO (ExecOpenSeq aenv lenv arrs')
+compileOpenSeq
+    :: forall aenv lenv arrs'.
+       PreOpenSeq DelayedOpenAcc aenv lenv arrs'
+    -> CIO (ExecOpenSeq aenv lenv arrs')
 compileOpenSeq l =
   case l of
     Producer   p l' -> ExecP <$> compileP p <*> compileOpenSeq l'
@@ -350,7 +354,7 @@ compileOpenSeq l =
               (free1, acc') <- travA acc
               let gamma = makeEnvMap free1
               dev <- asks deviceProperties
-              -- The the array computation passed to 'toSeq' needs to be treated
+              -- The array computation passed to 'toSeq' needs to be treated
               -- specially. We don't want the entire array to be made manifest
               -- if we can help it. In the event it is a delayed array, we make
               -- the subarrays manifest one at a time and feed them to the 'Seq'
@@ -531,7 +535,11 @@ link context table key =
 
 -- Generate and compile code for a single open array expression
 --
-compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel aenv a -> CIO (String, KernelKey)
+compile
+    :: KernelTable
+    -> CUDA.DeviceProperties
+    -> CUTranslSkel aenv a
+    -> CIO (String, KernelKey)
 compile table dev cunit = do
   context       <- asks activeContext
   exists        <- isJust `fmap` liftIO (KT.lookup context table key)
