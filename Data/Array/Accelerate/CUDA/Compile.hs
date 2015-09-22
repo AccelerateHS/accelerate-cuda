@@ -419,7 +419,10 @@ compileOpenSeq l =
           let scanner = Alam $ Alam $ Abody $ Manifest $
                         Scanl' (weaken (SuccIdx . SuccIdx) f)
                           (Index (Manifest $ Avar (SuccIdx ZeroIdx)) IndexNil)
-                          (Manifest $ Avar ZeroIdx)
+                          (Delayed 
+                            (Shape (Manifest $ Avar ZeroIdx))
+                            (Lam $ Body $       Index (Manifest $ Avar ZeroIdx) (Var ZeroIdx))
+                            (Lam $ Body $ LinearIndex (Manifest $ Avar ZeroIdx) (Var ZeroIdx)))
           zipper'  <- compileOpenAfun (zipper f)
           scanner' <- compileOpenAfun scanner
           return $ ExecScanSeq e0' zipper' scanner' x
