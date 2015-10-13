@@ -1,0 +1,95 @@
+language: haskell
+env:
+  global:
+    - HAPPY=1.19.5
+    - ALEX=3.1.4
+    - SHA_ACCELERATE=11bde8004579b047c5dee97efec61fd05d0b79a1
+    - URL_ACCELERATE=https://github.com/AccelerateHS/accelerate.git
+
+  matrix:
+    - CUDA=7.0-28 GHC=7.8.4
+    - CUDA=7.0-28 GHC=7.10.1 CABAL=1.22
+    - CUDA=7.0-28 GHC=head CABAL=head
+
+matrix:
+  allow_failures:
+    - env: CUDA=7.0-28 GHC=head CABAL=head
+
+before_install:
+    # Fetch accelerate dependencies
+    - echo "Checking out dependencies"
+    - travis_retry git clone -b release/0.15 ${URL_ACCELERATE} deps/accelerate
+    - pushd deps/accelerate
+    - git reset --hard ${SHA_ACCELERATE}
+    - popd
+
+    # If travis doesn't have the version of GHC that we want, get it from hvr's PPA
+    - echo "Setting up GHC"
+    - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
+    - travis_retry sudo apt-get update -qq
+    - travis_retry sudo apt-get autoremove
+      # - travis_retry sudo apt-get install -y c2hs
+    - travis_retry sudo apt-get install happy-${HAPPY} alex-${ALEX}
+    - export PATH=/opt/alex/${ALEX}/bin:/opt/happy/${HAPPY}/bin:${PATH}
+    - export PATH=/usr/local/ghc/${GHC}/bin:${PATH}
+    - |
+        if [ $(ghc --numeric-version) != ${GHC} ]; then
+            travis_retry sudo apt-get install -y ghc-${GHC}
+            export PATH=/opt/ghc/${GHC}/bin:${PATH}
+        fi
+    - |
+        if [ ${CABAL} ]; then
+            travis_retry sudo apt-get install -y cabal-install-${CABAL}
+            export PATH=/opt/cabal/${CABAL}/bin:${PATH}
+        fi
+
+    # If we want to build c2hs from source, ghc-7.8 and later will require newer
+    # versions of happy and alex
+    - |
+        if [ ${GHC%.*} != 7.6 ]; then
+            travis_retry sudo apt-get install -y alex-${ALEX} happy-${HAPPY}
+            export PATH=/opt/alex/${ALEX}/bin:/opt/happy/${HAPPY}/bin:${PATH}
+        fi
+    - cabal install c2hs
+
+    - echo "Installing CUDA library"
+    - travis_retry wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1204/x86_64/cuda-repo-ubuntu1204_${CUDA}_amd64.deb
+    - travis_retry sudo dpkg -i cuda-repo-ubuntu1204_${CUDA}_amd64.deb
+    - travis_retry sudo apt-get update -qq
+    - export CUDA_APT=${CUDA%-*}
+    - export CUDA_APT=${CUDA_APT/./-}
+    - travis_retry sudo apt-get install -y cuda-drivers cuda-core-${CUDA_APT} cuda-cudart-dev-${CUDA_APT}
+    - travis_retry sudo apt-get clean
+    - export CUDA_HOME=/usr/local/cuda-${CUDA%%-*}
+    - export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+    - export PATH=${CUDA_HOME}/bin:${PATH}
+
+install:
+    - echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo '?')]"
+    - cabal --version
+    - cabal install --only-dependencies --enable-tests ${MODE} . deps/*
+    - cabal install deps/*
+
+script:
+    # Check the build
+    - cabal configure -v2 -flib-Werror ${MODE}
+    - cabal build
+    - cabal haddock
+#    - cabal test --show-details=always
+
+    # Check the source distribution can be generated, built, and installed
+    - cabal sdist
+    - |
+        export SRC_TGZ=$(cabal info . | awk '{print $2 ".tar.gz";exit}')
+        cd dist
+        if [ -f "$SRC_TGZ" ]; then
+            cabal install --force-reinstalls ${MODE} ${SRC_TGZ} || exit 1
+        else
+            echo "'$SRC_TGZ': not found"
+            exit 1
+        fi
+
+after_failure:
+    - dmesg
+    - ls -R /usr/local/cuda*
+
