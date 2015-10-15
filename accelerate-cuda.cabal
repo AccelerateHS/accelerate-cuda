@@ -1,5 +1,5 @@
 Name:                   accelerate-cuda
-Version:                0.15.0.0
+Version:                0.15.1.0
 Cabal-version:          >= 1.8
 Tested-with:            GHC == 7.8.*
 Build-type:             Simple
@@ -81,9 +81,9 @@ Flag internal-checks
   Default:              False
 
 Library
-  Build-depends:        accelerate              == 0.15.*,
+  Build-depends:        accelerate              == 0.15.1.*,
                         array                   >= 0.3,
-                        base                    == 4.7.*,
+                        base                    >= 4.7 && < 4.9,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         cryptohash              >= 0.7,
