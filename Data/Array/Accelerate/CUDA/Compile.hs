@@ -80,7 +80,7 @@ import System.Time
 #if   defined(UNIX)
 import System.Posix.Process
 #elif defined(WIN32)
-import System.Win32.Process hiding (ProcessHandle)
+import System.Win32.Process                                     hiding ( ProcessHandle )
 #else
 #error "I don't know what operating system I am"
 #endif
