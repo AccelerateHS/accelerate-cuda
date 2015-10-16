@@ -176,5 +176,5 @@ source-repository this
   type:                 git
   location:             https://github.com/AccelerateHS/accelerate-cuda
   branch:               release/0.15
-  tag:                  0.15.0.0
+  tag:                  0.15.1.0
 
