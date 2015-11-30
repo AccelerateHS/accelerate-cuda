@@ -82,9 +82,9 @@ Flag internal-checks
   Default:              False
 
 Library
-  Build-depends:        accelerate              == 2.0.*,
+  Build-depends:        accelerate              ,
                         array                   >= 0.3,
-                        base                    == 4.7.*,
+                        base                    >= 4.7,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         containers              >= 0.3,
@@ -146,7 +146,7 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.Type
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Context
-                        Data.Array.Accelerate.CUDA.Debug
+                       -- Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
 -- added by JS 			
 --                        Data.Array.Accelerate.CUDA.ExecuteMulti
