@@ -1,7 +1,7 @@
 A CUDA Backend for the Accelerate Array Language
 ================================================
 
-[![Build Status](https://travis-ci.org/tmcdonell/accelerate-cuda.svg?branch=master)](https://travis-ci.org/tmcdonell/accelerate-cuda)
+[![Build Status](https://travis-ci.org/AccelerateHS/accelerate-cuda.svg?branch=master)](https://travis-ci.org/AccelerateHS/accelerate-cuda)
 
 This package compiles Accelerate code down to NVIDIA's CUDA language for general-purpose GPU programming. For details on Accelerate, refer to the [main repository][GitHub]. Please also file bug reports and feature requests with the [issue tracker][Issues] of the main repository.
 
