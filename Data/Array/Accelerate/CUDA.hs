@@ -218,9 +218,7 @@ import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
 import Data.Array.Accelerate.CUDA.Execute
 
-#if ACCELERATE_DEBUG
-import Data.Array.Accelerate.Debug
-#endif
+import qualified Data.Array.Accelerate.Debug            as Debug
 
 
 -- Accelerate: CUDA
@@ -276,7 +274,7 @@ runAsyncWith :: Arrays a => Context -> Acc a -> Async a
 runAsyncWith ctx a = unsafePerformIO $ async execute
   where
     !acc    = convertAccWith config a
-    execute = evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
+    execute = Debug.dumpGraph acc >> evalCUDA ctx (compileAcc acc >>= dumpSimplStats >>= executeAcc >>= collect)
 
 
 -- | Prepare and execute an embedded array program of one argument.
@@ -336,7 +334,7 @@ run1AsyncWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Asy
 run1AsyncWith ctx f = \a -> unsafePerformIO $ async (execute a)
   where
     !acc      = convertAfunWith config f
-    !afun     = unsafePerformIO $ evalCUDA ctx (compileAfun acc) >>= dumpStats
+    !afun     = unsafePerformIO $ Debug.dumpGraph acc >> evalCUDA ctx (compileAfun acc) >>= dumpSimplStats
     execute a = evalCUDA ctx (executeAfun1 afun a >>= collect)
 
 -- TLM: We need to be very careful with run1* variants, to ensure that the
@@ -413,16 +411,8 @@ config =  Phase
   }
 
 
-dumpStats :: MonadIO m => a -> m a
-#if ACCELERATE_DEBUG
-dumpStats next = liftIO $ do
-  stats <- simplCount
-  traceIO dump_simpl_stats (show stats)
-  resetSimplCount
-  return next
-#else
-dumpStats next = return next
-#endif
+dumpSimplStats :: MonadIO m => a -> m a
+dumpSimplStats next = Debug.dumpSimplStats >> return next
 
 
 -- Device memory management
