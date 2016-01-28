@@ -59,6 +59,7 @@ import qualified Data.Array.Accelerate.Array.Memory.Table       as MT
 -- context and just have a single table, but the MemoryTable API in the base
 -- package assumes that remote pointers can be re-used, something that would
 -- not be true for pointers allocated under different contexts.
+--
 type MemoryTable = MVar (IntMap (MT.MemoryTable DevicePtr))
 
 -- Contexts
@@ -71,32 +72,35 @@ type ContextId = Int
 type CRM = ReaderT (Maybe Stream) IO
 
 instance RemoteMemory CRM where
-
   type RemotePointer CRM = DevicePtr
 
-  malloc n = ReaderT . const $ fmap Just (CUDA.mallocArray n) `catch` \(e :: CUDAException) ->
-             case e of
-               ExitCode OutOfMemory -> return Nothing
-               _                    -> trace ("malloc failed with unknown error for: " ++ show n)
-                                     $ throwIO e
+  malloc n
+    = ReaderT . const
+    $ fmap Just (CUDA.mallocArray n)
+        `catch` \e ->
+          case e of
+            ExitCode OutOfMemory -> return Nothing
+            _                    -> trace ("malloc failed with unknown error for: " ++ show n)
+                                  $ throwIO e
 
-  free = ReaderT . const . trace "free/explicit free" . CUDA.free
+  free =
+    ReaderT . const . trace "free/explicit free" . CUDA.free
 
-  poke n dst ad = ReaderT $ \ms -> transfer "poke" (n * sizeOfPtr dst) $
-      CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst ms
+  poke n dst ad =
+    ReaderT $ \ms -> transfer "poke" (n * sizeOfPtr dst) $
+      CUDA.pokeArrayAsync n (CUDA.HostPtr (ptrsOfArrayData ad)) dst ms
 
-  peek n src ad = ReaderT $ \ms -> transfer "peek" (n * sizeOfPtr src) $
-      CUDA.peekArrayAsync n src (CUDA.HostPtr $ ptrsOfArrayData ad) ms
+  peek n src ad =
+    ReaderT $ \ms -> transfer "peek" (n * sizeOfPtr src) $
+      CUDA.peekArrayAsync n src (CUDA.HostPtr (ptrsOfArrayData ad)) ms
 
-  castPtr _ = CUDA.castDevPtr
-
-  totalMem = ReaderT . const $ snd <$> CUDA.getMemInfo
-
+  castPtr _    = CUDA.castDevPtr
+  totalMem     = ReaderT . const $ snd <$> CUDA.getMemInfo
   availableMem = ReaderT . const $ fst <$> CUDA.getMemInfo
-
-  chunkSize = return 1024
+  chunkSize    = return 1024
 
 -- Create a MemoryTable.
+--
 new :: IO MemoryTable
 new = trace "initialise CUDA memory table" $ newMVar IM.empty
 
@@ -111,11 +115,12 @@ lookup !ctx !ref !arr = withMVar ref $ \ct ->
 
 -- Allocate a new device array to be associated with the given host-side array.
 -- Has the same properties as `Data.Array.Accelerate.Array.Memory.Table.malloc`
+--
 malloc :: forall a b. PrimElt a b => Context -> MemoryTable -> ArrayData a -> Int -> IO (DevicePtr b)
 malloc !ctx !ref !ad !n = do
   mt <- modifyMVar ref $ \ct -> blocking $ do
    case IM.lookup (contextId ctx) ct of
-           Nothing  -> trace "malloc/context not found" $ insertContext ctx ct
+           Nothing -> trace "malloc/context not found" $ insertContext ctx ct
            Just mt -> return (ct, mt)
   mp <- blocking $ MT.malloc mt ad n :: IO (Maybe (DevicePtr b))
   case mp of
@@ -124,6 +129,7 @@ malloc !ctx !ref !ad !n = do
 
 -- Explicitly free an array in the MemoryTable. Has the same properties as
 -- `Data.Array.Accelerate.Array.Memory.Table.free`
+--
 free :: PrimElt a b => Context -> MemoryTable -> ArrayData a -> IO ()
 free !ctx !ref !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
@@ -199,3 +205,4 @@ transfer name bytes action
                                      ++ D.elapsed gpuTime cpuTime
     in
     D.timed D.dump_gc msg Nothing action
+
