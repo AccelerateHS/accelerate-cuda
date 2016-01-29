@@ -207,12 +207,13 @@ import System.IO.Unsafe
 import Prelude
 
 -- friends
-import Data.Array.Accelerate.Trafo
-import Data.Array.Accelerate.Smart                      ( Acc, Seq )
 import Data.Array.Accelerate                            ( mapSeq, streamIn )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
+import Data.Array.Accelerate.Smart                      ( Acc, Seq )
+import Data.Array.Accelerate.Async
+import Data.Array.Accelerate.Trafo
+
 import Data.Array.Accelerate.CUDA.Array.Data
-import Data.Array.Accelerate.CUDA.Async
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Compile
@@ -271,7 +272,7 @@ runWith ctx a
 -- operations have completed.
 --
 runAsyncWith :: Arrays a => Context -> Acc a -> Async a
-runAsyncWith ctx a = unsafePerformIO $ async execute
+runAsyncWith ctx a = unsafePerformIO $ asyncBound execute
   where
     !acc    = convertAccWith config a
     execute = dumpGraph acc >> evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
@@ -331,7 +332,7 @@ run1With ctx f = let go = run1AsyncWith ctx f
 -- | As 'run1With', but execute asynchronously.
 --
 run1AsyncWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
-run1AsyncWith ctx f = \a -> unsafePerformIO $ async (execute a)
+run1AsyncWith ctx f = \a -> unsafePerformIO $ asyncBound (execute a)
   where
     !acc      = convertAfunWith config f
     !afun     = unsafePerformIO $ dumpGraph acc >> evalCUDA ctx (compileAfun acc) >>= dumpStats

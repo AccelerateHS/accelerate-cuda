@@ -127,7 +127,6 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
-                        Data.Array.Accelerate.CUDA.Async
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Arithmetic
                         Data.Array.Accelerate.CUDA.CodeGen.Base
