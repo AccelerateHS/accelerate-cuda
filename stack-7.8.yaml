@@ -7,14 +7,14 @@ packages:
 - '.'
 - location:
     git:    https://github.com/AccelerateHS/accelerate.git
-    commit: 179ae0de057658e47a52cf3d1e5cbefc55fe093b
+    commit: eb63e3fa6a3d7983357f83783a33bb59fe0d4464
   extra-dep: true
 
 extra-deps:
-- 'accelerate-2.0.0.0'
 - 'base-orphans-0.4.4'
 - 'cuda-0.7.0.0'
 - 'SafeSemaphore-0.10.1'
+- 'unique-0'
 
 # Override default flag values for local packages and extra-deps
 flags: {}

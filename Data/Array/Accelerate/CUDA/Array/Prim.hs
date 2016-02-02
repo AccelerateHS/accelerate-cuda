@@ -52,10 +52,9 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime                   ( withLifetime )
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Memory               ( PrimElt )
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc(..), blocksOf )
-import Data.Array.Accelerate.CUDA.Array.Cache
+import Data.Array.Accelerate.CUDA.Array.Remote
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 

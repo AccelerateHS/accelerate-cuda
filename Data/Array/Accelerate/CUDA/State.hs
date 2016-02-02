@@ -33,7 +33,7 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Debug                 ( traceIO, dump_gc )
 import Data.Array.Accelerate.CUDA.Persistent            as KT ( KernelTable, new )
-import Data.Array.Accelerate.CUDA.Array.Cache           as MT ( MemoryTable, new )
+import Data.Array.Accelerate.CUDA.Array.Remote          as MT ( MemoryTable, new )
 import Data.Array.Accelerate.CUDA.Execute.Stream        as ST ( Reservoir, new )
 import Data.Array.Accelerate.CUDA.Execute.Event         as ET ( EventTable, new)
 import Data.Array.Accelerate.CUDA.Analysis.Device

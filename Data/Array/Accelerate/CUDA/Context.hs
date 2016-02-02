@@ -1,5 +1,4 @@
 {-# LANGUAGE MagicHash     #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE ViewPatterns  #-}
 -- |
