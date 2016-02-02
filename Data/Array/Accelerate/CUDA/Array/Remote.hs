@@ -45,8 +45,7 @@ import qualified Foreign.CUDA.Driver                            as CUDA
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime                           ( unsafeGetValue )
-import qualified Data.Array.Accelerate.Array.Remote.Class       as R
-import qualified Data.Array.Accelerate.Array.Remote.LRU         as LRU
+import qualified Data.Array.Accelerate.Array.Remote             as R
 
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..), push, pop )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event, EventTable, waypoint, query )
@@ -59,28 +58,30 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as Debug
 type CRM = ReaderT (Maybe Stream) IO
 
 instance R.RemoteMemory CRM where
-  type RemotePointer CRM = CUDA.DevicePtr
+  type RemotePtr CRM = CUDA.DevicePtr
   --
-  malloc n = ReaderT $ \_ -> do
+  mallocRemote n       = ReaderT $ \_ ->
     fmap Just (CUDA.mallocArray n)
       `catch` \e -> case e of
                       ExitCode OutOfMemory -> return Nothing
                       _                    -> trace ("malloc failed with error: " ++ show e) (throwIO e)
-  --
-  free p        = ReaderT $ \_   -> trace "free/explicit" (CUDA.free p)
 
-  poke n dst ad = ReaderT $ \mst ->
+  freeRemote p         = ReaderT $ \_ ->
+    trace "free/explicit" (CUDA.free p)
+
+  pokeRemote n dst ad  = ReaderT $ \mst ->
     transfer "poke" (n * sizeOfPtr dst) $
     CUDA.pokeArrayAsync n (CUDA.HostPtr (ptrsOfArrayData ad)) dst mst
 
-  peek n src ad = ReaderT $ \mst ->
+  peekRemote n src ad  = ReaderT $ \mst ->
     transfer "peek" (n * sizeOfPtr src) $
     CUDA.peekArrayAsync n src (CUDA.HostPtr (ptrsOfArrayData ad)) mst
 
-  castPtr _    = CUDA.castDevPtr
-  totalMem     = ReaderT $ \_ -> snd <$> CUDA.getMemInfo
-  availableMem = ReaderT $ \_ -> fst <$> CUDA.getMemInfo
-  chunkSize    = return 1024
+  castRemotePtr _      = CUDA.castDevPtr
+  plusRemotePtr _      = CUDA.plusDevPtr
+  totalRemoteMem       = ReaderT $ \_ -> snd <$> CUDA.getMemInfo
+  availableRemoteMem   = ReaderT $ \_ -> fst <$> CUDA.getMemInfo
+  remoteAllocationSize = return 1024
 
 
 -- We leverage the memory cache from the accelerate base package.
@@ -91,15 +92,15 @@ instance R.RemoteMemory CRM where
 -- assumes that remote pointers can be re-used, something that would not be true
 -- for pointers allocated under different contexts.
 --
-type MT          = IntMap (LRU.MemoryTable CUDA.DevicePtr Task)
+type MT          = IntMap (R.MemoryTable CUDA.DevicePtr Task)
 data MemoryTable = MemoryTable {-# UNPACK #-} !EventTable
                                {-# UNPACK #-} !(MVar MT)
 
 type Task = Maybe Event
 
-instance LRU.Task Task where
-  isDone Nothing  = return True
-  isDone (Just e) = query e
+instance R.Task Task where
+  completed Nothing  = return True
+  completed (Just e) = query e
 
 
 -- Create a MemoryTable.
@@ -125,9 +126,9 @@ withRemote ctx (MemoryTable et ref) ad run ms = do
   ct <- readMVar ref
   case IM.lookup (contextId ctx) ct of
     Nothing -> $internalError "withRemote" "context not found"
-    Just mc -> streaming ms $ LRU.withRemote mc ad run'
+    Just mc -> streaming ms $ R.withRemote mc ad run'
   where
-    run' :: R.RemotePointer CRM a -> IO (Task, b)
+    run' :: R.RemotePtr CRM a -> IO (Task, b)
     run' p = do
       c  <- run p
       case ms of
@@ -151,7 +152,7 @@ malloc !ctx (MemoryTable _ !ref) !ad !frozen !n = do
    case IM.lookup (contextId ctx) ct of
            Nothing -> trace "malloc/context not found" $ insertContext ctx ct
            Just mt -> return (ct, mt)
-  blocking $ LRU.malloc mt ad frozen n
+  blocking $ R.malloc mt ad frozen n
 
 
 -- Explicitly free an array in the LRU table. Has the same properties as
@@ -165,7 +166,7 @@ free :: R.PrimElt a b
 free !ctx (MemoryTable _ !ref) !arr = withMVar ref $ \ct ->
   case IM.lookup (contextId ctx) ct of
     Nothing -> message "free/context not found"
-    Just mt -> LRU.free (Proxy :: Proxy CRM) mt arr
+    Just mt -> R.free (Proxy :: Proxy CRM) mt arr
 
 
 -- Record an association between a host-side array and a device memory area that was
@@ -184,14 +185,14 @@ insertUnmanaged !ctx (MemoryTable _ !ref) !arr !ptr = do
    case IM.lookup (contextId ctx) ct of
            Nothing -> trace "insertUnmanaged/context not found" $ insertContext ctx ct
            Just mt -> return (ct, mt)
-  blocking $ LRU.insertUnmanaged mt arr ptr
+  blocking $ R.insertUnmanaged mt arr ptr
 
 insertContext
     :: Context
     -> MT
-    -> CRM ( MT, LRU.MemoryTable CUDA.DevicePtr Task )
+    -> CRM ( MT, R.MemoryTable CUDA.DevicePtr Task )
 insertContext ctx ct = do
-   mt <- LRU.new (\p -> bracket_ (push ctx) pop (CUDA.free p))
+   mt <- R.new (\p -> bracket_ (push ctx) pop (CUDA.free p))
    return (IM.insert (contextId ctx) mt ct, mt)
 
 
@@ -202,7 +203,7 @@ insertContext ctx ct = do
 -- unreachable.
 --
 reclaim :: MemoryTable -> IO ()
-reclaim (MemoryTable _ ref) = withMVar ref (blocking . mapM_ LRU.reclaim . IM.elems)
+reclaim (MemoryTable _ ref) = withMVar ref (blocking . mapM_ R.reclaim . IM.elems)
 
 -- Miscellaneous
 -- -------------
