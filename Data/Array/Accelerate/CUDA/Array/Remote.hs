@@ -87,11 +87,11 @@ instance R.RemoteMemory CRM where
 --
 -- However, we actually need multiple caches because every pointer has an
 -- associated CUDA context. We could pair every DevicePtr with its context and
--- just have a single table, but the MemoryCache API in the base package assumes
--- that remote pointers can be re-used, something that would not be true for
--- pointers allocated under different contexts.
+-- just have a single table, but the LRU implementation in the base package
+-- assumes that remote pointers can be re-used, something that would not be true
+-- for pointers allocated under different contexts.
 --
-type MT          = IntMap (LRU.MemoryCache CUDA.DevicePtr Task)
+type MT          = IntMap (LRU.MemoryTable CUDA.DevicePtr Task)
 data MemoryTable = MemoryTable {-# UNPACK #-} !EventTable
                                {-# UNPACK #-} !(MVar MT)
 
@@ -154,7 +154,7 @@ malloc !ctx (MemoryTable _ !ref) !ad !frozen !n = do
   blocking $ LRU.malloc mt ad frozen n
 
 
--- Explicitly free an array in the MemoryCache. Has the same properties as
+-- Explicitly free an array in the LRU table. Has the same properties as
 -- `Data.Array.Accelerate.Array.Remote.LRU.free`
 --
 free :: R.PrimElt a b
@@ -189,7 +189,7 @@ insertUnmanaged !ctx (MemoryTable _ !ref) !arr !ptr = do
 insertContext
     :: Context
     -> MT
-    -> CRM ( MT, LRU.MemoryCache CUDA.DevicePtr Task )
+    -> CRM ( MT, LRU.MemoryTable CUDA.DevicePtr Task )
 insertContext ctx ct = do
    mt <- LRU.new (\p -> bracket_ (push ctx) pop (CUDA.free p))
    return (IM.insert (contextId ctx) mt ct, mt)
