@@ -452,8 +452,8 @@ withDevicePtrs
     -> Maybe (CUDA.Stream)
     -> (DevicePtrs e -> IO b)
     -> IO b
-withDevicePtrs !ctx !mt !ad run ms = do
-  mb <- withRemote ctx mt ad ms run
+withDevicePtrs !ctx !mt !ad ms run = do
+  mb <- withRemote ctx mt ad run ms
   case mb of
     Just b  -> return b
     Nothing -> do

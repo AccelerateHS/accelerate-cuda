@@ -66,9 +66,6 @@ instance R.RemoteMemory CRM where
                       ExitCode OutOfMemory -> return Nothing
                       _                    -> trace ("malloc failed with error: " ++ show e) (throwIO e)
 
-  freeRemote p         = ReaderT $ \_ ->
-    trace "free/explicit" (CUDA.free p)
-
   pokeRemote n dst ad  = ReaderT $ \mst ->
     transfer "poke" (n * sizeOfPtr dst) $
     CUDA.pokeArrayAsync n (CUDA.HostPtr (ptrsOfArrayData ad)) dst mst
@@ -78,7 +75,6 @@ instance R.RemoteMemory CRM where
     CUDA.peekArrayAsync n src (CUDA.HostPtr (ptrsOfArrayData ad)) mst
 
   castRemotePtr _      = CUDA.castDevPtr
-  plusRemotePtr _      = CUDA.plusDevPtr
   totalRemoteMem       = ReaderT $ \_ -> snd <$> CUDA.getMemInfo
   availableRemoteMem   = ReaderT $ \_ -> fst <$> CUDA.getMemInfo
   remoteAllocationSize = return 1024
@@ -128,8 +124,8 @@ withRemote ctx (MemoryTable et ref) ad run ms = do
     Nothing -> $internalError "withRemote" "context not found"
     Just mc -> streaming ms $ R.withRemote mc ad run'
   where
-    run' :: R.RemotePtr CRM a -> IO (Task, b)
-    run' p = do
+    run' :: R.RemotePtr CRM a -> CRM (Task, b)
+    run' p = liftIO $ do
       c  <- run p
       case ms of
         Nothing -> return (Nothing, c)
@@ -191,7 +187,7 @@ insertContext
     :: Context
     -> MT
     -> CRM ( MT, R.MemoryTable CUDA.DevicePtr Task )
-insertContext ctx ct = do
+insertContext ctx ct = liftIO $ do
    mt <- R.new (\p -> bracket_ (push ctx) pop (CUDA.free p))
    return (IM.insert (contextId ctx) mt ct, mt)
 
