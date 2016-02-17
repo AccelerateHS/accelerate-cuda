@@ -200,7 +200,6 @@ module Data.Array.Accelerate.CUDA (
 ) where
 
 -- standard library
-import Control.Exception
 import Control.Applicative
 import Control.Monad.Trans
 import System.IO.Unsafe
@@ -232,21 +231,7 @@ import Data.Array.Accelerate.Debug                      as Debug
 -- Note that it is recommended you use 'run1' whenever possible.
 --
 run :: Arrays a => Acc a -> a
-run a
-  = unsafePerformIO
-  $ evaluate (runWith defaultContext a)
-
--- | As 'run', but allow the computation to continue running in a thread and
--- return immediately without waiting for the result. The status of the
--- computation can be queried using 'wait', 'poll', and 'cancel'.
---
--- Note that a CUDA Context can be active on only one host thread at a time. If
--- you want to execute multiple computations in parallel, use 'runAsyncWith'.
---
-runAsync :: Arrays a => Acc a -> Async a
-runAsync a
-  = unsafePerformIO
-  $ evaluate (runAsyncWith defaultContext a)
+run = runWith defaultContext
 
 -- | As 'run', but execute using the specified device context rather than using
 -- the default, automatically selected device.
@@ -264,15 +249,25 @@ runAsync a
 runWith :: Arrays a => Context -> Acc a -> a
 runWith ctx a
   = unsafePerformIO
-  $ evaluate (runAsyncWith ctx a) >>= wait
+  $ wait =<< runAsyncWith ctx a
 
+
+-- | As 'run', but allow the computation to continue running in a thread and
+-- return immediately without waiting for the result. The status of the
+-- computation can be queried using 'wait', 'poll', and 'cancel'.
+--
+-- Note that a CUDA Context can be active on only one host thread at a time. If
+-- you want to execute multiple computations in parallel, use 'runAsyncWith'.
+--
+runAsync :: Arrays a => Acc a -> IO (Async a)
+runAsync = runAsyncWith defaultContext
 
 -- | As 'runWith', but execute asynchronously. Be sure not to destroy the context,
 -- or attempt to attach it to a different host thread, before all outstanding
 -- operations have completed.
 --
-runAsyncWith :: Arrays a => Context -> Acc a -> Async a
-runAsyncWith ctx a = unsafePerformIO $ asyncBound execute
+runAsyncWith :: Arrays a => Context -> Acc a -> IO (Async a)
+runAsyncWith ctx a = asyncBound execute
   where
     !acc    = convertAccWith config a
     execute = dumpGraph acc >> evalCUDA ctx (compileAcc acc >>= dumpStats >>= executeAcc >>= collect)
@@ -311,28 +306,25 @@ runAsyncWith ctx a = unsafePerformIO $ asyncBound execute
 -- See the programs in the 'accelerate-examples' package for examples.
 --
 run1 :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
-run1 f
-  = unsafePerformIO
-  $ evaluate (run1With defaultContext f)
-
-
--- | As 'run1', but the computation is executed asynchronously.
---
-run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Async b
-run1Async f
-  = unsafePerformIO
-  $ evaluate (run1AsyncWith defaultContext f)
+run1 = run1With defaultContext
 
 -- | As 'run1', but execute in the specified context.
 --
 run1With :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> b
-run1With ctx f = let go = run1AsyncWith ctx f
-                 in \a -> unsafePerformIO $ wait (go a)
+run1With ctx f =
+  let go = run1AsyncWith ctx f
+  in \a -> unsafePerformIO $ wait =<< go a
+
+
+-- | As 'run1', but the computation is executed asynchronously.
+--
+run1Async :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> IO (Async b)
+run1Async = run1AsyncWith defaultContext
 
 -- | As 'run1With', but execute asynchronously.
 --
-run1AsyncWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> Async b
-run1AsyncWith ctx f = \a -> unsafePerformIO $ asyncBound (execute a)
+run1AsyncWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> a -> IO (Async b)
+run1AsyncWith ctx f = \a -> asyncBound (execute a)
   where
     !acc      = convertAfunWith config f
     !afun     = unsafePerformIO $ dumpGraph acc >> evalCUDA ctx (compileAfun acc) >>= dumpStats
@@ -346,9 +338,7 @@ run1AsyncWith ctx f = \a -> unsafePerformIO $ asyncBound (execute a)
 --   collecting results as we go.
 --
 stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
-stream f arrs
-  = unsafePerformIO
-  $ evaluate (streamWith defaultContext f arrs)
+stream = streamWith defaultContext
 
 -- | As 'stream', but execute in the specified context.
 --
