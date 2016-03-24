@@ -13,7 +13,6 @@
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE UndecidableInstances       #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -1188,7 +1187,13 @@ executeExtend (PushEnv !e !a) !aenv = do
 executeExp :: ExecExp aenv t -> Aval aenv -> Stream -> CIO t
 executeExp !exp !aenv !stream = executeOpenExp exp Empty aenv stream
 
-executeOpenExp :: forall env aenv exp. ExecOpenExp env aenv exp -> Val env -> Aval aenv -> Stream -> CIO exp
+executeOpenExp
+    :: forall env aenv exp.
+       ExecOpenExp env aenv exp
+    -> Val env
+    -> Aval aenv
+    -> Stream
+    -> CIO exp
 executeOpenExp !rootExp !env !aenv !stream = travE rootExp
   where
     travE :: ExecOpenExp env aenv t -> CIO t
@@ -1393,13 +1398,14 @@ configure (AccKernel _ _ _ _ !cta !smem !grid) !n = (cta, grid n, smem)
 -- texture references, and for newer devices adds the parameters to the front of
 -- the argument list
 --
-arguments :: Marshalable args
-          => AccKernel a
-          -> Aval aenv
-          -> Gamma aenv
-          -> args
-          -> Stream
-          -> ContT b CIO [CUDA.FunParam]
+arguments
+    :: Marshalable args
+    => AccKernel a
+    -> Aval aenv
+    -> Gamma aenv
+    -> args
+    -> Stream
+    -> ContT b CIO [CUDA.FunParam]
 arguments !kernel !aenv !gamma !a !stream = do
   dev <- asks deviceProperties
   let marshaller | computeCapability dev < Compute 2 0   = marshalAccEnvTex kernel
@@ -1412,14 +1418,15 @@ arguments !kernel !aenv !gamma !a !stream = do
 -- launch parameters, and initiate the computation. This also handles lifting
 -- and binding of array references from scalar expressions.
 --
-execute :: Marshalable args
-        => AccKernel a                  -- The binary module implementing this kernel
-        -> Gamma aenv                   -- variables of arrays embedded in scalar expressions
-        -> Aval aenv                    -- the environment
-        -> Int                          -- a "size" parameter, typically number of elements in the output
-        -> args                         -- arguments to marshal to the kernel function
-        -> Stream                       -- Compute stream to execute in
-        -> CIO ()
+execute
+    :: Marshalable args
+    => AccKernel a                      -- The binary module implementing this kernel
+    -> Gamma aenv                       -- variables of arrays embedded in scalar expressions
+    -> Aval aenv                        -- the environment
+    -> Int                              -- a "size" parameter, typically number of elements in the output
+    -> args                             -- arguments to marshal to the kernel function
+    -> Stream                           -- Compute stream to execute in
+    -> CIO ()
 execute !kernel !gamma !aenv !n !a !stream = flip runContT return $ do
   args  <- arguments kernel aenv gamma a stream
   liftIO $ launch kernel (configure kernel n) args stream

@@ -89,7 +89,7 @@ Library
                         bytestring              >= 0.9,
                         containers              >= 0.3,
                         cryptohash              >= 0.7,
-                        cuda                    >= 0.6.0.2,
+                        cuda                    >= 0.7,
                         directory               >= 1.0,
                         fclabels                >= 2.0,
                         filepath                >= 1.0,
@@ -121,13 +121,11 @@ Library
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
-                        Data.Array.Accelerate.CUDA.Array.Cache
+                        Data.Array.Accelerate.CUDA.Array.Remote
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim
                         Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
-                        Data.Array.Accelerate.CUDA.Array.Table
-                        Data.Array.Accelerate.CUDA.Async
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Arithmetic
                         Data.Array.Accelerate.CUDA.CodeGen.Base

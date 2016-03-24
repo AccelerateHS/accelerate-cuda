@@ -1,5 +1,4 @@
 {-# LANGUAGE MagicHash     #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE ViewPatterns  #-}
 -- |
@@ -37,6 +36,7 @@ import System.Mem.Weak                                  ( Weak )
 import Text.PrettyPrint
 import qualified Foreign.CUDA.Driver                    as CUDA hiding ( device )
 import qualified Foreign.CUDA.Driver.Context            as CUDA
+import qualified Foreign.CUDA.Driver.Device             as CUDA
 
 
 -- | The execution context
@@ -65,7 +65,7 @@ create dev flags = do
   -- TODO: Make the occupancy calculator aware of adjustable shared memory
   --
   when (CUDA.computeCapability prp >= CUDA.Compute 2 0)
-     $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.setCacheConfig CUDA.PreferL1)
+     $ bracket_ (CUDA.push ctx) CUDA.pop (CUDA.setCache CUDA.PreferL1)
 
   traceIO verbose (deviceInfo dev prp)
   return actx

@@ -52,10 +52,9 @@ import qualified Foreign.CUDA.Driver.Texture            as CUDA
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime                   ( withLifetime )
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Memory               ( PrimElt )
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Array.Slice
-import Data.Array.Accelerate.CUDA.Array.Cache
+import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc(..), blocksOf )
+import Data.Array.Accelerate.CUDA.Array.Remote
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
 
@@ -505,8 +504,8 @@ withDevicePtrs
     -> Maybe (CUDA.Stream)
     -> (DevicePtrs e -> IO b)
     -> IO b
-withDevicePtrs !ctx !mt !ad run ms = do
-  mb <- withRemote ctx mt ad ms run
+withDevicePtrs !ctx !mt !ad ms run = do
+  mb <- withRemote ctx mt ad run ms
   case mb of
     Just b  -> return b
     Nothing -> do

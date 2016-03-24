@@ -31,11 +31,8 @@ module Data.Array.Accelerate.CUDA.AST (
 -- friends
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Lifetime
-import Data.Array.Accelerate.Pretty
-import Data.Array.Accelerate.Array.Lifted               ( Regular )
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar, (:.)
-                                                        , DIM3, DIM5, DIM7, DIM9 )
-
+import Data.Array.Accelerate.Pretty                     as PP
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar )
 import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
 import Data.Array.Accelerate.Trafo                      ( Extend, DelayedOpenAcc )
 import qualified Data.Array.Accelerate.FullList         as FL
@@ -154,24 +151,24 @@ type ExecFun            = ExecOpenFun ()
 -- Display the annotated AST
 -- -------------------------
 
-instance Show (ExecOpenAcc aenv a) where
-  show = render . prettyExecAcc 0 noParens
+instance Show (ExecAcc a) where
+  show = render . prettyExecAcc noParens PP.Empty
 
 instance Show (ExecAfun a) where
-  show = render . prettyExecAfun 0
+  show = render . prettyExecAfun
 
-prettyExecAfun :: Int -> ExecAfun a -> Doc
-prettyExecAfun alvl pfun = prettyPreAfun prettyExecAcc alvl pfun
+prettyExecAfun :: ExecAfun a -> Doc
+prettyExecAfun pfun = prettyPreOpenAfun prettyExecAcc PP.Empty pfun
 
 prettyExecAcc :: PrettyAcc ExecOpenAcc
-prettyExecAcc alvl wrap exec =
+prettyExecAcc wrap aenv exec =
   case exec of
     EmbedAcc sh ->
       wrap $ hang (text "Embedded") 2
-           $ sep [ prettyPreExp prettyExecAcc 0 alvl parens sh ]
+           $ sep [ prettyPreExp prettyExecAcc parens aenv sh ]
 
     ExecAcc _ (Gamma fv) pacc ->
-      let base      = prettyPreAcc prettyExecAcc alvl wrap pacc
+      let base      = prettyPreOpenAcc prettyExecAcc wrap aenv pacc
           ann       = braces (freevars (Map.keys fv))
           freevars  = (text "fv=" <>) . brackets . hcat . punctuate comma
                                       . map (\(Idx_ ix) -> char 'a' <> int (idxToInt ix))

@@ -80,7 +80,7 @@ import System.Time
 #if   defined(UNIX)
 import System.Posix.Process
 #elif defined(WIN32)
-import System.Win32.Process hiding (ProcessHandle)
+import System.Win32.Process                                     hiding ( ProcessHandle )
 #else
 #error "I don't know what operating system I am"
 #endif
@@ -233,8 +233,9 @@ compileOpenAcc = traverseAcc
 
 -- Traverse a scalar expression
 --
-compileOpenExp :: DelayedOpenExp env aenv e
-      -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
+compileOpenExp
+    :: DelayedOpenExp env aenv e
+    -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
 compileOpenExp exp =
   case exp of
     Var ix                  -> return $ pure (Var ix)
@@ -601,7 +602,11 @@ link context table key =
 
 -- Generate and compile code for a single open array expression
 --
-compile :: KernelTable -> CUDA.DeviceProperties -> CUTranslSkel aenv a -> CIO (String, KernelKey)
+compile
+    :: KernelTable
+    -> CUDA.DeviceProperties
+    -> CUTranslSkel aenv a
+    -> CIO (String, KernelKey)
 compile table dev cunit = do
   context       <- asks activeContext
   exists        <- isJust `fmap` liftIO (KT.lookup context table key)
@@ -765,3 +770,4 @@ time p = do
 {-# INLINE message #-}
 message :: MonadIO m => String -> m ()
 message msg = liftIO $ D.traceIO D.dump_cc ("cc: " ++ msg)
+

@@ -55,8 +55,8 @@ import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
 import Data.Array.Accelerate.Array.Representation       ( size )
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.Array.Slice
-import Data.Array.Accelerate.CUDA.Array.Cache
+import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
+import Data.Array.Accelerate.CUDA.Array.Remote
 import Data.Array.Accelerate.CUDA.Persistent            ( KernelTable )
 import Data.Array.Accelerate.CUDA.Execute.Event         ( EventTable )
 import Data.Array.Accelerate.CUDA.Execute.Stream        ( Reservoir )

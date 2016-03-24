@@ -238,6 +238,15 @@ acos t x = mathf t "acos" [x]
 atan :: FloatingType a -> Exp -> Exp
 atan t x = mathf t "atan" [x]
 
+sinh :: FloatingType a -> Exp -> Exp
+sinh t x = mathf t "sinh" [x]
+
+cosh :: FloatingType a -> Exp -> Exp
+cosh t x = mathf t "cosh" [x]
+
+tanh :: FloatingType a -> Exp -> Exp
+tanh t x = mathf t "tanh" [x]
+
 asinh :: FloatingType a -> Exp -> Exp
 asinh t x = mathf t "asinh" [x]
 

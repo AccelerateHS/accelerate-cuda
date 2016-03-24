@@ -1,73 +1,84 @@
-language: haskell
-env:
-    - CUDA=7.0-28 GHC=7.8.4
-    - CUDA=7.0-28 GHC=7.10.1 CABAL=1.22
-    - CUDA=7.0-28 GHC=7.10.2 CABAL=1.22
-    - CUDA=7.0-28 GHC=head CABAL=head
+# vim: nospell
+language: minimal
+sudo: required
+
+cache:
+  directories:
+    - $HOME/.stack
 
 matrix:
-    allow_failures:
-        - env: CUDA=7.0-28 GHC=head CABAL=head
+  include:
+    - env: GHC=7.8.4 CUDA=7.0-28 CABAL=1.18
+      compiler: "GHC 7.8"
+      addons:
+        apt:
+          sources:
+            - hvr-ghc
+          packages:
+            - ghc-7.8.4
+            - cabal-install-1.18
+            - happy-1.19.5
+            - alex-3.1.4
+
+    - env: GHC=7.10.2 CUDA=7.0-28 CABAL=1.22
+      compiler: "GHC 7.10"
+      addons:
+        apt:
+          sources:
+            - hvr-ghc
+          packages:
+            - ghc-7.10.2
+            - cabal-install-1.22
+            - happy-1.19.5
+            - alex-3.1.4
+
+  allow_failures:
+    - env: CABAL=head GHC=head
 
 before_install:
-    # If travis doesn't have the version of GHC that we want, get it from hvr's PPA
-    - echo "Setting up GHC"
-    - travis_retry sudo add-apt-repository -y ppa:hvr/ghc
-    - travis_retry sudo apt-get update -qq
-    - travis_retry sudo apt-get autoremove
-    - travis_retry sudo apt-get install -y c2hs
-    - travis_retry sudo apt-get install happy-1.19.5 alex-3.1.4
-    - export PATH=/opt/alex/3.1.4/bin:/opt/happy/1.19.5/bin:${PATH}
-    - export PATH=/usr/local/ghc/${GHC}/bin:${PATH}
-    - |
-        if [ $(ghc --numeric-version) != ${GHC} ]; then
-            travis_retry sudo apt-get install -y ghc-${GHC}
-            export PATH=/opt/ghc/${GHC}/bin:${PATH}
-        fi
-    - |
-        if [ ${CABAL} ]; then
-            travis_retry sudo apt-get install -y cabal-install-${CABAL}
-            export PATH=/opt/cabal/${CABAL}/bin:${PATH}
-        fi
+  - export PATH=/opt/ghc/$GHC/bin:/opt/cabal/$CABAL/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.5/bin:$PATH
 
-    - echo "Installing CUDA library"
-    - travis_retry wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1204/x86_64/cuda-repo-ubuntu1204_${CUDA}_amd64.deb
-    - travis_retry sudo dpkg -i cuda-repo-ubuntu1204_${CUDA}_amd64.deb
-    - travis_retry sudo apt-get update -qq
-    - export CUDA_APT=${CUDA%-*}
-    - export CUDA_APT=${CUDA_APT/./-}
-    - travis_retry sudo apt-get install -y cuda-drivers cuda-core-${CUDA_APT} cuda-cudart-dev-${CUDA_APT}
-    - travis_retry sudo apt-get clean
-    - export CUDA_HOME=/usr/local/cuda-${CUDA%%-*}
-    - export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
-    - export PATH=${CUDA_HOME}/bin:${PATH}
+  # Fetch stack
+  - mkdir $HOME/bin
+  - export PATH=$HOME/bin:$PATH
+  - travis_retry curl -L "https://www.stackage.org/stack/linux-x86_64" | gunzip | tar -x
+  - mv stack-*/stack $HOME/bin
+  - ln -s stack-${GHC%.*}.yaml stack.yaml
+  - travis_retry stack setup
+  - |
+      if [ ${GHC%.*} == 7.8 ]; then
+        # required to install the 'cuda' package
+        travis_retry sudo env PATH=$PATH stack setup --upgrade-cabal || exit 1
+        # GCE workers doesn't have enough space in /tmp to install ghc locally
+        # via stack, so we need to install via apt and then --upgrade-cabal
+        # using 'sudo'. This fixes the resulting permissions.
+        sudo chown -R $USER:$USER $HOME/.stack || exit 1
+      fi
+
+  # Fetch CUDA
+  - travis_retry wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1204/x86_64/cuda-repo-ubuntu1204_${CUDA}_amd64.deb
+  - travis_retry sudo dpkg -i cuda-repo-ubuntu1204_${CUDA}_amd64.deb
+  - travis_retry sudo apt-get update -qq
+  - export CUDA_APT=${CUDA%-*}
+  - export CUDA_APT=${CUDA_APT/./-}
+  - travis_retry sudo apt-get install -y cuda-drivers cuda-core-${CUDA_APT} cuda-cudart-dev-${CUDA_APT}
+  - travis_retry sudo apt-get clean
+  - export CUDA_HOME=/usr/local/cuda-${CUDA%%-*}
+  - export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+  - export PATH=${CUDA_HOME}/bin:${PATH}
 
 install:
-    - ghc --version
-    - cabal --version
-    - cabal install --only-dependencies --enable-tests ${MODE} . deps/*
-    - cabal install deps/*
+  - echo "$(stack exec ghc -- --version) [$(stack exec ghc -- --print-project-git-commit-id 2> /dev/null || echo '?')]"
+  - stack --version
+  - opt --version; true
+  - llc --version; true
+  - travis_retry stack build --only-dependencies --no-terminal --no-haddock-deps -j2
 
 script:
-    # Check the build
-    - cabal configure -v2 -flib-Werror ${MODE}
-    - cabal build
-    - cabal haddock
-#    - cabal test --show-details=always
+  - stack build --no-terminal --haddock --no-haddock-deps
 
-    # Check the source distribution can be generated, built, and installed
-    - cabal sdist
-    - |
-        export SRC_TGZ=$(cabal info . | awk '{print $2 ".tar.gz";exit}')
-        cd dist
-        if [ -f "$SRC_TGZ" ]; then
-            cabal install --force-reinstalls ${MODE} ${SRC_TGZ}
-        else
-            echo "'$SRC_TGZ': not found"
-            exit 1
-        fi
-
-after_failure:
-    - dmesg
-    - ls -R /usr/local/cuda*
+notifications:
+  slack:
+    rooms:
+      secure: "N8mahSWD81vtVqTB/xYMmCt27JO3hEz3AvnH5QaAhCLJkDmO/6Ijt6014sDEJ2s4TgW8+2jkP89cPqU7i/rzYZoVVwY9oyUq7rP6LkSdZ3rJ/fv1Yud/bTRFUAMxw13l/kV8SIFBh8UHYLlz2Hw/KRNPhTo1fFUrkrLlyLCR4Cg="
 
