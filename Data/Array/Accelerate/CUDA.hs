@@ -187,7 +187,7 @@ module Data.Array.Accelerate.CUDA (
 
   -- * Synchronous execution
   run, run1, runWith, run1With,
-  stream, streamOut, streamWith, streamOutWith,
+  -- stream, streamOut, streamWith, streamOutWith,
 
   -- * Asynchronous execution
   Async, wait, poll, cancel,
@@ -207,7 +207,7 @@ import System.IO.Unsafe
 import Prelude
 
 -- friends
-import Data.Array.Accelerate                            ( mapSeq, streamIn )
+-- import Data.Array.Accelerate                            ( mapSeq, streamIn )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
 import Data.Array.Accelerate.Smart                      ( Acc, Seq )
 import Data.Array.Accelerate.Async
@@ -342,42 +342,42 @@ run1AsyncWith ctx f = \a -> unsafePerformIO $ asyncBound (execute a)
 --      returned closure shortcuts directly to the execution phase.
 
 
--- | Stream a lazily read list of input arrays through the given program,
---   collecting results as we go.
+-- -- | Stream a lazily read list of input arrays through the given program,
+-- --   collecting results as we go.
+-- --
+-- stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
+-- stream f arrs
+--   = unsafePerformIO
+--   $ evaluate (streamWith defaultContext f arrs)
 --
-stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
-stream f arrs
-  = unsafePerformIO
-  $ evaluate (streamWith defaultContext f arrs)
-
--- | As 'stream', but execute in the specified context.
+-- -- | As 'stream', but execute in the specified context.
+-- --
+-- streamWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
+-- streamWith ctx f
+--   = streamOutWith ctx . mapSeq f . streamIn
 --
-streamWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
-streamWith ctx f
-  = streamOutWith ctx . mapSeq f . streamIn
-
--- | Generate a lazy list from a sequence computation.
+-- -- | Generate a lazy list from a sequence computation.
+-- --
+-- streamOut :: Arrays a => Seq [a] -> [a]
+-- streamOut = streamOutWith defaultContext
 --
-streamOut :: Arrays a => Seq [a] -> [a]
-streamOut = streamOutWith defaultContext
-
-streamOutWith :: forall a. Arrays a => Context -> Seq [a] -> [a]
-streamOutWith ctx = exec . compile . convertSeq
-  where
-    compile     = unsafePerformIO . evalCUDA ctx . compileSeq
-    exec s      = go (streamSeq s)
-      where
-        go !s' = case step s' of
-          Nothing       -> []
-          Just (a, s'') -> a ++ go s''
-
-        step (StreamSeq ss)
-          = unsafePerformIO
-          $ evalCUDA ctx
-          $ do m <- ss
-               case m of
-                 Nothing      -> return Nothing
-                 Just (a, s') -> mapM collect a >> return (Just (a, s'))
+-- streamOutWith :: forall a. Arrays a => Context -> Seq [a] -> [a]
+-- streamOutWith ctx = exec . compile . convertSeq
+--   where
+--     compile     = unsafePerformIO . evalCUDA ctx . compileSeq
+--     exec s      = go (streamSeq s)
+--       where
+--         go !s' = case step s' of
+--           Nothing       -> []
+--           Just (a, s'') -> a ++ go s''
+--
+--         step (StreamSeq ss)
+--           = unsafePerformIO
+--           $ evalCUDA ctx
+--           $ do m <- ss
+--                case m of
+--                  Nothing      -> return Nothing
+--                  Just (a, s') -> mapM collect a >> return (Just (a, s'))
 
 
 -- RCE: Similar to run1* variants, we need to be ultra careful with streamOut*
@@ -447,4 +447,3 @@ performGC = performGCWith defaultContext
 
 performGCWith :: Context -> IO ()
 performGCWith !ctx = evalCUDA ctx cleanupArrayData
-

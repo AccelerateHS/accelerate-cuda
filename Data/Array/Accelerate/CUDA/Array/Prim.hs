@@ -26,7 +26,9 @@ module Data.Array.Accelerate.CUDA.Array.Prim (
   useArray,  useArrayAsync, useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, pokeCopyArgs, pokeCopyArgsAsync,
+  pokeArray, pokeArrayAsync,
+  pokeSubarray1D, pokeSubarray1DAsync,
+  pokeSubarray2D, pokeSubarray2DAsync,
   marshalDevicePtrs, marshalArrayData, marshalTextureData,
   withDevicePtrs, advancePtrsOfArrayData
 
@@ -53,7 +55,6 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime                   ( withLifetime )
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc(..), blocksOf )
 import Data.Array.Accelerate.CUDA.Array.Remote
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
 
@@ -367,80 +368,97 @@ pokeArrayAsync !ctx !mt !ad !n !st =
       CUDA.pokeArrayAsync n (CUDA.HostPtr $ ptrsOfArrayData ad) dst st
 
 
-pokeCopyArgs
+pokeSubarray1D
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
     => Context
     -> MemoryTable
-    -> CopyArgs
     -> ArrayData e
     -> ArrayData e
+    -> Int           --Starting index
+    -> Int           --Size of subarray
     -> IO ()
-pokeCopyArgs !ctx !mt CopyArgs{..}  !ad_host !ad_dev =
-  let !bytes = sizeOf (undefined :: a)
-  in
-  withDevicePtrs ctx mt ad_dev Nothing $ \dst ->
-    mapM_
-      (\ Memcpy2Dargs{..} ->
-        if height == 1
-          then do
-          transfer "pokeCopyArgs (1D): " (width * bytes) $
-            CUDA.pokeArray
-              width
-              (plusPtr (ptrsOfArrayData ad_host) (bytes * (srcX + srcY * srcPitch)))
-              (advancePtrsOfArrayData (offset + dstX + dstY * dstPitch) ad_dev dst)
-          else
-          transfer "pokeCopyArgs (2D): " (width * height * bytes) $
-            CUDA.pokeArray2D
-              width
-              height
-              (ptrsOfArrayData ad_host)
-              srcPitch
-              srcX
-              srcY
-              (advancePtrsOfArrayData offset ad_dev dst)
-              dstPitch
-              dstX
-              dstY
-      ) memcpy2Dargs
+pokeSubarray1D !ctx !mt !super !sub !start !width =
+  let bytes = sizeOf (undefined :: a)
+  in withDevicePtrs ctx mt sub Nothing $ \dst ->
+      transfer "pokeSubarray1D: " (width*bytes) $
+        CUDA.pokeArray
+          width
+          (plusPtr (ptrsOfArrayData super) (bytes * start))
+          dst
 
-pokeCopyArgsAsync
+pokeSubarray1DAsync
     :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
     => Context
     -> MemoryTable
-    -> CopyArgs
     -> ArrayData e
     -> ArrayData e
+    -> Int                -- Starting index
+    -> Int                -- Size of subarray
     -> Maybe CUDA.Stream
     -> IO ()
-pokeCopyArgsAsync !ctx !mt CopyArgs{..}  !ad_host !ad_dev !ms =
-  let !bytes = sizeOf (undefined :: a)
-  in
-  withDevicePtrs ctx mt ad_dev ms $ \dst ->
-    mapM_
-      (\ Memcpy2Dargs{..} ->
-        if height == 1
-          then
-          transfer "pokeCopyArgsAsync (1D): " (width * bytes) $
-            CUDA.pokeArrayAsync
-              width
-              (CUDA.HostPtr (plusPtr (ptrsOfArrayData ad_host) (bytes * (srcX + srcY * srcPitch))))
-              (advancePtrsOfArrayData (offset + dstX + dstY * dstPitch) ad_dev dst)
-              ms
-          else
-          transfer "pokeCopyArgsAsync (2D): " (width * height * bytes) $
-            CUDA.pokeArray2DAsync
-              width
-              height
-              (CUDA.HostPtr (ptrsOfArrayData ad_host))
-              srcPitch
-              srcX
-              srcY
-              (advancePtrsOfArrayData offset ad_dev dst)
-              dstPitch
-              dstX
-              dstY
-              ms
-      ) memcpy2Dargs
+pokeSubarray1DAsync !ctx !mt !super !sub !start !width !st =
+  let bytes = sizeOf (undefined :: a)
+  in withDevicePtrs ctx mt sub st $ \dst ->
+      transfer "pokeSubarray1D: " (width*bytes) $
+        CUDA.pokeArrayAsync
+          width
+          (CUDA.HostPtr (plusPtr (ptrsOfArrayData super) (bytes * start)))
+          dst st
+
+
+pokeSubarray2D
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> ArrayData e
+    -> ArrayData e
+    -> Int           --Width of super-array
+    -> (Int, Int)    --Starting index
+    -> (Int, Int)    --Size of subarray
+    -> IO ()
+pokeSubarray2D !ctx !mt !super !sub !pitch (!y, !x) (!height, !width) =
+  let bytes = sizeOf (undefined :: a)
+  in withDevicePtrs ctx mt sub Nothing $ \dst ->
+      transfer "pokeSubarray2D: " (width*height*bytes) $
+        CUDA.pokeArray2D
+          width
+          height
+          (ptrsOfArrayData super)
+          pitch
+          x
+          y
+          dst
+          width
+          0
+          0
+
+pokeSubarray2DAsync
+    :: forall e a. (ArrayElt e, ArrayPtrs e ~ Ptr a, DevicePtrs e ~ CUDA.DevicePtr a, Typeable e, Typeable a, Storable a)
+    => Context
+    -> MemoryTable
+    -> ArrayData e
+    -> ArrayData e
+    -> Int                -- Width of super-array
+    -> (Int, Int)         -- Starting index
+    -> (Int, Int)         -- Size of subarray
+    -> Maybe CUDA.Stream
+    -> IO ()
+pokeSubarray2DAsync !ctx !mt !super !sub !pitch (!y, !x) (!height, !width) !st =
+  let bytes = sizeOf (undefined :: a)
+  in withDevicePtrs ctx mt sub st $ \dst ->
+      transfer "pokeSubarray2D: " (width*height*bytes) $
+        CUDA.pokeArray2DAsync
+          width
+          height
+          (CUDA.HostPtr (ptrsOfArrayData super))
+          pitch
+          x
+          y
+          dst
+          width
+          0
+          0
+          st
 
 
 -- Marshal device pointers to arguments that can be passed to kernel invocation

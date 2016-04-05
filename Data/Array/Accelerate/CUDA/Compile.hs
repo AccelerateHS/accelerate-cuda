@@ -19,7 +19,7 @@
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
-  compileAcc, compileAfun, compileSeq
+  compileAcc, compileAfun,
 
 ) where
 
@@ -52,7 +52,6 @@ import Data.List                                                ( intercalate )
 import Data.Bits
 import Data.Maybe
 import Data.Monoid
-import Data.Traversable                                         ( sequence )
 import System.Directory
 import System.Exit                                              ( ExitCode(..) )
 import System.FilePath
@@ -139,6 +138,7 @@ compileOpenAcc = traverseAcc
         -- Array injection
         Unit e                  -> node =<< liftA  Unit         <$> travE e
         Use arrs                -> use (arrays (undefined::arrs)) arrs >> node (pure $ Use arrs)
+        Subarray ix sh arr      -> node =<< liftA3 Subarray     <$> travE ix <*> travE sh <*> pure (pure arr)
 
         -- Index space transforms
         Reshape s a             -> node =<< liftA2 Reshape              <$> travE s <*> travA a
@@ -169,7 +169,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Collect l               -> ExecSeq l <$> compileOpenSeq l
+        Collect s cs            -> node . pure =<< Collect              <$> travS s <*> mapM travS cs
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -208,6 +208,10 @@ compileOpenAcc = traverseAcc
         travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
         travF (Body b)  = liftA Body <$> travE b
         travF (Lam  f)  = liftA Lam  <$> travF f
+
+        travS :: PreOpenSeq index DelayedOpenAcc aenv a
+               -> CIO (PreOpenSeq index ExecOpenAcc aenv a)
+        travS = compileOpenSeq
 
         noKernel :: FL.FullList () (AccKernel a)
         noKernel =  FL.FL () ($internalError "compile" "no kernel module for this node") FL.Nil
@@ -250,10 +254,11 @@ compileOpenExp exp =
     IndexHead h             -> liftA  IndexHead             <$> travE h
     IndexTail t             -> liftA  IndexTail             <$> travE t
     IndexTrans s            -> liftA  IndexTrans            <$> travE s
-    IndexSlice slix x s     -> liftA2 (IndexSlice slix)     <$> travE x <*> travE s
+    IndexSlice slix x s     -> liftA  (IndexSlice slix x)   <$> travE s
     IndexFull slix x s      -> liftA2 (IndexFull slix)      <$> travE x <*> travE s
     ToIndex s i             -> liftA2 ToIndex               <$> travE s <*> travE i
     FromIndex s i           -> liftA2 FromIndex             <$> travE s <*> travE i
+    ToSlice x sh i          -> liftA2 (ToSlice x)           <$> travE sh <*> travE i
     Tuple t                 -> liftA  Tuple                 <$> travT t
     Prj ix e                -> liftA  (Prj ix)              <$> travE e
     Cond p t e              -> liftA3 Cond                  <$> travE p <*> travE t <*> travE e
@@ -326,162 +331,41 @@ compileOpenExp exp =
     bind (ExecAcc _ _ (Avar ix)) = freevar ix
     bind (ExecAcc _ _ acc      ) = $internalError "bind" ("expected array variable. Got: " ++ showPreAccOp acc)
     bind (EmbedAcc _ )           = $internalError "bind" "expected array variable. Got EmbedAcc"
-    bind (ExecSeq _ _)           = $internalError "bind" "expected array variable. Got ExecSeq"
 
-compileSeq :: DelayedSeq a -> CIO (ExecSeq a)
-compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> pure s <*> compileOpenSeq s
+compileOpenSeq :: forall index aenv arrs' . PreOpenSeq index DelayedOpenAcc aenv arrs' -> CIO (PreOpenSeq index ExecOpenAcc aenv arrs')
+compileOpenSeq s =
+  case s of
+    Producer   p s' -> Producer <$> compileP p <*> compileOpenSeq s'
+    Consumer   c    -> Consumer <$> compileC c
+    Reify a         -> Reify <$> compileOpenAcc a
   where
-    compileExtend :: Extend DelayedOpenAcc aenv aenv' -> CIO (Extend ExecOpenAcc aenv aenv')
-    compileExtend BaseEnv       = return BaseEnv
-    compileExtend (PushEnv e a) = PushEnv <$> compileExtend e <*> compileOpenAcc a
-
-compileOpenSeq :: forall aenv lenv arrs' . PreOpenSeq DelayedOpenAcc aenv lenv arrs' -> CIO (ExecOpenSeq aenv lenv arrs')
-compileOpenSeq l =
-  case l of
-    Producer   p l' -> ExecP <$> compileP p <*> compileOpenSeq l'
-    Consumer   c    -> ExecC <$> compileC c
-    Reify mf x      ->
-      case mf of
-        Nothing ->
-          return $ ExecR Nothing x
-        Just f -> do
-          f' <- compileOpenAfun f
-          return $ ExecR (Just f') x
-  where
-    -- Zipper that assumes same-shape args. Generate is used over
-    -- ZipWith because ZipWith results in an "unexpected fusible
-    -- material" from Codegen.
-    zipper :: (Shape sh, Elt e) => DelayedFun aenv (e -> e -> e) -> DelayedOpenAfun aenv (Array sh e -> Array sh e -> Array sh e)
-    zipper (Lam (Lam (Body body))) = Alam $ Alam $ Abody $ Manifest $
-      (Generate (Shape x))
-      (Lam $ Body $ Let (Index x ix) (Let (weakenE SuccIdx (Index y ix)) body'))
-      where
-        body' = weaken (SuccIdx . SuccIdx) $ weakenE k body
-        k :: Idx (((), t3), t3) t' -> Idx ((((), sh), t3), t3) t'
-        k ZeroIdx = ZeroIdx
-        k (SuccIdx ZeroIdx) = SuccIdx ZeroIdx
-        k (SuccIdx (SuccIdx idx)) = SuccIdx (SuccIdx (SuccIdx idx))
-        ix = Var ZeroIdx
-        x = Manifest $ Avar ZeroIdx
-        y = Manifest $ Avar (SuccIdx ZeroIdx)
-    zipper _ = error "unreachable"
-
-    compileP :: forall a. Producer DelayedOpenAcc aenv lenv a -> CIO (ExecP aenv lenv a)
+    compileP :: forall a. Producer index DelayedOpenAcc aenv a -> CIO (Producer index ExecOpenAcc aenv a)
     compileP p =
       case p of
-        ToSeq mf slix slixproxy acc -> do
-          dev <- asks deviceProperties
-          f' <-
-            case mf of
-              Just f -> Just <$> compileOpenAfun f
-              Nothing -> return Nothing
-          arg <-
-                case acc of
-                  Delayed{} -> do
-                    (free1, EmbedAcc sh) <- travA acc
-                    let gamma = makeEnvMap free1
-                    kernel <- build1 (Manifest $ Generate undefined undefined) (codegenToSeq slix dev acc gamma)
-                    return $ Right (sh, kernel, gamma)
-                  -- In the case of converting an array that has not already been copied
-                  -- to device memory, we are smart and treat it specially.
-                  Manifest (Use a) -> do
-                    liftIO (D.traceIO D.verbose $ "toSeq (use arr): Copying slices lazily..")
-                    let (p3,p5,p7,p9) = codegenUseLazyPerms dev
-                    kp3 <- build1 (Manifest $ Generate undefined undefined) p3
-                    kp5 <- build1 (Manifest $ Generate undefined undefined) p5
-                    kp7 <- build1 (Manifest $ Generate undefined undefined) p7
-                    kp9 <- build1 (Manifest $ Generate undefined undefined) p9
-                    return $ Left (toArr a, kp3, kp5, kp7, kp9)
-                  Manifest _ -> error "unexpected non-use in ToSeq"
-          return $! ExecToSeq f' slix slixproxy arg
-        StreamIn xs -> return $ ExecStreamIn xs
-        MapSeq f mg x -> do
-          f' <- compileOpenAfun f
-          g' <- case mg of
-                  Nothing -> return Nothing
-                  Just g  -> Just <$> compileOpenAfun g
-          return $ ExecMap f' g' x
-        ZipWithSeq f mg x y -> do
-          f' <- compileOpenAfun f
-          g' <- case mg of
-                  Nothing -> return Nothing
-                  Just g  -> Just <$> compileOpenAfun g
-          return $ ExecZipWith f' g' x y
-        GeneralMapSeq pre a a' -> do
-          pre' <- compilePre pre
-          a0 <- compileOpenAcc a
-          a0' <- case a' of
-                      Nothing -> return Nothing
-                      Just x  -> Just <$> compileOpenAcc x
-          return $ ExecGeneralMapSeq pre' a0 a0'
+        Pull xs            -> return $ Pull xs
+        ProduceAccum l f a -> ProduceAccum <$> travL l <*> travAF f <*> travA a
+        _                  -> $internalError "compileOpenSeq" "Syntax is at the wrong stage"
 
-        ScanSeq f e0 x ->  do
-          (_, e0') <- travE e0
-          let scanner = Alam $ Alam $ Abody $ Manifest $
-                        Scanl' (weaken (SuccIdx . SuccIdx) f)
-                          (Index (Manifest $ Avar (SuccIdx ZeroIdx)) IndexNil)
-                          (Delayed 
-                            (Shape (Manifest $ Avar ZeroIdx))
-                            (Lam $ Body $       Index (Manifest $ Avar ZeroIdx) (Var ZeroIdx))
-                            (Lam $ Body $ LinearIndex (Manifest $ Avar ZeroIdx) (Var ZeroIdx)))
-          zipper'  <- compileOpenAfun (zipper f)
-          scanner' <- compileOpenAfun scanner
-          return $ ExecScanSeq e0' zipper' scanner' x
-
-    compilePre :: SeqPrelude aenv senv env envReg -> CIO (ExecSeqPrelude aenv senv env envReg)
-    compilePre (SeqPrelude arrs ex ex') = do
-      arrs0 <- compileAconsts arrs
-      return (ExecSeqPrelude arrs0 ex ex')
-
-    compileAconsts :: Atuple Aconst a -> CIO (Atuple ExecAconst a)
-    compileAconsts NilAtup = return NilAtup
-    compileAconsts (SnocAtup tup a) = SnocAtup <$> compileAconsts tup <*> go a
-      where
-        go :: Aconst a -> CIO (ExecAconst a)
-        go (SliceArr slix prox arr) = do
-          liftIO (D.traceIO D.verbose $ "toSeq (use arr): Copying slices lazily..")
-          dev <- asks deviceProperties
-          let (p3,p5,p7,p9) = codegenUseLazyPerms dev
-          kp3 <- build1 (Manifest $ Generate undefined undefined) p3
-          kp5 <- build1 (Manifest $ Generate undefined undefined) p5
-          kp7 <- build1 (Manifest $ Generate undefined undefined) p7
-          kp9 <- build1 (Manifest $ Generate undefined undefined) p9
-          reg <- compileOpenAfun (Alam $ Abody $ Manifest $ Atuple $ NilAtup `SnocAtup` Manifest (Avar ZeroIdx))
-          return $ ExecSliceArr reg slix prox kp3 kp5 kp7 kp9 arr 0
-        go (ArrList as) = return (ExecArrList as)
-        go (RegArrList sh as) = return (ExecRegArrList sh as)
-
-    compileC :: forall a. Consumer DelayedOpenAcc aenv lenv a -> CIO (ExecC aenv lenv a)
+    compileC :: forall a. Consumer index DelayedOpenAcc aenv a -> CIO (Consumer index ExecOpenAcc aenv a)
     compileC c =
       case c of
-        FoldSeqFlatten cf f acc x -> do
-          acc' <- compileOpenAcc acc
-          f' <- compileOpenAfun f
-          cf' <- Data.Traversable.sequence (compileOpenAfun <$> cf)
-          return $ ExecFoldSeqFlatten cf' f' acc' x
-        FoldSeqRegular pre f a -> do
-          pre' <- compilePre pre
-          f' <- compileOpenAfun f
-          a' <- compileOpenAcc a
-          return $ ExecFoldSeqRegular pre' f' a'
-        Stuple t -> ExecStuple <$> compileCT t
+        Conclude a d -> Conclude <$> travA a <*> travA d
+        Stuple t     -> Stuple <$> compileST t
+        _            -> $internalError "compileOpenSeq" "Syntax is at the wrong stage"
 
-    compileCT :: forall t. Atuple (Consumer DelayedOpenAcc aenv lenv) t -> CIO (Atuple (ExecC aenv lenv) t)
-    compileCT NilAtup        = return NilAtup
-    compileCT (SnocAtup t c) = SnocAtup <$> compileCT t <*> compileC c
+    compileST :: forall t. Atuple (PreOpenSeq index DelayedOpenAcc aenv) t -> CIO (Atuple (PreOpenSeq index ExecOpenAcc aenv) t)
+    compileST NilAtup        = return NilAtup
+    compileST (SnocAtup t c) = SnocAtup <$> compileST t <*> compileOpenSeq c
 
-    travA :: DelayedOpenAcc aenv a -> CIO (Free aenv, ExecOpenAcc aenv a)
-    travA acc = case acc of
-      Manifest{}    -> pure                    <$> compileOpenAcc acc
-      Delayed{..}   -> liftA2 (const EmbedAcc) <$> travF indexD <*> travE extentD
+    travA :: DelayedOpenAcc aenv a -> CIO (ExecOpenAcc aenv a)
+    travA = compileOpenAcc
 
-    travE :: DelayedOpenExp env aenv e
-          -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
-    travE = compileOpenExp
+    travL :: Maybe (DelayedOpenExp env aenv Int)
+          -> CIO (Maybe (PreOpenExp ExecOpenAcc env aenv Int))
+    travL l = fmap snd <$> mapM compileOpenExp l
 
-    travF :: DelayedOpenFun env aenv t -> CIO (Free aenv, PreOpenFun ExecOpenAcc env aenv t)
-    travF (Body b)  = liftA Body <$> travE b
-    travF (Lam  f)  = liftA Lam  <$> travF f
+    travAF :: DelayedOpenAfun aenv t -> CIO (PreOpenAfun ExecOpenAcc aenv t)
+    travAF = compileOpenAfun
 
 -- Applicative
 -- -----------

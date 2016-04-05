@@ -27,7 +27,9 @@ module Data.Array.Accelerate.CUDA.Array.Data (
   useDevicePtrs,
   copyArray, copyArrayAsync, copyArrayPeer, copyArrayPeerAsync,
   peekArray, peekArrayAsync,
-  pokeArray, pokeArrayAsync, pokeCopyArgs, pokeCopyArgsAsync,
+  pokeArray, pokeArrayAsync,
+  pokeSubarray1D, pokeSubarray1DAsync,
+  pokeSubarray2D, pokeSubarray2DAsync,
   marshalArrayData, marshalTextureData, marshalDevicePtrs,
   withDevicePtrs, advancePtrsOfArrayData,
   devicePtrsFromList, devicePtrsToWordPtrs,
@@ -52,10 +54,9 @@ import qualified Prelude                                as P
 -- friends
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Array.Data
-import Data.Array.Accelerate.Array.Sugar                ( Array(..), Shape, Elt, toElt, EltRepr )
+import Data.Array.Accelerate.Array.Sugar                ( Array(..), Vector, DIM2, Shape, Elt, toElt, EltRepr )
 import Data.Array.Accelerate.Array.Representation       ( size )
 import Data.Array.Accelerate.CUDA.State
-import Data.Array.Accelerate.CUDA.Array.Slice           ( TransferDesc, transferDesc )
 import Data.Array.Accelerate.CUDA.Array.Remote
 import Data.Array.Accelerate.CUDA.Persistent            ( KernelTable )
 import Data.Array.Accelerate.CUDA.Execute.Event         ( EventTable )
@@ -415,42 +416,80 @@ pokeArrayAsync (Array !sh !adata) !ms = run doPoke
         mkPrimDispatch(pokePrim,Prim.pokeArrayAsync)
 
 
--- Copy data from an Accelerate array into the associated device array of a different array.
+-- Copy subarray from the host side data of another (1D)
 --
-pokeCopyArgs :: Elt e
-           => CopyArgs
-           -> Array dim  e
-           -> Array dim' e 
+pokeSubarray1D :: Elt e
+           => Vector e
+           -> Vector e
+           -> Int
            -> CIO ()
-pokeCopyArgs args (Array _ !adata) (Array _ !adata') = run doPoke
+pokeSubarray1D (Array _ !adata) (Array !sh !adata') !start = run doPoke
   where
     doPoke !ctx !mt = pokeR arrayElt adata adata'
       where
         pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
         pokeR ArrayEltRunit             _  _   = return ()
         pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
-        pokeR aer                       ad ad' = pokePrim aer ctx mt args ad ad'
+        pokeR aer                       ad ad' = pokePrim aer ctx mt ad ad' start (size sh)
         --
-        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> CopyArgs -> ArrayData e -> ArrayData e -> IO ()
-        mkPrimDispatch(pokePrim,Prim.pokeCopyArgs)
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> Int -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeSubarray1D)
 
-pokeCopyArgsAsync :: Elt e
-           => CopyArgs
-           -> Array dim  e
-           -> Array dim' e 
+pokeSubarray1DAsync :: Elt e
+           => Vector e
+           -> Vector e
+           -> Int
            -> Maybe CUDA.Stream
            -> CIO ()
-pokeCopyArgsAsync args (Array _ !adata) (Array _ !adata') ms = run doPoke
+pokeSubarray1DAsync (Array _ !adata) (Array !sh !adata') !start !ms = run doPoke
   where
     doPoke !ctx !mt = pokeR arrayElt adata adata'
       where
         pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
         pokeR ArrayEltRunit             _  _   = return ()
         pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
-        pokeR aer                       ad ad' = pokePrim aer ctx mt args ad ad' ms
+        pokeR aer                       ad ad' = pokePrim aer ctx mt ad ad' start (size sh) ms
         --
-        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> CopyArgs -> ArrayData e -> ArrayData e -> Maybe CUDA.Stream -> IO ()
-        mkPrimDispatch(pokePrim,Prim.pokeCopyArgsAsync)
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> Int -> Maybe CUDA.Stream -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeSubarray1DAsync)
+
+
+-- Copy subarray from the host side data of another (2D)
+--
+pokeSubarray2D :: Elt e
+               => Array DIM2 e
+               -> Array DIM2 e
+               -> (Int, Int)
+               -> CIO ()
+pokeSubarray2D (Array (((),_),!pitch) !adata) (Array (((),!height),!width) !adata') (!y, !x) = run doPoke
+  where
+    doPoke !ctx !mt = pokeR arrayElt adata adata'
+      where
+        pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        pokeR ArrayEltRunit             _  _   = return ()
+        pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
+        pokeR aer                       ad ad' = pokePrim aer ctx mt ad ad' pitch (y, x) (height, width)
+        --
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> (Int, Int) -> (Int, Int) -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeSubarray2D)
+
+pokeSubarray2DAsync :: Elt e
+                    => Array DIM2 e
+                    -> Array DIM2 e
+                    -> (Int, Int)
+                    -> Maybe CUDA.Stream
+                    -> CIO ()
+pokeSubarray2DAsync (Array (((),_),!pitch) !adata) (Array (((),!height),!width) !adata') (!y, !x) !ms = run doPoke
+  where
+    doPoke !ctx !mt = pokeR arrayElt adata adata'
+      where
+        pokeR :: ArrayEltR e -> ArrayData e -> ArrayData e -> IO ()
+        pokeR ArrayEltRunit             _  _   = return ()
+        pokeR (ArrayEltRpair aeR1 aeR2) ad ad' = pokeR aeR1 (fst ad) (fst ad') >> pokeR aeR2 (snd ad) (snd ad')
+        pokeR aer                       ad ad' = pokePrim aer ctx mt ad ad' pitch (y, x) (height, width) ms
+        --
+        pokePrim :: ArrayEltR e -> Context -> MemoryTable -> ArrayData e -> ArrayData e -> Int -> (Int, Int) -> (Int, Int) -> Maybe CUDA.Stream -> IO ()
+        mkPrimDispatch(pokePrim,Prim.pokeSubarray2DAsync)
 
 
 -- |Convert the device pointers into a list of word pointers
@@ -554,4 +593,3 @@ advancePtrsOfArrayData !adata !n = advanceR arrayElt adata
     --
     advancePrim :: ArrayEltR e -> ArrayData e -> Prim.DevicePtrs e -> Prim.DevicePtrs e
     mkPrimDispatch(advancePrim,Prim.advancePtrsOfArrayData n)
-

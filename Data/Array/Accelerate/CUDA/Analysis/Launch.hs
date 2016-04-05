@@ -143,9 +143,11 @@ sharedMem _ Awhile{}   _ = $internalError "sharedMem" "Awhile"
 sharedMem _ Atuple{}   _ = $internalError "sharedMem" "Atuple"
 sharedMem _ Aprj{}     _ = $internalError "sharedMem" "Aprj"
 sharedMem _ Use{}      _ = $internalError "sharedMem" "Use"
+sharedMem _ Subarray{} _ = $internalError "sharedMem" "Subarray"
 sharedMem _ Unit{}     _ = $internalError "sharedMem" "Unit"
 sharedMem _ Reshape{}  _ = $internalError "sharedMem" "Reshape"
 sharedMem _ Aforeign{} _ = $internalError "sharedMem" "Aforeign"
+sharedMem _ Collect{}  _ = $internalError "sharedMem" "Collect"
 
 -- skeleton nodes
 sharedMem _ Generate{}          _        = 0
@@ -170,5 +172,3 @@ sharedMem p (FoldSeg _ x _ _)   blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedExpType x)  -- TLM: why 8? I can't remember...
 sharedMem p (Fold1Seg _ a _) blockDim =
   (blockDim `div` CUDA.warpSize p) * 8 + blockDim * sizeOf (delayedAccType a)
-sharedMem _ (Collect _)         _        = 0
-

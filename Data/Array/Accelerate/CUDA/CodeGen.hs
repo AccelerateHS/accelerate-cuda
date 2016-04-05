@@ -21,7 +21,7 @@
 
 module Data.Array.Accelerate.CUDA.CodeGen (
 
-  CUTranslSkel, codegenAcc, codegenToSeq, codegenInplaceUpdate, codegenUseLazyPerms,
+  CUTranslSkel, codegenAcc,
 
 ) where
 
@@ -40,12 +40,10 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Product
 import Data.Array.Accelerate.Trafo
-import Data.Array.Accelerate.Pretty                             ()
+import Data.Array.Accelerate.Pretty                             ( prettyPrim )
 import Data.Array.Accelerate.Analysis.Shape
-import Data.Array.Accelerate.CUDA.Array.Slice
-import Data.Array.Accelerate.Array.Sugar                        ( Array, Vector, Shape, Elt, EltRepr
-                                                                , Tuple(..), TupleRepr 
-                                                                , DIM3, DIM5, DIM7, DIM9)
+import Data.Array.Accelerate.Array.Sugar                        ( Array, Shape, Elt, EltRepr
+                                                                , Tuple(..), TupleRepr )
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import qualified Data.Array.Accelerate.Array.Sugar              as Sugar
 import qualified Data.Array.Accelerate.Analysis.Type            as Sugar
@@ -60,7 +58,6 @@ import Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
 import Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 import Data.Array.Accelerate.CUDA.CodeGen.Reduction
 import Data.Array.Accelerate.CUDA.CodeGen.Stencil
-import Data.Array.Accelerate.CUDA.CodeGen.Streaming
 import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteExp )
 import qualified Data.Array.Accelerate.CUDA.CodeGen.Arithmetic  as A
 
@@ -120,7 +117,7 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
       -- Sequence collection
-      Collect _                 -> unexpectedError
+      Collect _ _               -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -131,6 +128,7 @@ codegenAcc dev (Manifest pacc) aenv
       Atuple{}                  -> unexpectedError
       Aprj{}                    -> unexpectedError
       Use{}                     -> unexpectedError
+      Subarray{}                -> unexpectedError
       Unit{}                    -> unexpectedError
       Aforeign{}                -> unexpectedError
       Reshape{}                 -> unexpectedError
@@ -181,96 +179,6 @@ codegen cuda =
         CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
   in
   map addTo skeletons
-
-
-codegenUseLazyPerms :: forall e. Elt e 
-                    => DeviceProperties ->
-  ( CUTranslSkel ((), Array DIM3 e) (Array DIM3 e)
-  , CUTranslSkel ((), Array DIM5 e) (Array DIM5 e)
-  , CUTranslSkel ((), Array DIM7 e) (Array DIM7 e)
-  , CUTranslSkel ((), Array DIM9 e) (Array DIM9 e)
-  )
-codegenUseLazyPerms dev =
-  ( codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P3) <$> travF1 id <*> dacc)
-  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P5) <$> travF1 id <*> dacc)
-  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P7) <$> travF1 id <*> dacc)
-  , codegen $ head <$> (mkTransform dev aenv (p . snd $ reifyP P9) <$> travF1 id <*> dacc)
-  )
-  where
-    codegen :: CUDA (CUTranslSkel aenv a) -> CUTranslSkel aenv a
-    codegen cuda =
-      let (skeleton, st)                 = runCUDA cuda
-          addTo (CUTranslSkel name code) =
-            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
-      in
-      addTo skeleton
-
-    id :: Elt a => DelayedFun aenv (a -> a)
-    id = Lam (Body (Var ZeroIdx))
-      
-    p :: Shape sh => (forall x. [x] -> [x]) -> CUFun1 ((), Array sh e) (sh -> sh)
-    p f = CUFun1 (zip (repeat True)) ((,) [] . map rvalue . f)
-
-    travF1 :: Shape sh => DelayedFun ((), Array sh e) (a -> b) -> CUDA (CUFun1 ((), Array sh e) (a -> b))
-    travF1 = codegenFun1 dev aenv
-    
-    travE :: Shape sh => DelayedExp ((), Array sh e) t -> CUDA (CUExp ((), Array sh e) t)
-    travE = codegenExp dev aenv
-    
-    dacc :: Shape sh => CUDA (CUDelayedAcc ((), Array sh e) sh e)
-    dacc = CUDelayed <$> travE  (Shape a)
-                     <*> travF1 (Lam $ Body $       Index a (Var ZeroIdx))
-                     <*> travF1 (Lam $ Body $ LinearIndex a (Var ZeroIdx))
-
-    a :: Shape sh => DelayedOpenAcc ((), Array sh e) (Array sh e)
-    a = Manifest (Avar ZeroIdx)
-                                       
-    aenv :: Shape sh => Gamma ((), Array sh e)
-    aenv = makeEnvMap (freevar ZeroIdx)
-
-codegenToSeq :: forall aenv slix sl co sh e. (Shape sl, Shape sh, Elt e)
-                => SliceIndex slix
-                              (EltRepr sl)
-                              co
-                              (EltRepr sh)
-                -> DeviceProperties
-                -> DelayedOpenAcc aenv (Array sh e)
-                -> Gamma aenv
-                -> CUTranslSkel aenv (Array (sl Sugar.:. Int) e)
-codegenToSeq slix dev acc aenv = codegen $ (mkToSeq slix dev aenv <$> travD acc)
-  where
-    codegen :: CUDA (CUTranslSkel aenv a) -> CUTranslSkel aenv a
-    codegen cuda =
-      let (skeleton, st)                 = runCUDA cuda
-          addTo (CUTranslSkel name code) =
-            CUTranslSkel name (Set.foldr (\h c -> [cedecl| $esc:("#include \"" ++ h ++ "\"") |] : c) code (headers st))
-      in
-      addTo skeleton
-
-    -- code generation for delayed arrays
-    travD :: (Shape sh, Elt e) => DelayedOpenAcc aenv (Array sh e) -> CUDA (CUDelayedAcc aenv sh e )
-    travD Manifest{}  = $internalError "codegenAcc" "expected delayed array"
-    travD Delayed{..} = CUDelayed <$> travE extentD
-                                  <*> travF1 indexD
-                                  <*> travF1 linearIndexD
-
-    travE :: forall t. DelayedExp aenv t -> CUDA (CUExp aenv t)
-    travE = codegenExp dev aenv
-
-    travF1 :: forall a b. DelayedFun aenv (a -> b) -> CUDA (CUFun1 aenv (a -> b))
-    travF1 = codegenFun1 dev aenv
-
-
-codegenInplaceUpdate :: forall aenv e. Elt e
-                     => DeviceProperties
-                     -> Gamma aenv
-                     -> DelayedFun aenv (e -> e -> e)
-                     -> CUTranslSkel aenv (Vector e)
-codegenInplaceUpdate dev aenv f =
-    head
-  $ codegen
-  $ return
-  <$> (mkInplaceUpdate dev aenv <$> codegenFun2 dev aenv f)
 
 
 -- Scalar function abstraction
@@ -433,6 +341,7 @@ codegenOpenExp dev aenv = cvtE
         IndexFull  ix slix sl   -> indexFull  ix slix sl env
         ToIndex sh ix           -> toIndex   sh ix env
         FromIndex sh ix         -> fromIndex sh ix env
+        ToSlice _ sh i          -> toSlice sh i env
 
         -- Arrays and indexing
         Index acc ix            -> index acc ix env
@@ -466,6 +375,15 @@ codegenOpenExp dev aenv = cvtE
     -- When evaluating primitive functions, we evaluate each argument to the
     -- operation as a statement expression. This is necessary to ensure proper
     -- short-circuit behaviour for logical operations.
+    --
+    -- NOTE: This is not always possible. Suppose you have:
+    --   (*) (let x = ... in (A[x],B[x]))
+    -- In such cases we do not do any short circuit evaluation.
+    --
+    -- RCE: This is an unfortunate compromise. What we should really do is make
+    -- the simplifier ensure the property that primitive functions are always of
+    -- the form
+    --  (*) (A,B)
     --
     primApp :: PrimFun (a -> b) -> DelayedOpenExp env aenv a -> Val env -> Gen [C.Exp]
     primApp f x env =
@@ -567,7 +485,10 @@ codegenOpenExp dev aenv = cvtE
           b' <- cvtE' b env
           r  <- f a' b'
           return [r]
-        binaryM _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM f ab env = do
+          [a,b] <- cvtE ab env
+          r     <- f a b
+          return [r]
 
         binaryM2 :: (C.Exp -> C.Exp -> Gen (C.Exp, C.Exp)) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
         binaryM2 f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
@@ -575,7 +496,10 @@ codegenOpenExp dev aenv = cvtE
           b'    <- cvtE' b env
           (r,s) <- f a' b'
           return [r,s]
-        binaryM2 _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM2 f ab env = do
+          [a,b] <- cvtE ab env
+          (r,s) <- f a b
+          return [r,s]
 
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
@@ -713,20 +637,20 @@ codegenOpenExp dev aenv = cvtE
     -- represented in by any C term (Any ~ [])
     --
     indexSlice :: SliceIndex (EltRepr slix) sl co (EltRepr sh)
-               -> DelayedOpenExp env aenv slix
+               -> proxy slix
                -> DelayedOpenExp env aenv sh
                -> Val env
                -> Gen [C.Exp]
-    indexSlice sliceIndex slix sh env =
-      let restrict :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
-          restrict SliceNil              _       _       = []
-          restrict (SliceAll   sliceIdx) slx     (sz:sl) = sz : restrict sliceIdx slx sl
-          restrict (SliceFixed sliceIdx) (_:slx) ( _:sl) =      restrict sliceIdx slx sl
-          restrict _ _ _ = $internalError "IndexSlice" "unexpected shapes"
+    indexSlice sliceIndex _ sh env =
+      let restrict :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp]
+          restrict SliceNil              _       = []
+          restrict (SliceAll   sliceIdx) (sz:sl) = sz : restrict sliceIdx sl
+          restrict (SliceFixed sliceIdx) ( _:sl) =      restrict sliceIdx sl
+          restrict _ _ = $internalError "IndexSlice" "unexpected shapes"
           --
-          slice slix' sh' = reverse $ restrict sliceIndex (reverse slix') (reverse sh')
+          slice sh' = reverse $ restrict sliceIndex (reverse sh')
       in
-      slice <$> cvtE slix env <*> cvtE sh env
+      slice <$> cvtE sh env
 
     -- Extend indices based on a slice specification. In the SliceAll case we
     -- elide the presence of Any from the head of slx.
@@ -761,6 +685,18 @@ codegenOpenExp dev aenv = cvtE
       ix'   <- cvtE ix env
       tmp   <- lift fresh
       let (ls, sz) = cfromIndex sh' (single "fromIndex" ix') tmp
+      modify (\st -> st { localBindings = reverse ls ++ localBindings st })
+      return sz
+
+    toSlice :: DelayedOpenExp env aenv sh
+            -> DelayedOpenExp env aenv Int
+            -> Val env
+            -> Gen [C.Exp]
+    toSlice sh i env = do
+      sh'   <- mapM use =<< cvtE sh env
+      i'    <- cvtE i env
+      tmp   <- lift fresh
+      let (ls, sz) = ctoSlice sh' (single "toSlice" i') tmp
       modify (\st -> st { localBindings = reverse ls ++ localBindings st })
       return sz
 

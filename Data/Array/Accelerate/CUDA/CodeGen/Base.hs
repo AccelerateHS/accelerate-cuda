@@ -26,7 +26,7 @@ module Data.Array.Accelerate.CUDA.CodeGen.Base (
   Name, namesOfArray, namesOfAvar, groupOfInt,
 
   -- Declaration generation
-  cint, cvar, ccall, cchar, cintegral, cbool, cshape, cslice, csize, cindexHead, cindexTail, cindexTrans, ctoIndex, cfromIndex,
+  cint, cvar, ccall, cchar, cintegral, cbool, cshape, cslice, csize, cindexHead, cindexTail, cindexTrans, ctoIndex, cfromIndex, ctoSlice,
   readArray, writeArray, shared,
   indexArray, environment, arrayAsTex, arrayAsArg,
   umul24, gridSize, threadIdx,
@@ -208,6 +208,23 @@ cfromIndex shName ixName tmpName = fromIndex (map rvalue shName) (rvalue ixName)
   where
     fromIndex [sh]   ix = ([], [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]])
     fromIndex extent ix = let ((env, _, _), sh) = mapAccumR go ([], ix, 0) extent
+                          in  (reverse env, sh)
+
+    go (tmps,ix,n) d
+      = let tmp         = tmpName ++ '_':show (n::Int)
+            ix'         = [citem| const $ty:cint $id:tmp = $exp:ix ; |]
+        in
+        ((ix':tmps, [cexp| $id:tmp / $exp:d |], n+1), [cexp| $id:tmp % $exp:d |])
+
+-- Generate code to calculate a multi-dimensional slice index from a linear
+-- index and a given array shape. This version creates temporary values that are
+-- reused in the computation.
+--
+ctoSlice :: (Rvalue sh, Rvalue ix) => [sh] -> ix -> Name -> ([C.BlockItem], [C.Exp])
+ctoSlice shName ixName tmpName = toSlice (map rvalue shName) (rvalue ixName)
+  where
+    toSlice [sh]   ix = ([], [[cexp| ({ assert( $exp:ix >= 0 && $exp:ix < $exp:sh ); $exp:ix; }) |]])
+    toSlice extent ix = let ((env, _, _), sh) = mapAccumR go ([], ix, 0) extent
                           in  (reverse env, sh)
 
     go (tmps,ix,n) d

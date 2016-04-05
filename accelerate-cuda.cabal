@@ -124,7 +124,6 @@ Library
                         Data.Array.Accelerate.CUDA.Array.Remote
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim
-                        Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.CodeGen
                         Data.Array.Accelerate.CUDA.CodeGen.Arithmetic
@@ -137,13 +136,13 @@ Library
                         Data.Array.Accelerate.CUDA.CodeGen.Reduction
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil
                         Data.Array.Accelerate.CUDA.CodeGen.Stencil.Extra
-                        Data.Array.Accelerate.CUDA.CodeGen.Streaming
                         Data.Array.Accelerate.CUDA.CodeGen.Type
                         Data.Array.Accelerate.CUDA.Compile
                         Data.Array.Accelerate.CUDA.Context
                         Data.Array.Accelerate.CUDA.Debug
                         Data.Array.Accelerate.CUDA.Execute
                         Data.Array.Accelerate.CUDA.Execute.Event
+                        Data.Array.Accelerate.CUDA.Execute.Schedule
                         Data.Array.Accelerate.CUDA.Execute.Stream
                         Data.Array.Accelerate.CUDA.Foreign.Export
                         Data.Array.Accelerate.CUDA.Foreign.Import
@@ -178,4 +177,3 @@ Library
 source-repository head
   type:                 git
   location:             https://github.com/AccelerateHS/accelerate-cuda
-
