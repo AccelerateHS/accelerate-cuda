@@ -42,7 +42,7 @@ import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import Numeric
 import Control.Applicative                                      hiding ( Const )
 import Control.Exception
-import Control.Monad
+import Control.Monad                                            hiding ( mapM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
 import Control.Monad.Trans                                      ( liftIO, MonadIO )
@@ -68,7 +68,7 @@ import qualified Data.Text.Lazy.Encoding                        as T
 import qualified Control.Concurrent.MSem                        as Q
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
-import Prelude                                                  hiding ( exp, scanl, scanr )
+import Prelude                                                  hiding ( exp, scanl, scanr, mapM )
 
 import GHC.Conc                                                 ( getNumProcessors )
 

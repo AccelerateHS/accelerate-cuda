@@ -70,7 +70,7 @@ import Data.Monoid                                              ( mempty )
 import Data.Proxy
 import Data.Traversable                                         ( mapM )
 import Data.Word
-import Prelude                                                  hiding ( exp, sum, iterate )
+import Prelude                                                  hiding ( exp, sum, iterate, mapM )
 
 import Foreign.CUDA.Analysis.Device                             ( computeCapability, Compute(..) )
 import qualified Foreign.CUDA.Driver.Event                      as Driver
