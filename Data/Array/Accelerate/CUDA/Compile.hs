@@ -52,6 +52,7 @@ import Data.List                                                ( intercalate )
 import Data.Bits
 import Data.Maybe
 import Data.Monoid
+import Data.Traversable                                         ( mapM )
 import System.Directory
 import System.Exit                                              ( ExitCode(..) )
 import System.FilePath

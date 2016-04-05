@@ -68,6 +68,7 @@ import System.IO.Unsafe                                         ( unsafeInterlea
 import Data.Int
 import Data.Monoid                                              ( mempty )
 import Data.Proxy
+import Data.Traversable                                         ( mapM )
 import Data.Word
 import Prelude                                                  hiding ( exp, sum, iterate )
 
