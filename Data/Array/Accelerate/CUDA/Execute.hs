@@ -661,7 +661,7 @@ executeOpenSeq !sched !s !aenv !stream = do
       where
         initC :: Consumer index ExecOpenAcc aenv' a -> CIO (ExecSeq index aenv' a)
         initC (Stuple t) = Combine <$> initCT t
-        initC (Conclude a d) = Step f' () . Yield <$> executeOpenAcc d aenv stream
+        initC (Last a d) = Step f' () . Yield <$> executeOpenAcc d aenv stream
           where
             f' _ aenv () st = Just . (,()) <$> executeOpenAcc a aenv st
 

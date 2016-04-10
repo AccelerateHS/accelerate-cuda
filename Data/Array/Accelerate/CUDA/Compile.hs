@@ -51,7 +51,7 @@ import Crypto.Hash.MD5                                          ( hashlazy )
 import Data.List                                                ( intercalate )
 import Data.Bits
 import Data.Maybe
-import Data.Monoid
+import Data.Monoid                                              hiding ( Last )
 import Data.Traversable                                         ( mapM )
 import System.Directory
 import System.Exit                                              ( ExitCode(..) )
@@ -350,9 +350,9 @@ compileOpenSeq s =
     compileC :: forall a. Consumer index DelayedOpenAcc aenv a -> CIO (Consumer index ExecOpenAcc aenv a)
     compileC c =
       case c of
-        Conclude a d -> Conclude <$> travA a <*> travA d
-        Stuple t     -> Stuple <$> compileST t
-        _            -> $internalError "compileOpenSeq" "Syntax is at the wrong stage"
+        Last a d -> Last <$> travA a <*> travA d
+        Stuple t -> Stuple <$> compileST t
+        _        -> $internalError "compileOpenSeq" "Syntax is at the wrong stage"
 
     compileST :: forall t. Atuple (PreOpenSeq index DelayedOpenAcc aenv) t -> CIO (Atuple (PreOpenSeq index ExecOpenAcc aenv) t)
     compileST NilAtup        = return NilAtup
