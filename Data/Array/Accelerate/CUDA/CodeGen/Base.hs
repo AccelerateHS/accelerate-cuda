@@ -1,12 +1,17 @@
+{-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE ImpredicativeTypes    #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
+#if __GLASGOW_HASKELL__ <= 708
+{-# LANGUAGE OverlappingInstances #-}
+{-# OPTIONS_GHC -fno-warn-unrecognised-pragmas #-}
+#endif
+
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.Base
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -451,17 +456,17 @@ class Assign l r where
 instance (Lvalue l, Rvalue r) => Assign l r where
   assign lhs rhs = [ lvalue lhs (rvalue rhs) ]
 
-instance Assign l r => Assign (Bool,l) r where
+instance {-# OVERLAPS #-} Assign l r => Assign (Bool,l) r where
   assign (used,lhs) rhs
     | used      = assign lhs rhs
     | otherwise = []
 
-instance Assign l r => Assign [l] [r] where
+instance {-# OVERLAPS #-} Assign l r => Assign [l] [r] where
   assign []     []     = []
   assign (x:xs) (y:ys) = assign x y ++ assign xs ys
   assign _      _      = $internalError ".=." "argument mismatch"
 
-instance Assign l r => Assign l ([C.BlockItem], r) where
+instance {-# OVERLAPS #-} Assign l r => Assign l ([C.BlockItem], r) where
   assign lhs (env, rhs) = env ++ assign lhs rhs
 
 
