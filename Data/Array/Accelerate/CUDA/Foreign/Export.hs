@@ -265,7 +265,7 @@ buildExported hndl f = ef
 
 arrayFromForeignData :: forall sh e. (Shape sh, Elt e) => DevicePtrBuffer -> ShapeBuffer -> CIO (Array sh e)
 arrayFromForeignData ptrs shape = do
-   let d  = dim (ignore :: sh) -- Using ignore as using dim requires a non-dummy argument
+   let d  = rank (ignore :: sh) -- Using ignore as using dim requires a non-dummy argument
    let sz = eltSize (eltType (undefined :: e))
    lst <- liftIO (peekArray d shape)
    let sh = listToShape (map fromIntegral lst) :: sh
