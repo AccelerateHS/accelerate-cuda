@@ -28,7 +28,7 @@ import Data.Array.Accelerate.CUDA.CodeGen.Monad
 import Data.Array.Accelerate.CUDA.CodeGen.Type
 
 -- libraries
-import Prelude                                          ( String, Char, ($), (++), (-), undefined, otherwise )
+import Prelude                                          ( String, ($), (++), (-), undefined, otherwise )
 import Data.Bits                                        ( finiteBitSize )
 import Control.Monad.State.Strict
 import Language.C
