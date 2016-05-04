@@ -291,7 +291,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     foldCore :: (Shape sh, Elt e) => (sh :. Int) -> CIO (Array sh e)
     foldCore !(!sh :. sz)
-      | rank sh > 0              = executeOp sh
+      | rank sh > 0             = executeOp sh
       | otherwise
       = let !numElements        = size sh * sz
             (_,!numBlocks,_)    = configure kernel numElements
