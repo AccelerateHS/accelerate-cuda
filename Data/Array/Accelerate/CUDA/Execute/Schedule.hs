@@ -38,8 +38,8 @@ doubleSizeChunked = Schedule (0,1) (f 0 0 0 Nothing)
     f :: Int -> Int -> Int -> Maybe Float -> Float -> Schedule (Int, Int)
     f start logn logn' t t' =
       let logn'' = step logn logn' t t'
-          start' = start + 2^logn'
-      in Schedule (start', 2^logn'')
+          start' = start + 2^(logn' `max` 0)
+      in Schedule (start', 2^(logn'' `max` 0))
                   (f start' logn' logn'' (Just t'))
 
     step :: Int -> Int -> Maybe Float -> Float -> Int
