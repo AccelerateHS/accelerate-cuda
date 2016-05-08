@@ -616,7 +616,7 @@ instance Window Int where
   start = id
   constrain i _ = i
   showTime i t = "Computed sequence chunk " ++ show i
-              ++ " in " ++ D.showFFloatSIBase (Just 3) 1000 t "s"
+              ++ " in " ++ D.showFFloatSIBase (Just 3) 1000 (t * 1E-3) "s"
 
 -- The window into a vectorised sequence.
 --
@@ -627,9 +627,9 @@ instance Window (Int, Int) where
       then (i,n)
       else (i,max - i)
   constrain i Nothing = i
-  showTime (i,n) t = "Computed sequence chunk " ++ show i ++ "to " ++ show (i + n - 1)
-                  ++ " in " ++ D.showFFloatSIBase (Just 3) 1000 t "s" ++ " ("
-                  ++ D.showFFloatSIBase (Just 3) 1000 (t/fromIntegral n) "s" ++ " per chunk)"
+  showTime (i,n) t = "Computed sequence chunk " ++ show i ++ " to " ++ show (i + n)
+                  ++ " in " ++ D.showFFloatSIBase (Just 3) 1000 (t * 1E-3) "s" ++ " ("
+                  ++ D.showFFloatSIBase (Just 3) 1000 ((t * 1E-3)/fromIntegral n) "s" ++ " per chunk)"
 
 executeOpenSeq :: forall index aenv arrs. (Window index, Elt index)
                => Schedule index
@@ -653,6 +653,7 @@ executeOpenSeq !sched !s !aenv !stream = do
         f' l' i aenv s st | start i `lessThan` l'
                           = do
                               s' <- streaming (const (return s)) return
+                              message ("Computing element(s) with index " ++ show (constrain i l'))
                               Just <$> streaming (newArrayAsync Z (const (constrain i l')))
                                                  (\i -> executeOpenAfun2 f aenv i s' st)
                           | otherwise
