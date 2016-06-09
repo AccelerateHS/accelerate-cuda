@@ -1,0 +1,6 @@
+:set -hide-package language-c
+:set -iutils
+:set -DUNIX
+:set -DACCELERATE_DEBUG
+:set -DACCELERATE_BOUNDS_CHECKS
+:set -DACCELERATE_INTERNAL_CHECKS
