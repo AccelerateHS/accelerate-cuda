@@ -1,14 +1,14 @@
+{-# LANGUAGE BangPatterns             #-}
+{-# LANGUAGE CPP                      #-}
+{-# LANGUAGE FlexibleInstances        #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE GADTs                    #-}
+{-# LANGUAGE ImpredicativeTypes       #-}
+{-# LANGUAGE QuasiQuotes              #-}
 {-# LANGUAGE RankNTypes               #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
-{-# LANGUAGE BangPatterns             #-}
-{-# LANGUAGE GADTs                    #-}
-{-# LANGUAGE CPP                      #-}
-{-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE TemplateHaskell          #-}
-{-# LANGUAGE QuasiQuotes              #-}
 {-# LANGUAGE TypeFamilies             #-}
-{-# LANGUAGE FlexibleInstances        #-}
-{-# LANGUAGE ImpredicativeTypes       #-}
 {-# LANGUAGE ViewPatterns             #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# OPTIONS_GHC -fno-warn-orphans        #-}
@@ -230,7 +230,11 @@ runProgram hndl fun input output = do
 -- a function callable from foreign code with the second argument specifying it's name.
 exportAfun :: Name -> String -> Q [Dec]
 exportAfun fname ename = do
+#if __GLASGOW_HASKELL__ <= 710
   (VarI n ty _ _) <- reify fname
+#else
+  (VarI n ty _)   <- reify fname
+#endif
 
   -- Generate initialisation function
   genCompileFun n ename ty
