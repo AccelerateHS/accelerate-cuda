@@ -1,50 +1,71 @@
 # vim: nospell
-language: minimal
+language: generic
 sudo: required
-
-cache:
-  directories:
-    - $HOME/.stack
+dist: trusty
 
 matrix:
   include:
-    - env: GHC=7.8.4 CUDA=7.0-28 CABAL=1.18
+    - env: CUDA=6.5-14 GHC=7.8.4 CABAL=1.18
       compiler: "GHC 7.8"
-      addons:
-        apt:
-          sources:
-            - hvr-ghc
-          packages:
-            - ghc-7.8.4
-            - cabal-install-1.18
-            - happy-1.19.5
-            - alex-3.1.4
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.8.4,  cabal-install-1.18, happy-1.19.5, alex-3.1.4 ] }}
 
-    - env: GHC=7.10.2 CUDA=7.0-28 CABAL=1.22
+    - env: CUDA=7.0-28 GHC=7.8.4 CABAL=1.18
+      compiler: "GHC 7.8"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.8.4,  cabal-install-1.18, happy-1.19.5, alex-3.1.4 ] }}
+
+    - env: CUDA=7.5-18 GHC=7.8.4 CABAL=1.18
+      compiler: "GHC 7.8"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.8.4,  cabal-install-1.18, happy-1.19.5, alex-3.1.4 ] }}
+
+    - env: CUDA=6.5-14 GHC=7.10.2 CABAL=1.22
       compiler: "GHC 7.10"
-      addons:
-        apt:
-          sources:
-            - hvr-ghc
-          packages:
-            - ghc-7.10.2
-            - cabal-install-1.22
-            - happy-1.19.5
-            - alex-3.1.4
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.10.2, cabal-install-1.22, happy-1.19.5, alex-3.1.4 ] }}
+
+    - env: CUDA=7.0-28 GHC=7.10.2 CABAL=1.22
+      compiler: "GHC 7.10"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.10.2, cabal-install-1.22, happy-1.19.5, alex-3.1.4 ] }}
+
+    - env: CUDA=7.5-18 GHC=7.10.2 CABAL=1.22
+      compiler: "GHC 7.10"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-7.10.2, cabal-install-1.22, happy-1.19.5, alex-3.1.4 ] }}
+
+    - env: CUDA=6.5-14 GHC=8.0.1 CABAL=1.24
+      compiler: "GHC 8.0"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-8.0.1,  cabal-install-1.24, happy-1.19.5, alex-3.1.7 ] }}
+
+    - env: CUDA=7.0-28 GHC=8.0.1 CABAL=1.24
+      compiler: "GHC 8.0"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-8.0.1,  cabal-install-1.24, happy-1.19.5, alex-3.1.7 ] }}
+
+    - env: CUDA=7.5-18 GHC=8.0.1 CABAL=1.24
+      compiler: "GHC 8.0"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-8.0.1,  cabal-install-1.24, happy-1.19.5, alex-3.1.7 ] }}
+
+    - env: CUDA=7.5-18 GHC=head CABAL=head
+      compiler: "GHC HEAD"
+      addons: { apt: { sources: [ hvr-ghc ], packages: [ ghc-head,   cabal-install-head, happy-1.19.5, alex-3.1.7 ] }}
 
   allow_failures:
-    - env: CABAL=head GHC=head
+    - env: CUDA=7.5-18 GHC=head CABAL=head
+
 
 before_install:
   - export PATH=/opt/ghc/$GHC/bin:/opt/cabal/$CABAL/bin:/opt/alex/3.1.4/bin:/opt/happy/1.19.5/bin:$PATH
+
+  # Setup cabal
+  - travis_retry cabal update
+  - sed -i 's/^jobs:/-- jobs:/' ${HOME}/.cabal/config
 
   # Fetch stack
   - mkdir $HOME/bin
   - export PATH=$HOME/bin:$PATH
   - travis_retry curl -L "https://www.stackage.org/stack/linux-x86_64" | gunzip | tar -x
   - mv stack-*/stack $HOME/bin
-  - ln -s stack-${GHC%.*}.yaml stack.yaml
-  - travis_retry stack setup
+  - |
+      if [ ${GHC} != head ]; then
+        ln -s stack-${GHC%.*}.yaml stack.yaml
+        travis_retry stack setup
+      fi
   - |
       if [ ${GHC%.*} == 7.8 ]; then
         # required to install the 'cuda' package
@@ -56,8 +77,8 @@ before_install:
       fi
 
   # Fetch CUDA
-  - travis_retry wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1204/x86_64/cuda-repo-ubuntu1204_${CUDA}_amd64.deb
-  - travis_retry sudo dpkg -i cuda-repo-ubuntu1204_${CUDA}_amd64.deb
+  - travis_retry wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/cuda-repo-ubuntu1404_${CUDA}_amd64.deb
+  - travis_retry sudo dpkg -i cuda-repo-ubuntu1404_${CUDA}_amd64.deb
   - travis_retry sudo apt-get update -qq
   - export CUDA_APT=${CUDA%-*}
   - export CUDA_APT=${CUDA_APT/./-}
@@ -70,10 +91,21 @@ before_install:
 install:
   - echo "$(stack exec ghc -- --version) [$(stack exec ghc -- --print-project-git-commit-id 2> /dev/null || echo '?')]"
   - stack --version
-  - opt --version; true
-  - llc --version; true
-  - travis_retry stack build --only-dependencies --no-terminal --no-haddock-deps -j2
+  - cabal --version
+  - nvcc --version
+  - |
+      if [ ${GHC} == head ]; then
+        travis_retry cabal install --only-dependencies --allow-newer
+      else
+        travis_retry stack build --only-dependencies --no-terminal --no-haddock-deps
+      fi
 
 script:
-  - stack build --no-terminal --haddock --no-haddock-deps
+  - |
+      if [ ${GHC} == head ]; then
+        cabal install --allow-newer
+      else
+        stack build --no-terminal --flag accelerate:debug
+        stack build --no-terminal --haddock --no-haddock-deps
+      fi
 
