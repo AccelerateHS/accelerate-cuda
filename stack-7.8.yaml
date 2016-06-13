@@ -10,9 +10,13 @@ packages:
     commit: 9d0118f8ef3cd47d64a737b9d7d1d902a5ee72b7
   extra-dep: true
 
+- location:
+    git:    https://github.com/tmcdonell/cuda.git
+    commit: 28ee2bd8ef94eb0e6231373ee2b5e0c9187bf5c7
+  extra-dep: true
+
 extra-deps:
 - 'base-orphans-0.4.4'
-- 'cuda-0.7.0.0'
 - 'SafeSemaphore-0.10.1'
 - 'unique-0'
 

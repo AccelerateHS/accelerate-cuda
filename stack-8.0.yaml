@@ -10,8 +10,12 @@ packages:
     commit: aed12138a9788ff5d6289d214c84ff6108dc04bd
   extra-dep: true
 
+- location:
+    git:    https://github.com/tmcdonell/cuda.git
+    commit: 28ee2bd8ef94eb0e6231373ee2b5e0c9187bf5c7
+  extra-dep: true
+
 extra-deps:
-- 'cuda-0.7.0.0'
 - 'unique-0'
 
 # Override default flag values for local packages and extra-deps
