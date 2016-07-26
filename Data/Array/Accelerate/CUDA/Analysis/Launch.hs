@@ -88,7 +88,7 @@ blockSize
     -> (Int -> Int)             -- shared memory as a function of thread block size (bytes)
     -> (Int, CUDA.Occupancy)
 blockSize dev acc lim regs smem =
-  CUDA.optimalBlockSizeBy dev (filter (<= lim) . strategy) (const regs) smem
+  CUDA.optimalBlockSizeOf dev (filter (<= lim) (strategy dev)) (const regs) smem
   where
     strategy = case acc of
       Fold _ _ _        -> CUDA.incPow2
