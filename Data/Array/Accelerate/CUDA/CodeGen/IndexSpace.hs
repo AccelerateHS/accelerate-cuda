@@ -204,7 +204,8 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
 
                 $items:(atomically jx
                     [ dce_y y   .=. setOut jx
-                    , setOut jx .=. combine x y ]
+                    , setOut jx .=. combine x y
+                    ]
                 )
             }
         }
@@ -288,14 +289,15 @@ mkPermute dev aenv (CUFun2 dce_x dce_y combine) (CUFun1 dce_p prj) arr
       | otherwise               =
         [ [citem| typename Int32 done = 0; |]
         , [citem| do {
-                      __threadfence();
+                      typename Int32 *addr = &lock[ $exp:(cvar i) ];
 
-                      if ( atomicExch(&lock[ $exp:(cvar i) ], 1) == 0 ) {
+                      if ( atomicExch( addr, 1 ) == 0 ) {
                           $items:body
 
                           done = 1;
-                          atomicExch(&lock[ $exp:(cvar i) ], 0);
+                          atomicExch( addr, 0 );
                       }
+                      __threadfence();
                   } while (done == 0);
                 |]
         ]
