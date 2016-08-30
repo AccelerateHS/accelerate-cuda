@@ -220,11 +220,11 @@ compileOpenAcc = traverseAcc
         -- If it is a foreign call for the CUDA backend, don't bother compiling
         -- the pure version
         --
-        foreignA :: (Arrays a, Arrays r, Foreign f)
-                 => f a r
-                 -> DelayedAfun (a -> r)
-                 -> DelayedOpenAcc aenv a
-                 -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv r)
+        foreignA :: (Arrays as, Arrays bs, Foreign asm)
+                 => asm         (as -> bs)
+                 -> DelayedAfun (as -> bs)
+                 -> DelayedOpenAcc aenv as
+                 -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv bs)
         foreignA ff afun a = case canExecuteAcc ff of
           Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
           Just _        -> liftA  (Aforeign ff err)      <$> travA a
@@ -286,8 +286,8 @@ compileOpenExp exp =
     travF (Body b)  = liftA Body <$> travE b
     travF (Lam  f)  = liftA Lam  <$> travF f
 
-    foreignE :: (Elt a, Elt b, Foreign f)
-             => f a b
+    foreignE :: (Elt a, Elt b, Foreign asm)
+             => asm           (a -> b)
              -> DelayedFun () (a -> b)
              -> DelayedOpenExp env aenv a
              -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv b)

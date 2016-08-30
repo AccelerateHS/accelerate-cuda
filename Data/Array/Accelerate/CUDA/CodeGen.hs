@@ -791,18 +791,19 @@ codegenOpenExp dev aenv = cvtE
     -- Additionally, we insert an explicit type cast from the foreign function
     -- result back into Accelerate types (c.f. Int vs int).
     --
-    foreignE :: forall f a b env. (Sugar.Foreign f, Elt a, Elt b)
-             => f a b
+    foreignE :: forall asm a b env. (Sugar.Foreign asm, Elt a, Elt b)
+             => asm (a -> b)
              -> DelayedOpenExp env aenv a
              -> Val env
              -> Gen [C.Exp]
-    foreignE ff x env = case canExecuteExp ff of
-      Nothing      -> $internalError "codegenOpenExp" "Non-CUDA foreign expression encountered"
-      Just (hs, f) -> do
-        lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
-        args    <- cvtE x env
-        mapM_ use args
-        return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
+    foreignE ff x env =
+      case canExecuteExp ff of
+        Nothing      -> $internalError "codegenOpenExp" "failed to recover foreign function a second time"
+        Just (hs, f) -> do
+          lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
+          args    <- cvtE x env
+          mapM_ use args
+          return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
 
     -- Execute a command in a new environment. The old environment is replaced
     -- on exit, and the result and any new bindings generated are returned.

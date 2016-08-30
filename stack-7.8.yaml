@@ -6,13 +6,13 @@ resolver: lts-2.22
 packages:
 - '.'
 - location:
-    git:    https://github.com/AccelerateHS/accelerate.git
-    commit: 6e54b685207b0d35be6c7452c2da1abe9d65cff4
+    git:    https://github.com/tmcdonell/accelerate.git
+    commit: 687351f289f54ec92f15bcf620223417dc975547
   extra-dep: true
 
 - location:
     git:    https://github.com/tmcdonell/cuda.git
-    commit: 11f924e08a3d42043826aa87081aa66d834c09e7
+    commit: bfa5b024fbf10a312f58c5d46d766d6bd2d01e04
   extra-dep: true
 
 extra-deps:
@@ -21,7 +21,14 @@ extra-deps:
 - 'unique-0'
 
 # Override default flag values for local packages and extra-deps
-flags: {}
+flags:
+  accelerate:
+    unsafe-checks: false
+    bounds-checks: true
+    debug: true
+    internal-checks: false
+  accelerate-cuda:
+    debug: true
 
 # Extra package databases containing global packages
 extra-package-dbs: []
