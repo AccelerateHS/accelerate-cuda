@@ -244,11 +244,11 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
             else return a
 
-    aforeign :: (Arrays as, Arrays bs, Foreign f) => f as bs -> PreAfun ExecOpenAcc (as -> bs) -> as -> CIO bs
-    aforeign ff pureFun a =
+    aforeign :: (Arrays as, Arrays bs, Foreign asm) => asm (as -> bs) -> PreAfun ExecOpenAcc (as -> bs) -> as -> CIO bs
+    aforeign ff next a =
       case canExecuteAcc ff of
-        Just cudaFun -> cudaFun stream a
-        Nothing      -> executeAfun1 pureFun a
+        Just asm -> asm stream a
+        Nothing  -> executeAfun1 next a
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh

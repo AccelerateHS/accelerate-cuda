@@ -7,12 +7,12 @@ packages:
 - '.'
 - location:
     git:    https://github.com/AccelerateHS/accelerate.git
-    commit: 6e54b685207b0d35be6c7452c2da1abe9d65cff4
+    commit: 7dae007342d4e717643b5da675995e9b7b276028
   extra-dep: true
 
 - location:
     git:    https://github.com/tmcdonell/cuda.git
-    commit: 11f924e08a3d42043826aa87081aa66d834c09e7
+    commit: bfa5b024fbf10a312f58c5d46d766d6bd2d01e04
   extra-dep: true
 
 extra-deps:
@@ -23,8 +23,10 @@ flags:
   accelerate:
     unsafe-checks: false
     bounds-checks: true
-    debug: false
+    debug: true
     internal-checks: false
+  accelerate-cuda:
+    debug: true
 
 # Extra package databases containing global packages
 extra-package-dbs: []
