@@ -134,7 +134,7 @@ compileOpenAcc = traverseAcc
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
         -- Foreign
-        Aforeign ff afun a      -> node =<< foreignA ff afun a
+        Aforeign ff afun a      -> foreignA ff afun a
 
         -- Array injection
         Unit e                  -> node =<< liftA  Unit         <$> travE e
@@ -217,19 +217,23 @@ compileOpenAcc = traverseAcc
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
 
-        -- If it is a foreign call for the CUDA backend, don't bother compiling
-        -- the pure version
+        -- If the foreign function targets this backend, drop the remaining
+        -- alternatives from the AST. Similarly, we drop the foreign node if it
+        -- does not target this backend.
         --
         foreignA :: (Arrays as, Arrays bs, Foreign asm)
                  => asm         (as -> bs)
                  -> DelayedAfun (as -> bs)
                  -> DelayedOpenAcc aenv as
-                 -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv bs)
-        foreignA ff afun a = case canExecuteAcc ff of
-          Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
-          Just _        -> liftA  (Aforeign ff err)      <$> travA a
+                 -> CIO (ExecOpenAcc aenv bs)
+        foreignA ff afun a =
+          case canExecuteAcc ff of
+            Nothing -> traverseAcc $ Manifest (Apply (weaken absurd afun) a)
+            Just{}  -> node =<< liftA (Aforeign ff err) <$> travA a
             where
-              err = $internalError "compile" "Executing pure version of a CUDA foreign function"
+              absurd :: Idx () t -> Idx env t
+              absurd = absurd
+              err    = $internalError "Aforeign" "failed to recover foreign function a second time"
 
 -- Traverse a scalar expression
 --
