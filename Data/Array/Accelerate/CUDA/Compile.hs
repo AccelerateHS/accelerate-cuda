@@ -240,8 +240,8 @@ compileOpenAcc = traverseAcc
 compileOpenExp
     :: DelayedOpenExp env aenv e
     -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
-compileOpenExp exp =
-  case exp of
+compileOpenExp topExp =
+  case topExp of
     Var ix                  -> return $ pure (Var ix)
     Const c                 -> return $ pure (Const c)
     PrimConst c             -> return $ pure (PrimConst c)
