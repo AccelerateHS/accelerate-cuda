@@ -179,3 +179,5 @@ source-repository head
   type:                 git
   location:             https://github.com/AccelerateHS/accelerate-cuda
 
+-- vim: nospell
+
