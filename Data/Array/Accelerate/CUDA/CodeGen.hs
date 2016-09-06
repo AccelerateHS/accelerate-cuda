@@ -498,20 +498,19 @@ codegenOpenExp dev aenv = cvtE
         binary f = binaryM (\a b -> return (f a b))
 
         binaryM :: (C.Exp -> C.Exp -> Gen C.Exp) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
-        binaryM f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
-          a' <- cvtE' a env
-          b' <- cvtE' b env
-          r  <- f a' b'
-          return [r]
-        binaryM _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM f x env = do
+          x' <- cvtE x env
+          case x' of
+            [a,b] -> return <$> f a b
+            _     -> $internalError "primApp" "unexpected argument to binary function"
 
         binaryM2 :: (C.Exp -> C.Exp -> Gen (C.Exp, C.Exp)) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
-        binaryM2 f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
-          a'    <- cvtE' a env
-          b'    <- cvtE' b env
-          (r,s) <- f a' b'
-          return [r,s]
-        binaryM2 _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM2 f x env = do
+          x' <- cvtE x env
+          case x' of
+            [a,b] -> do (r,s) <- f a b
+                        return [r,s]
+            _     -> $internalError "primApp" "unexpected argument to binary function"
 
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
