@@ -22,7 +22,7 @@ module Data.Array.Accelerate.CUDA.Debug (
 
 ) where
 
-import Data.Array.Accelerate.Debug                      hiding ( timed )
+import Data.Array.Accelerate.Debug                      hiding ( timed, elapsed )
 
 import Control.Concurrent                               ( forkIO )
 import Control.Monad                                    ( void )
