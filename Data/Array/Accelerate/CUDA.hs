@@ -187,7 +187,7 @@ module Data.Array.Accelerate.CUDA (
 
   -- * Synchronous execution
   run, run1, runWith, run1With,
-  stream, streamOut, streamWith, streamOutWith,
+  stream, streamWith,
 
   -- * Asynchronous execution
   Async, wait, poll, cancel,
@@ -206,9 +206,8 @@ import System.IO.Unsafe
 import Prelude
 
 -- friends
-import Data.Array.Accelerate                            ( mapSeq, streamIn )
 import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
-import Data.Array.Accelerate.Smart                      ( Acc, Seq )
+import Data.Array.Accelerate.Smart                      ( Acc )
 import Data.Array.Accelerate.Async
 import Data.Array.Accelerate.Trafo
 
@@ -343,9 +342,11 @@ stream = streamWith defaultContext
 -- | As 'stream', but execute in the specified context.
 --
 streamWith :: (Arrays a, Arrays b) => Context -> (Acc a -> Acc b) -> [a] -> [b]
-streamWith ctx f
-  = streamOutWith ctx . mapSeq f . streamIn
+streamWith ctx f arrs = map go arrs
+  where
+    !go = run1With ctx f
 
+{--
 -- | Generate a lazy list from a sequence computation.
 --
 streamOut :: Arrays a => Seq [a] -> [a]
@@ -368,6 +369,7 @@ streamOutWith ctx = exec . compile . convertSeq
                case m of
                  Nothing      -> return Nothing
                  Just (a, s') -> collect a >> return (Just (a, s'))
+--}
 
 
 -- RCE: Similar to run1* variants, we need to be ultra careful with streamOut*
@@ -398,7 +400,7 @@ config =  Phase
   , floatOutAccFromExp     = True
   , enableAccFusion        = True
   , convertOffsetOfSegment = True
-  , vectoriseSequences     = False
+  -- , vectoriseSequences     = False
   }
 
 
