@@ -6,8 +6,8 @@ resolver: lts-2.22
 packages:
 - '.'
 - location:
-    git:    https://github.com/AccelerateHS/accelerate.git
-    commit: a3eb3dffe4ce2fb2f9a32b7870e45f2df6506d19
+    git:    https://github.com/tmcdonell/accelerate.git
+    commit: 24140cc14b019c0a341a305d3f12f594c71c4cde
   extra-dep: true
 
 extra-deps:
