@@ -7,12 +7,12 @@ packages:
 - '.'
 - location:
     git:    https://github.com/AccelerateHS/accelerate.git
-    commit: aaf8d1edab0e510084734bbbd8f89150516c1db1
+    commit: a3eb3dffe4ce2fb2f9a32b7870e45f2df6506d19
   extra-dep: true
 
 extra-deps:
 - 'base-orphans-0.4.4'
-- 'cuda-0.7.5.0'
+- 'cuda-0.7.5.1'
 - 'SafeSemaphore-0.10.1'
 - 'unique-0'
 
