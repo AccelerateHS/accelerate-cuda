@@ -116,7 +116,7 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
       -- Sequence collection
-      Collect _                 -> unexpectedError
+      -- Collect _                 -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError

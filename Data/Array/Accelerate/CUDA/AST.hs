@@ -21,7 +21,7 @@ module Data.Array.Accelerate.CUDA.AST (
   AccKernel(..), Free, Gamma(..), Idx_(..),
   ExecAcc, ExecAfun, ExecOpenAfun, ExecOpenAcc(..),
   ExecExp, ExecFun, ExecOpenExp, ExecOpenFun,
-  ExecSeq(..), ExecOpenSeq(..), ExecP(..), ExecC(..),
+  -- ExecSeq(..), ExecOpenSeq(..), ExecP(..), ExecC(..),
   freevar, makeEnvMap,
 
 ) where
@@ -30,9 +30,7 @@ module Data.Array.Accelerate.CUDA.AST (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Pretty                     as PP
-import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt, Arrays, Vector, EltRepr, Atuple, TupleRepr, IsAtuple, Scalar )
-import Data.Array.Accelerate.Array.Representation       ( SliceIndex(..) )
-import Data.Array.Accelerate.Trafo                      ( Extend )
+import Data.Array.Accelerate.Array.Sugar                ( Array, Shape, Elt )
 import qualified Data.Array.Accelerate.FullList         as FL
 import qualified Foreign.CUDA.Driver                    as CUDA
 import qualified Foreign.CUDA.Analysis                  as CUDA
@@ -127,9 +125,9 @@ data ExecOpenAcc aenv a where
             => !(PreExp ExecOpenAcc aenv sh)                    -- shape of the result array, used by execution
             -> ExecOpenAcc aenv (Array sh e)
 
-  ExecSeq :: Arrays arrs
-           => ExecOpenSeq aenv () arrs
-           -> ExecOpenAcc aenv arrs
+  -- ExecSeq :: Arrays arrs
+  --          => ExecOpenSeq aenv () arrs
+  --          -> ExecOpenAcc aenv arrs
 
 
 -- An annotated AST suitable for execution in the CUDA environment
@@ -179,8 +177,9 @@ prettyExecAcc wrap aenv exec =
         Aprj{}          -> base
         _               -> ann <+> base
 
-    ExecSeq _ -> text "<SequenceComputation>"
+    -- ExecSeq _ -> text "<SequenceComputation>"
 
+{--
 data ExecSeq a where
   ExecS :: Extend ExecOpenAcc () aenv -> ExecOpenSeq aenv () a -> ExecSeq a
 
@@ -251,4 +250,5 @@ data ExecC aenv lenv a where
   ExecStuple :: (Arrays a, IsAtuple a)
              => Atuple (ExecC aenv senv) (TupleRepr a)
              -> ExecC aenv senv a
+--}
 

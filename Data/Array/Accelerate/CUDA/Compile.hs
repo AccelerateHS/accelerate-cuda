@@ -19,12 +19,11 @@
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
-  compileAcc, compileAfun, compileSeq
+  compileAcc, compileAfun,
 
 ) where
 
 -- friends
-import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Trafo
@@ -169,7 +168,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Collect l               -> ExecSeq <$> compileOpenSeq l
+        -- Collect l               -> ExecSeq <$> compileOpenSeq l
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -329,6 +328,7 @@ compileOpenExp topExp =
     bind (ExecAcc _ _ (Avar ix)) = freevar ix
     bind _                       = $internalError "bind" "expected array variable"
 
+{--
 compileSeq :: DelayedSeq a -> CIO (ExecSeq a)
 compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> compileOpenSeq s
   where
@@ -418,6 +418,7 @@ compileOpenSeq l =
     zeroSlice SliceNil = ()
     zeroSlice (SliceFixed sl) = (zeroSlice sl, 0)
     zeroSlice (SliceAll sl)   = (zeroSlice sl, ())
+--}
 
 
 -- Applicative
