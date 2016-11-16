@@ -4,6 +4,7 @@
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators       #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.CodeGen.PrefixSum
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -28,59 +29,95 @@ import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C.Syntax                      as C
 
-import Data.Array.Accelerate.Array.Sugar                ( Vector, Scalar, Elt, DIM1 )
+import Data.Array.Accelerate.Array.Sugar
+import Data.Array.Accelerate.Analysis.Match
+
 import Data.Array.Accelerate.CUDA.AST
+import Data.Array.Accelerate.CUDA.Analysis.Shape
 import Data.Array.Accelerate.CUDA.CodeGen.Base
 
+errorMsg :: String
+errorMsg
+  = error
+  $ unlines [ "accelerate-cuda does not support rank-polymorphic scans. Please switch to accelerate-llvm-ptx instead."
+            , ""
+            , "***   https://hackage.haskell.org/package/accelerate-llvm-ptx   ***"
+            , "***   https://github.com/AccelerateHS/accelerate-llvm           ***"
+            ]
 
 -- Wrappers
 -- --------
 
 mkScanl, mkScanr
-    :: Elt e
+    :: forall aenv sh e. (Shape sh, Elt e)
     => DeviceProperties
     -> Gamma aenv
     -> CUFun2 aenv (e -> e -> e)
     -> CUExp aenv e
-    -> CUDelayedAcc aenv DIM1 e
-    -> [CUTranslSkel aenv (Vector e)]
-mkScanl dev aenv f z a =
-  [ mkScan    L dev aenv f (Just z) a
-  , mkScanUp1 L dev aenv f a
-  , mkScanUp2 L dev aenv f (Just z) ]
+    -> CUDelayedAcc aenv (sh:.Int) e
+    -> [CUTranslSkel aenv (Array (sh:.Int) e)]
+mkScanl dev aenv f z a
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = [ mkScan    L dev aenv f (Just z) a
+    , mkScanUp1 L dev aenv f a
+    , mkScanUp2 L dev aenv f (Just z) ]
 
-mkScanr dev aenv f z a =
-  [ mkScan    R dev aenv f (Just z) a
-  , mkScanUp1 R dev aenv f a
-  , mkScanUp2 R dev aenv f (Just z) ]
+  | otherwise
+  = error errorMsg
+
+mkScanr dev aenv f z a
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = [ mkScan    R dev aenv f (Just z) a
+    , mkScanUp1 R dev aenv f a
+    , mkScanUp2 R dev aenv f (Just z) ]
+
+  | otherwise
+  = error errorMsg
 
 mkScanl1, mkScanr1
-    :: Elt e
+    :: forall aenv sh e. (Shape sh, Elt e)
     => DeviceProperties
     -> Gamma aenv
     -> CUFun2 aenv (e -> e -> e)
-    -> CUDelayedAcc aenv DIM1 e
-    -> [CUTranslSkel aenv (Vector e)]
-mkScanl1 dev aenv f a =
-  [ mkScan    L dev aenv f Nothing a
-  , mkScanUp1 L dev aenv f a
-  , mkScanUp2 L dev aenv f Nothing ]
+    -> CUDelayedAcc aenv (sh:.Int) e
+    -> [CUTranslSkel aenv (Array (sh:.Int) e)]
+mkScanl1 dev aenv f a
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = [ mkScan    L dev aenv f Nothing a
+    , mkScanUp1 L dev aenv f a
+    , mkScanUp2 L dev aenv f Nothing ]
 
-mkScanr1 dev aenv f a =
-  [ mkScan    R dev aenv f Nothing a
-  , mkScanUp1 R dev aenv f a
-  , mkScanUp2 R dev aenv f Nothing ]
+  | otherwise
+  = error errorMsg
+
+mkScanr1 dev aenv f a
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = [ mkScan    R dev aenv f Nothing a
+    , mkScanUp1 R dev aenv f a
+    , mkScanUp2 R dev aenv f Nothing ]
+
+  | otherwise
+  = error errorMsg
 
 mkScanl', mkScanr'
-    :: Elt e
+    :: forall aenv sh e. (Shape sh, Elt e)
     => DeviceProperties
     -> Gamma aenv
     -> CUFun2 aenv (e -> e -> e)
     -> CUExp aenv e
-    -> CUDelayedAcc aenv DIM1 e
-    -> [CUTranslSkel aenv (Vector e, Scalar e)]
-mkScanl' dev aenv f z = map cast . mkScanl dev aenv f z
-mkScanr' dev aenv f z = map cast . mkScanr dev aenv f z
+    -> CUDelayedAcc aenv (sh:.Int) e
+    -> [CUTranslSkel aenv (Array (sh:.Int) e, Array sh e)]
+mkScanl' dev aenv f z
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = map cast . mkScanl dev aenv f z
+  | otherwise
+  = error errorMsg
+
+mkScanr' dev aenv f z
+  | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+  = map cast . mkScanr dev aenv f z
+  | otherwise
+  = error errorMsg
 
 cast :: CUTranslSkel aenv a -> CUTranslSkel aenv b
 cast (CUTranslSkel entry code) = CUTranslSkel entry code
