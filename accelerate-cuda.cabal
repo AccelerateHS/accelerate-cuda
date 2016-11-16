@@ -121,6 +121,7 @@ Library
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
+                        Data.Array.Accelerate.CUDA.Analysis.Shape
                         Data.Array.Accelerate.CUDA.Array.Remote
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim
