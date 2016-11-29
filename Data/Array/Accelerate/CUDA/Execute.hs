@@ -176,7 +176,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
       -- Array introduction
       Use arr                   -> return (toArr arr)
-      Unit x                    -> newArray Z . const =<< travE x
+      Unit x                    -> fromFunction Z . const =<< travE x
 
       -- Environment manipulation
       Avar ix                   -> after stream (aprj ix aenv)
