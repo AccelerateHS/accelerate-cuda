@@ -50,7 +50,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   copyArray, copyArrayAsync,
-  allocateArray, newArray,
+  allocateArray, fromFunction,
 
   -- * Running IO actions in an Accelerate context
   CIO, Stream, liftIO, inContext, inDefaultContext

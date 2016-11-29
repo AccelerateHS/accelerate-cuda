@@ -34,13 +34,14 @@ module Data.Array.Accelerate.CUDA.Execute (
 
 -- friends
 import Data.Array.Accelerate.CUDA.AST
-import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.Analysis.Shape
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
 import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
+import Data.Array.Accelerate.CUDA.State
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
@@ -175,7 +176,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
       -- Array introduction
       Use arr                   -> return (toArr arr)
-      Unit x                    -> newArray Z . const =<< travE x
+      Unit x                    -> fromFunction Z . const =<< travE x
 
       -- Environment manipulation
       Avar ix                   -> after stream (aprj ix aenv)
@@ -324,35 +325,41 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- Scans, all variations on a theme.
     --
-    scanOp :: Elt e => Bool -> (Z :. Int) -> CIO (Vector e)
-    scanOp !left !(Z :. numElements) = do
-      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
-      withDevicePtrs adata (Just stream) $ \out -> do
-        let (!body, !sum)
-              | left      = (out, advancePtrsOfArrayData adata numElements out)
-              | otherwise = (advancePtrsOfArrayData adata 1 out, out)
-        --
-        scanCore numElements arr body sum
-        return arr
+    scanOp :: forall sh e. (Shape sh, Elt e) => Bool -> (sh :. Int) -> CIO (Array (sh:.Int) e)
+    scanOp !left !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
+          withDevicePtrs adata (Just stream) $ \out -> do
+            let (!body, !sum)
+                  | left      = (out, advancePtrsOfArrayData adata numElements out)
+                  | otherwise = (advancePtrsOfArrayData adata 1 out, out)
+            --
+            scanCore numElements arr body sum
+            return arr
 
-    scan1Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e)
-    scan1Op !(Z :. numElements) = do
-      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
-      withDevicePtrs adata (Just stream) $ \body -> do
-        let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
-        --
-        scanCore numElements arr body sum
-        return (Array ((),numElements) adata)
+    scan1Op :: forall sh e. (Shape sh, Elt e) => (sh :. Int) -> CIO (Array (sh:.Int) e)
+    scan1Op !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
+          withDevicePtrs adata (Just stream) $ \body -> do
+            let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
+            --
+            scanCore numElements arr body sum
+            return (Array ((),numElements) adata)
 
-    scan'Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e, Scalar e)
-    scan'Op !(Z :. numElements) = do
-      vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
-      sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
-      withDevicePtrs ad_vec (Just stream) $ \d_vec ->
-        withDevicePtrs ad_sum (Just stream) $ \d_sum -> do
-          --
-          scanCore numElements vec d_vec d_sum
-          return (vec, sum)
+    scan'Op :: forall sh e. (Shape sh, Elt e) => (sh :. Int) -> CIO (Array (sh:.Int) e, Array sh e)
+    scan'Op !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
+          sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
+          withDevicePtrs ad_vec (Just stream) $ \d_vec ->
+            withDevicePtrs ad_sum (Just stream) $ \d_sum -> do
+              --
+              scanCore numElements vec d_vec d_sum
+              return (vec, sum)
 
     scanCore
         :: forall e. Elt e
