@@ -132,15 +132,15 @@ data ExecOpenAcc aenv a where
 
 -- An annotated AST suitable for execution in the CUDA environment
 --
-type ExecAcc  a         = ExecOpenAcc () a
-type ExecAfun a         = PreAfun ExecOpenAcc a
-type ExecOpenAfun aenv a = PreOpenAfun ExecOpenAcc aenv a
+type ExecAcc  a           = ExecOpenAcc () a
+type ExecAfun a           = PreAfun ExecOpenAcc a
+type ExecOpenAfun aenv a  = PreOpenAfun ExecOpenAcc aenv a
 
-type ExecOpenExp        = PreOpenExp ExecOpenAcc
-type ExecOpenFun        = PreOpenFun ExecOpenAcc
+type ExecOpenExp          = PreOpenExp ExecOpenAcc
+type ExecOpenFun          = PreOpenFun ExecOpenAcc
 
-type ExecExp            = ExecOpenExp ()
-type ExecFun            = ExecOpenFun ()
+type ExecExp              = ExecOpenExp ()
+type ExecFun              = ExecOpenFun ()
 
 
 -- Display the annotated AST
