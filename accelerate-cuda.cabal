@@ -87,7 +87,7 @@ Library
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         cryptohash              >= 0.7,
-                        cuda                    >= 0.7.0 && < 0.7.5,
+                        cuda                    == 0.7.0.0,
                         directory               >= 1.0,
                         fclabels                >= 2.0,
                         filepath                >= 1.0,
