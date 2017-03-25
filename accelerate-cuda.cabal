@@ -84,7 +84,7 @@ Flag internal-checks
 Library
   Build-depends:        accelerate              == 1.0.*,
                         array                   >= 0.3,
-                        base                    >= 4.7,
+                        base                    >= 4.7 && < 4.9.1,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         containers              >= 0.3,
