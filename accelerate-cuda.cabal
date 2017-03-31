@@ -180,5 +180,10 @@ source-repository head
   type:                 git
   location:             https://github.com/AccelerateHS/accelerate-cuda
 
+source-repository this
+  type:                 git
+  tag:                  0.17.0.0
+  location:             https://github.com/AccelerateHS/accelerate-cuda
+
 -- vim: nospell
 
