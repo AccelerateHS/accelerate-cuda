@@ -6,6 +6,8 @@ Build-type:             Simple
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
 Description:
+  __This backend has been deprecated in favour of <http://hackage.haskell.org/package/accelerate-llvm-ptx accelerate-llvm-ptx>.__
+  .
   This library implements a backend for the /Accelerate/ language instrumented
   for parallel execution on CUDA-capable NVIDIA GPUs. For further information,
   refer to the main /Accelerate/ package:
@@ -178,6 +180,11 @@ Library
 
 source-repository head
   type:                 git
+  location:             https://github.com/AccelerateHS/accelerate-cuda
+
+source-repository this
+  type:                 git
+  tag:                  0.17.0.0
   location:             https://github.com/AccelerateHS/accelerate-cuda
 
 -- vim: nospell
