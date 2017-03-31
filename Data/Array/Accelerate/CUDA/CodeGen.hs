@@ -116,7 +116,7 @@ codegenAcc dev (Manifest pacc) aenv
       Stencil2 f b1 a1 b2 a2    -> mkStencil2 dev aenv  <$> travF2 f <*> travB a1 b1 <*> travB a2 b2
 
       -- Sequence collection
-      Collect _                 -> unexpectedError
+      -- Collect _                 -> unexpectedError
 
       -- Non-computation forms -> sadness
       Alet{}                    -> unexpectedError
@@ -498,20 +498,19 @@ codegenOpenExp dev aenv = cvtE
         binary f = binaryM (\a b -> return (f a b))
 
         binaryM :: (C.Exp -> C.Exp -> Gen C.Exp) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
-        binaryM f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
-          a' <- cvtE' a env
-          b' <- cvtE' b env
-          r  <- f a' b'
-          return [r]
-        binaryM _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM f x env = do
+          x' <- cvtE x env
+          case x' of
+            [a,b] -> return <$> f a b
+            _     -> $internalError "primApp" "unexpected argument to binary function"
 
         binaryM2 :: (C.Exp -> C.Exp -> Gen (C.Exp, C.Exp)) -> DelayedOpenExp env aenv (a,b) -> Val env -> Gen [C.Exp]
-        binaryM2 f (Tuple (NilTup `SnocTup` a `SnocTup` b)) env = do
-          a'    <- cvtE' a env
-          b'    <- cvtE' b env
-          (r,s) <- f a' b'
-          return [r,s]
-        binaryM2 _ _ _ = $internalError "primApp" "unexpected argument to binary function"
+        binaryM2 f x env = do
+          x' <- cvtE x env
+          case x' of
+            [a,b] -> do (r,s) <- f a b
+                        return [r,s]
+            _     -> $internalError "primApp" "unexpected argument to binary function"
 
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
@@ -791,18 +790,19 @@ codegenOpenExp dev aenv = cvtE
     -- Additionally, we insert an explicit type cast from the foreign function
     -- result back into Accelerate types (c.f. Int vs int).
     --
-    foreignE :: forall f a b env. (Sugar.Foreign f, Elt a, Elt b)
-             => f a b
+    foreignE :: forall asm a b env. (Sugar.Foreign asm, Elt a, Elt b)
+             => asm (a -> b)
              -> DelayedOpenExp env aenv a
              -> Val env
              -> Gen [C.Exp]
-    foreignE ff x env = case canExecuteExp ff of
-      Nothing      -> $internalError "codegenOpenExp" "Non-CUDA foreign expression encountered"
-      Just (hs, f) -> do
-        lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
-        args    <- cvtE x env
-        mapM_ use args
-        return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
+    foreignE ff x env =
+      case canExecuteExp ff of
+        Nothing      -> $internalError "codegenOpenExp" "failed to recover foreign function a second time"
+        Just (hs, f) -> do
+          lift $ modify (\st -> st { headers = foldl (flip Set.insert) (headers st) hs })
+          args    <- cvtE x env
+          mapM_ use args
+          return  $  [ccall f (ccastTup (Sugar.eltType (undefined::a)) args)]
 
     -- Execute a command in a new environment. The old environment is replaced
     -- on exit, and the result and any new bindings generated are returned.

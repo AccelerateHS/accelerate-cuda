@@ -19,12 +19,11 @@
 module Data.Array.Accelerate.CUDA.Compile (
 
   -- * generate and compile kernels to realise a computation
-  compileAcc, compileAfun, compileSeq
+  compileAcc, compileAfun,
 
 ) where
 
 -- friends
-import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime
 import Data.Array.Accelerate.Trafo
@@ -134,7 +133,7 @@ compileOpenAcc = traverseAcc
         Aprj ix tup             -> node =<< liftA (Aprj ix)     <$> travA    tup
 
         -- Foreign
-        Aforeign ff afun a      -> node =<< foreignA ff afun a
+        Aforeign ff afun a      -> foreignA ff afun a
 
         -- Array injection
         Unit e                  -> node =<< liftA  Unit         <$> travE e
@@ -169,7 +168,7 @@ compileOpenAcc = traverseAcc
           where stencil2 f' a1' a2' = Stencil2 f' b1 a1' b2 a2'
 
         -- Loops
-        Collect l               -> ExecSeq <$> compileOpenSeq l
+        -- Collect l               -> ExecSeq <$> compileOpenSeq l
 
       where
         use :: ArraysR a -> a -> CIO ()
@@ -217,27 +216,31 @@ compileOpenAcc = traverseAcc
         fullOfList [x]      = FL.singleton () x
         fullOfList (x:xs)   = FL.cons () x (fullOfList xs)
 
-        -- If it is a foreign call for the CUDA backend, don't bother compiling
-        -- the pure version
+        -- If the foreign function targets this backend, drop the remaining
+        -- alternatives from the AST. Similarly, we drop the foreign node if it
+        -- does not target this backend.
         --
-        foreignA :: (Arrays a, Arrays r, Foreign f)
-                 => f a r
-                 -> DelayedAfun (a -> r)
-                 -> DelayedOpenAcc aenv a
-                 -> CIO (Free aenv, PreOpenAcc ExecOpenAcc aenv r)
-        foreignA ff afun a = case canExecuteAcc ff of
-          Nothing       -> liftA2 (Aforeign ff)          <$> pure <$> compileAfun afun <*> travA a
-          Just _        -> liftA  (Aforeign ff err)      <$> travA a
+        foreignA :: (Arrays as, Arrays bs, Foreign asm)
+                 => asm         (as -> bs)
+                 -> DelayedAfun (as -> bs)
+                 -> DelayedOpenAcc aenv as
+                 -> CIO (ExecOpenAcc aenv bs)
+        foreignA ff afun a =
+          case canExecuteAcc ff of
+            Nothing -> traverseAcc $ Manifest (Apply (weaken absurd afun) a)
+            Just{}  -> node =<< liftA (Aforeign ff err) <$> travA a
             where
-              err = $internalError "compile" "Executing pure version of a CUDA foreign function"
+              absurd :: Idx () t -> Idx env t
+              absurd = absurd
+              err    = $internalError "Aforeign" "failed to recover foreign function a second time"
 
 -- Traverse a scalar expression
 --
 compileOpenExp
     :: DelayedOpenExp env aenv e
     -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv e)
-compileOpenExp exp =
-  case exp of
+compileOpenExp topExp =
+  case topExp of
     Var ix                  -> return $ pure (Var ix)
     Const c                 -> return $ pure (Const c)
     PrimConst c             -> return $ pure (PrimConst c)
@@ -286,8 +289,8 @@ compileOpenExp exp =
     travF (Body b)  = liftA Body <$> travE b
     travF (Lam  f)  = liftA Lam  <$> travF f
 
-    foreignE :: (Elt a, Elt b, Foreign f)
-             => f a b
+    foreignE :: (Elt a, Elt b, Foreign asm)
+             => asm           (a -> b)
              -> DelayedFun () (a -> b)
              -> DelayedOpenExp env aenv a
              -> CIO (Free aenv, PreOpenExp ExecOpenAcc env aenv b)
@@ -325,6 +328,7 @@ compileOpenExp exp =
     bind (ExecAcc _ _ (Avar ix)) = freevar ix
     bind _                       = $internalError "bind" "expected array variable"
 
+{--
 compileSeq :: DelayedSeq a -> CIO (ExecSeq a)
 compileSeq (DelayedSeq aenv s) = ExecS <$> compileExtend aenv <*> compileOpenSeq s
   where
@@ -414,6 +418,7 @@ compileOpenSeq l =
     zeroSlice SliceNil = ()
     zeroSlice (SliceFixed sl) = (zeroSlice sl, 0)
     zeroSlice (SliceAll sl)   = (zeroSlice sl, ())
+--}
 
 
 -- Applicative

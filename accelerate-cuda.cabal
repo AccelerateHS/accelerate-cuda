@@ -1,11 +1,13 @@
 Name:                   accelerate-cuda
-Version:                2.0.0.0
+Version:                0.17.0.0
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.8
 Build-type:             Simple
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
 Description:
+  __This backend has been deprecated in favour of <http://hackage.haskell.org/package/accelerate-llvm-ptx accelerate-llvm-ptx>.__
+  .
   This library implements a backend for the /Accelerate/ language instrumented
   for parallel execution on CUDA-capable NVIDIA GPUs. For further information,
   refer to the main /Accelerate/ package:
@@ -82,9 +84,9 @@ Flag internal-checks
   Default:              False
 
 Library
-  Build-depends:        accelerate              == 2.0.*,
+  Build-depends:        accelerate              == 1.0.*,
                         array                   >= 0.3,
-                        base                    >= 4.7,
+                        base                    >= 4.7 && < 4.9.1,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
                         containers              >= 0.3,
@@ -121,6 +123,7 @@ Library
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
+                        Data.Array.Accelerate.CUDA.Analysis.Shape
                         Data.Array.Accelerate.CUDA.Array.Remote
                         Data.Array.Accelerate.CUDA.Array.Data
                         Data.Array.Accelerate.CUDA.Array.Prim
@@ -178,4 +181,11 @@ Library
 source-repository head
   type:                 git
   location:             https://github.com/AccelerateHS/accelerate-cuda
+
+source-repository this
+  type:                 git
+  tag:                  0.17.0.0
+  location:             https://github.com/AccelerateHS/accelerate-cuda
+
+-- vim: nospell
 

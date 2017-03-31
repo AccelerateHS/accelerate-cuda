@@ -27,20 +27,21 @@ module Data.Array.Accelerate.CUDA.Execute (
   -- * Execute a computation under a CUDA environment
   executeAcc, executeAfun1,
 
-  -- * Executing a sequence computation and streaming its output.
-  StreamSeq(..), streamSeq,
+  -- -- * Executing a sequence computation and streaming its output.
+  -- StreamSeq(..), streamSeq,
 
 ) where
 
 -- friends
 import Data.Array.Accelerate.CUDA.AST
-import Data.Array.Accelerate.CUDA.State
+import Data.Array.Accelerate.CUDA.Analysis.Shape
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
 import Data.Array.Accelerate.CUDA.CodeGen.Base                  ( Name, namesOfArray, groupOfInt )
 import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
 import Data.Array.Accelerate.CUDA.Execute.Stream                ( Stream )
+import Data.Array.Accelerate.CUDA.Foreign.Import                ( canExecuteAcc )
+import Data.Array.Accelerate.CUDA.State
 import qualified Data.Array.Accelerate.CUDA.Array.Prim          as Prim
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
@@ -52,7 +53,6 @@ import Data.Array.Accelerate.Array.Data                         ( ArrayElt, Arra
 import Data.Array.Accelerate.Array.Representation               ( SliceIndex(..) )
 import Data.Array.Accelerate.FullList                           ( FullList(..), List(..) )
 import Data.Array.Accelerate.Lifetime                           ( withLifetime )
-import Data.Array.Accelerate.Trafo                              ( Extend(..) )
 import qualified Data.Array.Accelerate.Array.Representation     as R
 
 
@@ -61,9 +61,8 @@ import Control.Applicative                                      hiding ( Const )
 import Control.Monad                                            ( join, when, liftM )
 import Control.Monad.Reader                                     ( asks )
 import Control.Monad.State                                      ( gets )
-import Control.Monad.Trans                                      ( MonadIO, liftIO, lift )
+import Control.Monad.Trans                                      ( MonadIO, liftIO )
 import Control.Monad.Trans.Cont                                 ( ContT(..) )
-import Control.Monad.Trans.Maybe                                ( MaybeT(..), runMaybeT )
 import System.IO.Unsafe                                         ( unsafeInterleaveIO )
 import Data.Int
 import Data.Word
@@ -88,8 +87,8 @@ data Aval env where
   Aempty :: Aval ()
   Apush  :: Aval env -> Async t -> Aval (env, t)
 
--- A suspended sequence computation.
-newtype StreamSeq a = StreamSeq (CIO (Maybe (a, StreamSeq a)))
+-- -- A suspended sequence computation.
+-- newtype StreamSeq a = StreamSeq (CIO (Maybe (a, StreamSeq a)))
 
 -- Projection of a value from a valuation using a de Bruijn index.
 --
@@ -170,14 +169,14 @@ executeOpenAcc
     -> CIO arrs
 executeOpenAcc EmbedAcc{} _ _
   = $internalError "execute" "unexpected delayed array"
-executeOpenAcc (ExecSeq l)                                !aenv !stream
-  = executeSequence l aenv stream
+-- executeOpenAcc (ExecSeq l)                                !aenv !stream
+--   = executeSequence l aenv stream
 executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
   = case pacc of
 
       -- Array introduction
       Use arr                   -> return (toArr arr)
-      Unit x                    -> newArray Z . const =<< travE x
+      Unit x                    -> fromFunction Z . const =<< travE x
 
       -- Environment manipulation
       Avar ix                   -> after stream (aprj ix aenv)
@@ -217,11 +216,11 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       Replicate{}               -> fusionError
       Slice{}                   -> fusionError
       ZipWith{}                 -> fusionError
-      Collect{}                 -> streamingError
+      -- Collect{}                 -> streamingError
 
   where
     fusionError    = $internalError "executeOpenAcc" "unexpected fusible matter"
-    streamingError = $internalError "executeOpenAcc" "unexpected sequence computation"
+    -- streamingError = $internalError "executeOpenAcc" "unexpected sequence computation"
 
     -- term traversals
     travA :: ExecOpenAcc aenv a -> CIO a
@@ -244,16 +243,16 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       if ok then awhile p f =<< executeOpenAfun1 f aenv (Async nop a)
             else return a
 
-    aforeign :: (Arrays as, Arrays bs, Foreign f) => f as bs -> PreAfun ExecOpenAcc (as -> bs) -> as -> CIO bs
-    aforeign ff pureFun a =
+    aforeign :: (Arrays as, Arrays bs, Foreign asm) => asm (as -> bs) -> PreAfun ExecOpenAcc (as -> bs) -> as -> CIO bs
+    aforeign ff next a =
       case canExecuteAcc ff of
-        Just cudaFun -> cudaFun stream a
-        Nothing      -> executeAfun1 pureFun a
+        Just asm -> asm stream a
+        Nothing  -> executeAfun1 next a
 
     -- get the extent of an embedded array
     extent :: Shape sh => ExecOpenAcc aenv (Array sh e) -> CIO sh
     extent ExecAcc{}     = $internalError "executeOpenAcc" "expected delayed array"
-    extent ExecSeq{}     = $internalError "executeOpenAcc" "expected delayed array"
+    -- extent ExecSeq{}     = $internalError "executeOpenAcc" "expected delayed array"
     extent (EmbedAcc sh) = travE sh
 
     -- Skeleton implementation
@@ -326,35 +325,41 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
 
     -- Scans, all variations on a theme.
     --
-    scanOp :: Elt e => Bool -> (Z :. Int) -> CIO (Vector e)
-    scanOp !left !(Z :. numElements) = do
-      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
-      withDevicePtrs adata (Just stream) $ \out -> do
-        let (!body, !sum)
-              | left      = (out, advancePtrsOfArrayData adata numElements out)
-              | otherwise = (advancePtrsOfArrayData adata 1 out, out)
-        --
-        scanCore numElements arr body sum
-        return arr
+    scanOp :: forall sh e. (Shape sh, Elt e) => Bool -> (sh :. Int) -> CIO (Array (sh:.Int) e)
+    scanOp !left !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1)
+          withDevicePtrs adata (Just stream) $ \out -> do
+            let (!body, !sum)
+                  | left      = (out, advancePtrsOfArrayData adata numElements out)
+                  | otherwise = (advancePtrsOfArrayData adata 1 out, out)
+            --
+            scanCore numElements arr body sum
+            return arr
 
-    scan1Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e)
-    scan1Op !(Z :. numElements) = do
-      arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
-      withDevicePtrs adata (Just stream) $ \body -> do
-        let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
-        --
-        scanCore numElements arr body sum
-        return (Array ((),numElements) adata)
+    scan1Op :: forall sh e. (Shape sh, Elt e) => (sh :. Int) -> CIO (Array (sh:.Int) e)
+    scan1Op !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          arr@(Array _ adata)       <- allocateArray (Z :. numElements + 1) :: CIO (Vector e)
+          withDevicePtrs adata (Just stream) $ \body -> do
+            let sum {- to fix type -} =  advancePtrsOfArrayData adata numElements body
+            --
+            scanCore numElements arr body sum
+            return (Array ((),numElements) adata)
 
-    scan'Op :: forall e. Elt e => (Z :. Int) -> CIO (Vector e, Scalar e)
-    scan'Op !(Z :. numElements) = do
-      vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
-      sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
-      withDevicePtrs ad_vec (Just stream) $ \d_vec ->
-        withDevicePtrs ad_sum (Just stream) $ \d_sum -> do
-          --
-          scanCore numElements vec d_vec d_sum
-          return (vec, sum)
+    scan'Op :: forall sh e. (Shape sh, Elt e) => (sh :. Int) -> CIO (Array (sh:.Int) e, Array sh e)
+    scan'Op !(_ :. numElements)
+      | Just Refl <- matchShapeType (undefined::sh) (undefined::Z)
+      = do
+          vec@(Array _ ad_vec)      <- allocateArray (Z :. numElements) :: CIO (Vector e)
+          sum@(Array _ ad_sum)      <- allocateArray Z                  :: CIO (Scalar e)
+          withDevicePtrs ad_vec (Just stream) $ \d_vec ->
+            withDevicePtrs ad_sum (Just stream) $ \d_sum -> do
+              --
+              scanCore numElements vec d_vec d_sum
+              return (vec, sum)
 
     scanCore
         :: forall e. Elt e
@@ -445,6 +450,7 @@ executeOpenAcc (ExecAcc (FL () kernel more) !gamma !pacc) !aenv !stream
       = $internalError "stencil2Op" "missing stencil specialisation kernel"
 
 
+{--
 -- Execute a streaming computation
 --
 executeSequence
@@ -691,6 +697,7 @@ executeExtend BaseEnv       aenv = return aenv
 executeExtend (PushEnv e a) aenv = do
   aenv' <- executeExtend e aenv
   streaming (executeOpenAcc a aenv') $ \a' -> return $ Apush aenv' a'
+--}
 
 
 -- Scalar expression evaluation
@@ -792,6 +799,7 @@ executeOpenExp !rootExp !env !aenv !stream = travE rootExp
 -- Marshalling data
 -- ----------------
 
+{--
 marshalSlice'
     :: SliceIndex slix sl co dim
     -> slix
@@ -808,6 +816,7 @@ marshalSlice
     -> slix
     -> CIO [CUDA.FunParam]
 marshalSlice slix = marshalSlice' slix . fromElt
+--}
 
 -- Data which can be marshalled as function arguments to a kernel invocation.
 --

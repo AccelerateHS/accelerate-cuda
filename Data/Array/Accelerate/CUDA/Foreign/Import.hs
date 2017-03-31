@@ -50,7 +50,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   peekArray, peekArrayAsync,
   pokeArray, pokeArrayAsync,
   copyArray, copyArrayAsync,
-  allocateArray, newArray,
+  allocateArray, fromFunction,
 
   -- * Running IO actions in an Accelerate context
   CIO, Stream, liftIO, inContext, inDefaultContext
@@ -77,10 +77,10 @@ import qualified Foreign.CUDA.Driver.Stream             as CUDA
 
 -- |CUDA foreign Acc functions are just CIO functions.
 --
-data CUDAForeignAcc as bs where
+data CUDAForeignAcc f where
   CUDAForeignAcc :: String                      -- name of the function
                  -> (Stream -> as -> CIO bs)    -- operation to execute
-                 -> CUDAForeignAcc as bs
+                 -> CUDAForeignAcc (as -> bs)
 
 deriving instance Typeable CUDAForeignAcc
 
@@ -91,11 +91,11 @@ instance Foreign CUDAForeignAcc where
 -- CUDA backend.
 --
 canExecuteAcc
-    :: (Foreign f, Typeable as, Typeable bs)
-    => f as bs
+    :: forall asm as bs. (Foreign asm, Typeable as, Typeable bs)
+    => asm (as -> bs)
     -> Maybe (Stream -> as -> CIO bs)
 canExecuteAcc ff
-  | Just (CUDAForeignAcc _ fun) <- cast ff
+  | Just (CUDAForeignAcc _ fun) <- cast ff      :: Maybe (CUDAForeignAcc (as -> bs))
   = Just fun
 
   | otherwise
@@ -104,11 +104,11 @@ canExecuteAcc ff
 -- |CUDA foreign Exp functions consist of a list of C header files necessary to call the function
 -- and the name of the function to call.
 --
-data CUDAForeignExp x y where
+data CUDAForeignExp f where
   CUDAForeignExp :: IsScalar y
                  => [String]                    -- header files to be imported
                  -> String                      -- name of the foreign function
-                 -> CUDAForeignExp x y
+                 -> CUDAForeignExp (x -> y)
 
 deriving instance Typeable CUDAForeignExp
 
@@ -119,11 +119,11 @@ instance Foreign CUDAForeignExp where
 -- for the CUDA backend.
 --
 canExecuteExp
-    :: forall f x y. (Foreign f, Typeable y, Typeable x)
-    => f x y
+    :: forall asm x y. (Foreign asm, Typeable y, Typeable x)
+    => asm (x -> y)
     -> Maybe ([String], String)
 canExecuteExp ff
-  | Just (CUDAForeignExp hdr fun) <- cast ff    :: Maybe (CUDAForeignExp x y)
+  | Just (CUDAForeignExp hdr fun) <- cast ff    :: Maybe (CUDAForeignExp (x -> y))
   = Just (hdr, fun)
 
   | otherwise
