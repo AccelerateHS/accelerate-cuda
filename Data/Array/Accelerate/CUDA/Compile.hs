@@ -53,6 +53,7 @@ import Data.Bits
 import Data.Maybe
 import Data.Monoid
 import System.Directory
+import System.Environment                                       ( lookupEnv )
 import System.Exit                                              ( ExitCode(..) )
 import System.FilePath
 import System.IO
@@ -573,10 +574,13 @@ compileFlags :: FilePath -> CIO [String]
 compileFlags cufile = do
   CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProperties
   ddir                  <- liftIO getDataDir
+  incdir                <- liftIO $ lookupEnv "ACCELERATEHS_NVCC_INC_PATH"
+  addincdir             <- liftIO $ lookupEnv "ACCELERATEHS_NVCC_ADD_INC_PATH"
   warnings              <- liftIO $ (&&) <$> D.queryFlag D.dump_cc <*> D.queryFlag D.verbose
   debug                 <- liftIO $ D.queryFlag D.debug_cc
   return                $  filter (not . null) $
-    [ "-I", ddir </> "cubits"
+    [ "-I", fromMaybe (ddir </> "cubits") incdir
+    , maybe "" (mappend "-I") addincdir
     , "-arch=sm_" ++ show m ++ show n
     , "-cubin"
 --    , "--restrict"    -- requires nvcc >= 5.0
